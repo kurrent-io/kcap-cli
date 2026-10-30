@@ -48,6 +48,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
     readonly BehaviorSubject<RailScope> _scope = new(RailScope.Mine);
     readonly Func<ServerSessionsQuery, CancellationToken, Task<ServerSessionsFetch>> _fetch;
     readonly Func<CancellationToken, Task<SessionOwnerOptionDto[]?>> _fetchOwners;
+    readonly Func<string, CancellationToken, Task<SummaryFetch>>? _fetchSummary;
     readonly Action<int>? _onUnauthorized;
     readonly CompositeDisposable _subscriptions = new();
     readonly ITimer _cadence;
@@ -80,6 +81,23 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
     /// Deletions by arrival order: a read admitted before one still lists the session.
     long _deleteSeq;
     readonly Dictionary<string, long> _tombstones = new(StringComparer.Ordinal);
+    readonly BehaviorSubject<SessionIdentity> _identity = new(new(0, 0, false));
+    string? _pinId;
+    /// The last listing row or summary that described the pinned session.
+    RepoSessionDto? _pinRow;
+    PinPresentation _pinPresentation = new(null, null, null);
+    bool _pinListed;
+    /// Deleted, or its summary answered 403/404: the id stays pinned with no row and no refresh.
+    bool _pinGone;
+    /// Advances on every PinAsync and Unpin, so a summary read for an earlier one publishes nothing.
+    int _pinRequest;
+    /// Each refresh takes the next number and only the newest-issued one publishes; holding,
+    /// dropping or losing the pin advances it too, invalidating every refresh in flight.
+    int _pinRefresh;
+    /// The session a PinAsync is reading, and what was pushed for it while the read ran.
+    string? _pendingPinId;
+    int _pendingPinAccess;
+    bool _pendingPinDeleted;
     /// Requests awaiting the next admitted read, and those the read in progress answers: a request
     /// is settled by its own read, whatever refreshes queue behind it.
     List<TaskCompletionSource> _waiting = [];
@@ -92,9 +110,11 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
             Func<CancellationToken, Task<SessionOwnerOptionDto[]?>> fetchOwners,
             TimeProvider time,
             TimeSpan? pushDebounce = null, TimeSpan? reconcileEvery = null, Action<int>? onUnauthorized = null,
+            Func<string, CancellationToken, Task<SummaryFetch>>? fetchSummary = null,
             IScheduler? pushScheduler = null) {
         _fetch = fetch;
         _fetchOwners = fetchOwners;
+        _fetchSummary = fetchSummary;
         _time = time;
         _onUnauthorized = onUnauthorized;
 
@@ -105,6 +125,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
                     _connected = false;
                     _generation++;
                     _current.OnNext(false);
+                    _identity.OnNext(new(_account, _generation, false));
                 }
                 return;
             }
@@ -115,6 +136,8 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
                 _laneEpoch = status.Epoch;
                 _connected = true;
                 _ownersResolved = false;
+                _identity.OnNext(new(_account, _generation, true));
+                IssuePinRefresh();
             }
             _ = RefreshOwnersAsync();
             _ = ReconcileAsync();
@@ -132,6 +155,8 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
                     _ended.Remove(push.SessionId);
                     _tombstones[push.SessionId] = ++_deleteSeq;
                     if (_kept == push.SessionId) _keptRow = null;
+                    if (_pendingPinId == push.SessionId) _pendingPinDeleted = true;
+                    if (_pinId == push.SessionId) MarkPinGone();
                     EmitSnapshot();
                 }
             }).DisposeWith(_subscriptions);
@@ -148,9 +173,17 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
             .Where(push => push.Kind is SessionPushKind.ActiveRemoved or SessionPushKind.TitleChanged or SessionPushKind.Deleted)
             .Throttle(window, scheduler)
             .Subscribe(_ => RequestIfConnected(full: true)).DisposeWith(_subscriptions);
+        lane.SessionPushes
+            .Where(push => push.Kind is SessionPushKind.ActiveAdded or SessionPushKind.ActiveChanged
+                or SessionPushKind.ActiveRemoved or SessionPushKind.TitleChanged)
+            .Subscribe(push => RefreshPin(push.SessionId)).DisposeWith(_subscriptions);
+        lane.SessionAccessChanged.Subscribe(id => {
+            lock (_lock) if (_pendingPinId == id) _pendingPinAccess++;
+            RefreshPin(id);
+        }).DisposeWith(_subscriptions);
 
         var every = reconcileEvery ?? DefaultReconcileEvery;
-        _cadence = time.CreateTimer(_ => { ReconcileIfConnected(); RetryOwnersIfUnresolved(); }, null, every, every);
+        _cadence = time.CreateTimer(_ => { ReconcileIfConnected(); RetryOwnersIfUnresolved(); RefreshPin(null); }, null, every, every);
     }
 
     public IObservableCache<RepoSessionDto, string> Live => _live.AsObservableCache();
@@ -164,6 +197,8 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
     public IObservable<string?> ViewerUserId => _viewerUserId.AsObservable();
     public IObservable<bool> Current => _current.AsObservable();
     public IObservable<RailScope> ScopeChanges => _scope.AsObservable();
+    public IObservable<SessionIdentity> Identity => _identity.AsObservable();
+    public string? PinnedSessionId { get { lock (_lock) return _pinId; } }
 
     public RailScope Scope {
         get => _scope.Value;
@@ -201,14 +236,163 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
         : null;
 
     /// Under the lock, after every cache change. The kept row rides along from the last read that
-    /// listed it once the current one does not.
+    /// listed it once the current one does not, unless the pin already carries that session.
     void EmitSnapshot() {
         var ended = _ended.Items.ToList();
         if (_kept is { } kept) {
             if (Listed(kept) is { } current) _keptRow = current;
-            else if (_keptRow is { } retained) ended.Add(retained);
+            else if (_keptRow is { } retained && kept != _pinId) ended.Add(retained);
         }
-        _snapshots.OnNext(new([.. _live.Items], [.. _mineLive.Items], ended));
+        var unlisted = TrackPin();
+        var pinned = _pinId is not null && !_pinListed && !_pinGone ? _pinRow : null;
+        _snapshots.OnNext(new([.. _live.Items], [.. _mineLive.Items], ended, pinned, _pinId));
+        if (unlisted) IssuePinRefresh();
+    }
+
+    public async Task<PinOutcome> PinAsync(string sessionId, PinPresentation presentation, CancellationToken ct) {
+        int request, account;
+        lock (_lock) {
+            if (_disposed) return PinOutcome.Superseded;
+            request = ++_pinRequest;
+            _pendingPinId = null;
+            if (ListedPin(sessionId) is { } listed) {
+                HoldPin(sessionId, listed, presentation, listed: true);
+                EmitSnapshot();
+                return PinOutcome.Pinned;
+            }
+            if (_fetchSummary is null) return PinOutcome.Failed;
+            account = _account;
+            _pendingPinId = sessionId;
+            _pendingPinAccess = 0;
+            _pendingPinDeleted = false;
+        }
+        while (true) {
+            int access;
+            lock (_lock) access = _pendingPinAccess;
+            SummaryFetch fetch;
+            try {
+                fetch = await _fetchSummary(sessionId, ct).ConfigureAwait(false);
+            } catch (Exception) {
+                fetch = new(ServerReadOutcome.Failed, null);
+            }
+            lock (_lock) {
+                if (request != _pinRequest || account != _account || ct.IsCancellationRequested || _disposed) {
+                    if (request == _pinRequest) _pendingPinId = null;
+                    return PinOutcome.Superseded;
+                }
+                if (_pendingPinDeleted) {
+                    _pendingPinId = null;
+                    return PinOutcome.Unavailable;
+                }
+                // The read answers for access the session no longer has.
+                if (_pendingPinAccess != access) continue;
+                _pendingPinId = null;
+                switch (fetch) {
+                    case { Outcome: ServerReadOutcome.Ok, Session: { } summary }:
+                        var listed = ListedPin(sessionId);
+                        HoldPin(sessionId, listed ?? PinnedSessionRow.From(summary, presentation), presentation, listed is not null);
+                        EmitSnapshot();
+                        return PinOutcome.Pinned;
+                    case { Outcome: ServerReadOutcome.Unauthorized }:
+                        return PinOutcome.Unauthorized;
+                    case { Outcome: ServerReadOutcome.Unavailable }:
+                        _tombstones[sessionId] = ++_deleteSeq;
+                        return PinOutcome.Unavailable;
+                    default:
+                        return PinOutcome.Failed;
+                }
+            }
+        }
+    }
+
+    public void Unpin() {
+        lock (_lock) {
+            if (_disposed) return;
+            _pinRequest++;
+            _pendingPinId = null;
+            if (_pinId is null) return;
+            DropPin();
+            EmitSnapshot();
+        }
+    }
+
+    RepoSessionDto? ListedPin(string sessionId) =>
+        Listed(sessionId) ?? (_mineLive.Lookup(sessionId) is { HasValue: true, Value: var mine } ? mine : null);
+
+    void HoldPin(string sessionId, RepoSessionDto row, PinPresentation presentation, bool listed) {
+        _pinId = sessionId;
+        _pinRow = row;
+        _pinPresentation = presentation;
+        _pinListed = listed;
+        _pinGone = false;
+        _pinRefresh++;
+    }
+
+    void DropPin() {
+        _pinId = null;
+        _pinRow = null;
+        _pinListed = false;
+        _pinGone = false;
+        _pinRefresh++;
+    }
+
+    void MarkPinGone() {
+        _pinGone = true;
+        _pinRow = null;
+        _pinListed = false;
+        _pinRefresh++;
+    }
+
+    /// Under the lock. A listed pin follows its listing row, whose owner presentation replaces the
+    /// hit's; true when the listing has just stopped supplying it, which keeps the last listed row
+    /// standing until a refresh answers.
+    bool TrackPin() {
+        if (_pinId is not { } id || _pinGone) return false;
+        if (ListedPin(id) is { } listed) {
+            _pinRow = listed;
+            _pinListed = true;
+            if (listed.Owner is { } owner) _pinPresentation = new(owner.Username, owner.DisplayName, owner.AvatarUrl);
+            return false;
+        }
+        if (!_pinListed) return false;
+        _pinListed = false;
+        return true;
+    }
+
+    /// A null id refreshes whatever is pinned.
+    void RefreshPin(string? sessionId) {
+        lock (_lock) {
+            if (sessionId is not null && sessionId != _pinId) return;
+            IssuePinRefresh();
+        }
+    }
+
+    /// Under the lock; a reconnect refreshes, so nothing is issued while the lane is down.
+    void IssuePinRefresh() {
+        if (_pinId is not { } id || _pinGone || _pinListed || !_connected || _disposed || _fetchSummary is null) return;
+        var number = ++_pinRefresh;
+        var account = _account;
+        _ = Task.Run(() => RefreshPinAsync(id, number, account));
+    }
+
+    async Task RefreshPinAsync(string sessionId, int number, int account) {
+        SummaryFetch fetch;
+        try {
+            fetch = await _fetchSummary!(sessionId, _disposing.Token).ConfigureAwait(false);
+        } catch (Exception) {
+            return;
+        }
+        lock (_lock) {
+            if (_disposed || number != _pinRefresh || sessionId != _pinId || account != _account || _pinListed || _pinGone) return;
+            if (fetch is { Outcome: ServerReadOutcome.Ok, Session: { } summary }) {
+                _pinRow = PinnedSessionRow.From(summary, _pinPresentation);
+                EmitSnapshot();
+            } else if (fetch.Outcome == ServerReadOutcome.Unavailable) {
+                _tombstones[sessionId] = ++_deleteSeq;
+                MarkPinGone();
+                EmitSnapshot();
+            }
+        }
     }
 
     public Task ShowMoreAsync() {
@@ -445,7 +629,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
         _holdWake.Cancel();
         _holdWake.Dispose();
         _holdWake = new();
-        var gone = _live.Keys.Concat(_mineLive.Keys).Concat(_ended.Keys).Append(_kept)
+        var gone = _live.Keys.Concat(_mineLive.Keys).Concat(_ended.Keys).Append(_kept).Append(_pinId)
             .OfType<string>().Distinct(StringComparer.Ordinal).ToList();
         foreach (var id in gone) _dropped.OnNext(id);
         _live.Clear();
@@ -458,6 +642,9 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
         _viewerUserId.OnNext(null);
         _kept = null;
         _keptRow = null;
+        _pinRequest++;
+        _pendingPinId = null;
+        DropPin();
         _tombstones.Clear();
         EmitSnapshot();
     }
@@ -528,6 +715,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
         _current.Dispose();
         _scope.Dispose();
         _snapshots.Dispose();
+        _identity.Dispose();
         _dropped.Dispose();
         _disposing.Dispose();
         _holdWake.Dispose();
