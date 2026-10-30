@@ -1974,12 +1974,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         return WorkspacePrepFailed + " " + detail;
     }
 
-    /// Null for Manual (the harness's own default) and for any vendor that takes no mode.
+    /// Null for any vendor that takes no mode. Manual is sent like any other mode: an absent flag
+    /// lets the user's own Claude <c>permissions.defaultMode</c> decide, and that can be <c>auto</c>.
     internal static string? PermissionModeFor(string vendor, string mode) =>
-        HostedHarnessCatalog.SupportsPermissionMode(vendor)
-     && !string.Equals(mode, ClaudePermissionModes.Manual, StringComparison.Ordinal)
-            ? mode
-            : null;
+        HostedHarnessCatalog.SupportsPermissionMode(vendor) ? mode : null;
 
     /// Null for any vendor but codex, and for the daemon's own default pair, so an untouched
     /// launcher sends no posture and a daemon without posture support still accepts the launch.
