@@ -32,6 +32,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     readonly SessionAccessService _access;
     readonly CompositeDisposable _disposables = new();
     readonly ComposerDrafts? _drafts;
+    readonly Func<AgentRow, HandoffComposerViewModel>? _handoffFactory;
+    HandoffComposerViewModel? _handoff;
     readonly SerialDisposable _lease = new();
     readonly IUrlOpener _opener;
     readonly TimeProvider _time;
@@ -274,8 +276,9 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             LastReads<PullRequestSnapshot>? pullRequestSnapshots = null, Action<string>? pullRequestLinksChanged = null,
             SubagentEventsReader? readSubagent = null, AccountReadings? readings = null, IMessageSenderSource? senders = null,
             IRemoteAgentsService? remoteAgents = null, IAppNotifier? notifier = null, IObservable<string?>? appSubject = null,
-            IServerSessionsService? serverSessions = null) {
+            IServerSessionsService? serverSessions = null, Func<AgentRow, HandoffComposerViewModel>? handoff = null) {
         _drafts = drafts;
+        _handoffFactory = handoff;
         _time = time;
         _permissions = permissions;
         _readSubagent = readSubagent;
@@ -465,6 +468,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             // and the end itself is the server's word on the row, not an agent's verdict.
             SessionEnded = row.IsEndedSession;
             _seenLive |= !SessionEnded;
+            SyncHandoff();
             // Below full access the server grants no chat; the note names the level instead of a loss.
             if (row.AccessLevel is { Length: > 0 } level && level != "full") {
                 if (_leasedSession is not null) Release();
@@ -544,9 +548,30 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         if (info != _session.Value) _session.OnNext(info);
     }
 
-    /// A session-only row's chat is never messageable: the notice says why, ended or in a terminal.
-    static ChatSessionInfo SessionInfo(AgentRow row, bool ended) =>
-        ChatSessionInfo.FromRemote(row, ended, row.Origin != AgentOrigin.Server ? "" : ended ? EndedNote : TerminalNote);
+    /// A session-only row's chat is never messageable: the notice says why, ended or in a terminal,
+    /// unless the ended session's hand-off composer stands in its place.
+    ChatSessionInfo SessionInfo(AgentRow row, bool ended) =>
+        ChatSessionInfo.FromRemote(row, ended,
+            row.Origin != AgentOrigin.Server ? "" : ended ? _handoff is null ? EndedNote : "" : TerminalNote);
+
+    /// An ended session-only row offers a hand-off for as long as it stays ended.
+    void SyncHandoff() {
+        if (_handoffFactory is null) return;
+        if (SessionEnded && _handoff is null) {
+            _handoff = _handoffFactory(_row);
+            Chat.Handoff = _handoff;
+            _ = _handoff.InitializeAsync(CancellationToken.None);
+        } else if (!SessionEnded && _handoff is not null) {
+            DisposeHandoff();
+        }
+    }
+
+    void DisposeHandoff() {
+        if (_handoff is not { } handoff) return;
+        _handoff = null;
+        Chat.Handoff = null;
+        handoff.Dispose();
+    }
 
     void Release() {
         _leasedSession = null;
@@ -582,6 +607,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     public async Task TeardownAsync() {
         _disposables.Dispose();
+        DisposeHandoff();
         Artefacts.OpenRequested -= ShowArtefacts;
         await Chat.TeardownAsync();
         if (Subagent is { } subagent) await subagent.TeardownAsync();

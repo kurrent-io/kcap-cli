@@ -14,7 +14,7 @@ namespace Capacitor.App.ViewModels;
 /// the new session would start, and the launch. A hand-off never degrades into an ordinary launch,
 /// so Start needs the server's and the daemon's handoff/1 and a probed start, and what launches is
 /// exactly the start the strip shows.
-public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
+public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAttachmentSink {
     public const string NeedsFullAccess = "You need full access to this session to hand it off";
     public const string ServerTooOld = "Your kcap server doesn't support hand-off yet";
     public const string DaemonTooOld = "Your local kcap daemon doesn't support hand-off yet. Update kcap to use it.";
@@ -124,6 +124,20 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
             .Subscribe(change => { if (_initialized && !IsLaunching) _ = ReevaluateAsync(CancellationToken.None); })
             .DisposeWith(_disposables);
 
+        // The upload gate Start re-runs, published on the UI thread for the attach button.
+        var canAttach = connected
+            .CombineLatest(daemon.Status.Select(s => s.Capabilities),
+                (signedIn, caps) => HomeViewModel.CanAttachTo(signedIn, caps, [], null, daemon.DaemonName, remote: false))
+            .DistinctUntilChanged()
+            .ObserveOn(RxSchedulers.MainThreadScheduler);
+        _canAttach = canAttach.ToProperty(this, x => x.CanAttach, initialValue: false).DisposeWith(_disposables);
+        _attachHint = connected
+            .CombineLatest(canAttach, HomeViewModel.AttachHintFor)
+            .DistinctUntilChanged()
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .ToProperty(this, x => x.AttachHint, initialValue: (string?)null)
+            .DisposeWith(_disposables);
+
         var canStart = this.WhenAnyValue(x => x.ProbedStart, x => x.DisabledReason, x => x.IsLaunching,
             (start, reason, launching) => start is not null && reason is null && !launching);
         StartCommand = ReactiveCommand.CreateFromTask(StartAsync, canStart);
@@ -134,6 +148,27 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
     }
 
     public AttachmentTray Tray { get; } = new();
+
+    readonly ObservableAsPropertyHelper<bool> _canAttach;
+    public bool CanAttach => _canAttach.Value;
+    readonly ObservableAsPropertyHelper<string?> _attachHint;
+    public string? AttachHint => _attachHint.Value;
+    public int FreeSlots => Tray.FreeSlots;
+    string? _intakeNotice;
+
+    /// The tray takes what it can; the rest becomes the bottom row's error until the next intake.
+    public void Accept(IntakeResult result) {
+        if (_intakeNotice is not null && Error == _intakeNotice) Error = null;
+        _intakeNotice = null;
+        var refused = new List<IntakeRefusal>(result.Refused);
+        refused.AddRange(Tray.AddAll(result.Accepted));
+        if (RefusalNotice.Render(refused) is not { } notice) return;
+        _intakeNotice = notice;
+        Error = notice;
+    }
+
+    /// The bottom row's line: what went wrong, else why Start is unavailable.
+    public string? Notice => Error ?? DisabledReason;
     public ILaunchChoices Choices => _choices;
     public ReactiveCommand<Unit, Unit> StartCommand { get; }
 
@@ -164,7 +199,10 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
     string? _disabledReason;
     public string? DisabledReason {
         get => _disabledReason;
-        private set => this.RaiseAndSetIfChanged(ref _disabledReason, value);
+        private set {
+            this.RaiseAndSetIfChanged(ref _disabledReason, value);
+            this.RaisePropertyChanged(nameof(Notice));
+        }
     }
 
     bool _isProbing;
@@ -176,7 +214,10 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
     string? _error;
     public string? Error {
         get => _error;
-        private set => this.RaiseAndSetIfChanged(ref _error, value);
+        private set {
+            this.RaiseAndSetIfChanged(ref _error, value);
+            this.RaisePropertyChanged(nameof(Notice));
+        }
     }
 
     HandoffLaunchStart? _probedStart;
@@ -383,6 +424,15 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
         _choices.Restore(draft);
         Error = draft.Error;
     }
+
+    /// The listing row a session-only workspace was built from, as the composer reads it.
+    public static RepoSessionDto SourceOf(AgentRow row) => new() {
+        SessionId = row.SessionId ?? row.Id, Status = row.IsEndedSession ? "ended" : "active",
+        AccessLevel = row.AccessLevel ?? "", Vendor = row.Vendor, Title = row.Title, Cwd = row.RepoPath, Branch = row.Branch,
+        StartedAt = row.CreatedAt, LastActivityAt = row.LastActivityAt ?? row.CreatedAt, EndedAt = row.EndedAt,
+    };
+
+    internal bool IsDisposedForTesting => _disposed;
 
     static bool HasHandoff(AttachStatus status) =>
         status.State == AttachState.Connected && status.Capabilities?.Contains(HandoffWire.Capability) == true;

@@ -60,10 +60,11 @@ public class RemoteSessionViewModelTests {
 
         public RemoteSessionViewModel Build(AgentRow row, IPlanArtifactSource? planArtifacts = null,
                 Capacitor.Cli.Core.PullRequests.IPullRequestSource? pullRequests = null, IPlanSource? plans = null,
-                BackgroundCommandActivity? commands = null, SubagentEventsReader? readSubagent = null, AccountReadings? readings = null) {
+                BackgroundCommandActivity? commands = null, SubagentEventsReader? readSubagent = null, AccountReadings? readings = null,
+                Func<AgentRow, HandoffComposerViewModel>? handoff = null) {
             Directory.Rows.AddOrUpdate(row);
             return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time, WorkSource, () => new FakeTerminalSurface(), planArtifacts, commands, pullRequests: pullRequests, plans: plans, readSubagent: readSubagent, readings: readings,
-                remoteAgents: Remote, notifier: Notifier, serverSessions: Sessions);
+                remoteAgents: Remote, notifier: Notifier, serverSessions: Sessions, handoff: handoff);
         }
 
         /// One chat poll: the pane reads its feed on the timer this harness owns.
@@ -1394,6 +1395,62 @@ public class RemoteSessionViewModelTests {
             await Assert.That(vm.RepoLabelText).IsEqualTo("kurrent-io/kcap-cli · Alexey");
             await Assert.That(h.Lane.ChatSubscribes).Contains("s1");
             await Assert.That(ended).IsFalse();
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// The composer takes the read-only notice's place for as long as the row stays ended, and goes
+    /// with the row's end: a session the server lists live again keeps no composer behind it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_ended_server_session_offers_handoff_not_a_read_only_notice() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            using var handoff = new HandoffComposerFixture();
+            var vm = h.Build(Harness.ServerRow(), handoff: handoff.Build);
+
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+
+            var composer = vm.Chat.Handoff;
+            await Assert.That(composer).IsNotNull();
+            await Assert.That(handoff.Built).IsEquivalentTo([composer!]);
+            await Assert.That(vm.Chat.ReadOnlyNotice).IsEqualTo("");
+            await Assert.That(vm.Chat.ShowsReadOnlyBanner).IsFalse();
+            await Assert.That(vm.Chat.ShowsComposer).IsFalse();
+            await WaitUntilAsync(() => composer!.ProbedStart is not null, what: "the probed start");
+            await Assert.That(composer!.StripLabel).IsEqualTo("New session in a fresh worktree on feature/x");
+
+            h.Directory.Rows.AddOrUpdate(Harness.ServerRow(status: "active"));
+
+            await Assert.That(vm.Chat.Handoff).IsNull();
+            await Assert.That(composer.IsDisposedForTesting).IsTrue();
+            await Assert.That(vm.Chat.ReadOnlyNotice).IsEqualTo(RemoteSessionViewModel.TerminalNote);
+
+            h.Directory.Rows.AddOrUpdate(Harness.ServerRow());
+            var again = vm.Chat.Handoff;
+            await Assert.That(again).IsNotNull();
+            await Assert.That(again).IsNotSameReferenceAs(composer);
+
+            await vm.TeardownAsync();
+            await Assert.That(again!.IsDisposedForTesting).IsTrue();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_active_server_session_keeps_the_read_only_path() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            using var handoff = new HandoffComposerFixture();
+            var vm = h.Build(Harness.ServerRow(status: "active"), handoff: handoff.Build);
+
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+
+            await Assert.That(vm.Chat.Handoff).IsNull();
+            await Assert.That(handoff.Built).IsEmpty();
+            await Assert.That(vm.Chat.ReadOnlyNotice).IsEqualTo(RemoteSessionViewModel.TerminalNote);
+            await Assert.That(vm.Chat.ShowsReadOnlyBanner).IsTrue();
+            await Assert.That(vm.Chat.ShowsComposer).IsFalse();
             await vm.TeardownAsync();
         });
     }

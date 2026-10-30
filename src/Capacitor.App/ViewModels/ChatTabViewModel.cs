@@ -644,13 +644,28 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     /// attach — the kind, not the handshake, is what makes the session unmessageable.
     public bool IsReadOnlyParticipant {
         get => _isReadOnlyParticipant;
-        private set => this.RaiseAndSetIfChanged(ref _isReadOnlyParticipant, value);
+        private set {
+            this.RaiseAndSetIfChanged(ref _isReadOnlyParticipant, value);
+            this.RaisePropertyChanged(nameof(ShowsReadOnlyBanner));
+        }
     }
 
     bool _takesAttachments = true;
     internal bool TakesAttachments { get => _takesAttachments; set => this.RaiseAndSetIfChanged(ref _takesAttachments, value); }
 
     internal const string NoAttachmentsHint = "a review agent takes no attachments";
+
+    HandoffComposerViewModel? _handoff;
+    /// An ended session's hand-off composer, shown in the composer's place; the host owns its lifetime.
+    public HandoffComposerViewModel? Handoff {
+        get => _handoff;
+        set {
+            this.RaiseAndSetIfChanged(ref _handoff, value);
+            this.RaisePropertyChanged(nameof(ShowsReadOnlyBanner));
+        }
+    }
+
+    public bool ShowsReadOnlyBanner => IsReadOnlyParticipant && Handoff is null;
 
     string _readOnlyNotice = "";
     public string ReadOnlyNotice { get => _readOnlyNotice; private set => this.RaiseAndSetIfChanged(ref _readOnlyNotice, value); }
@@ -873,9 +888,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _showsComposer = Observable.CombineLatest(
                 _input.WhenAnyValue(i => i.Availability),
                 this.WhenAnyValue(x => x.IsReadOnlyParticipant),
-                (availability, readOnly) => !readOnly && availability != SendAvailability.Ended)
+                this.WhenAnyValue(x => x.Handoff),
+                (availability, readOnly, handoff) => !readOnly && availability != SendAvailability.Ended && handoff is null)
             .ToProperty(this, x => x.ShowsComposer,
-                initialValue: !IsReadOnlyParticipant && _input.Availability != SendAvailability.Ended)
+                initialValue: !IsReadOnlyParticipant && _input.Availability != SendAvailability.Ended && Handoff is null)
             .DisposeWith(_disposables);
 
         _input.WhenAnyValue(i => i.Availability)

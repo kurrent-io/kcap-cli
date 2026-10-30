@@ -204,6 +204,7 @@ public partial class App : Application {
     // last, since its transitions are what the feed subscribes to.
     ServerPermissionFeed? _permissionFeed;
     SessionAttentionTracker? _attention;
+    HandoffDrafts? _handoffDrafts;
     BackgroundCommandActivity? _commands;
     SessionAccessService? _sessionAccess;
     PullRequestToneCache? _pullRequestTones;
@@ -421,7 +422,7 @@ public partial class App : Application {
             await HandleStartupFailureAsync(
                 desktop, ex, _service, _shutdown,
                 [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
-                    _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _accounts, _sessionAccess,
+                    _notificationSessions, _notificationSettings, _permissionFeed, _attention, _handoffDrafts, _commands, _permissions, _accounts, _sessionAccess,
                     _pullRequestTones, _launchApprovals, _webWorkspace, _activity, _home, _localServer, _localStack, _rail, _pause, _staleDaemonNudge, _restartPending, _expectedRestart],
                 _lifecycle, _lane, _localUpgrade, _localSearch, _menuBar, _coordinator);
             await DisposeServerClientsAsync(); // after _home above
@@ -444,6 +445,7 @@ public partial class App : Application {
             _notificationSettings = null;
             _permissionFeed = null;
             _attention = null;
+            _handoffDrafts = null;
             _commands = null;
             _permissions = null;
             _accounts = null;
@@ -1207,6 +1209,28 @@ public partial class App : Application {
                     readings: readings, senders: senders, remoteAgents: remoteAgents, notifier: notifier, appSubject: appSubject,
                     serverSessions: sessions)
                 : null;
+        // One for the app's life: a failed hand-off's draft outlives the composer that sent it.
+        var handoffDrafts = new HandoffDrafts(serverLane.LaunchFailures, directory, _time);
+        _handoffDrafts = handoffDrafts;
+        var checkouts = new LocalCheckoutFinder(repoIdentity);
+        var knownRepos = new RepoPathStore(_config, _time);
+        async Task<IReadOnlyList<string>> HandoffCandidatesAsync(CancellationToken ct) {
+            var remembered = (await _appState.LoadAsync()).HarnessByRepo?.Keys ?? [];
+            var known = await knownRepos.GetSortedPathsAsync();
+            var agents = service.Agents.Items.Select(a => a.RepoPath).OfType<string>().Where(p => p.Length > 0);
+            return [.. remembered, .. known, .. agents];
+        }
+        MainWindowViewModel? OpenWindow() => _coordinator?.Window?.DataContext as MainWindowViewModel;
+        const string ServerKeyPrefix = "server:";
+        HandoffComposerViewModel BuildHandoff(AgentRow row) => new(
+            HandoffComposerViewModel.SourceOf(row), service, launch, sessions, ops, checkouts, HandoffCandidatesAsync,
+            handoffDrafts, serverLane.Status, uploader, directory,
+            navigationGeneration: () => OpenWindow()?.NavigationGeneration ?? 0,
+            openSessionIfCurrent: (agentId, origin, generation) => OpenWindow()?.OpenSessionIfCurrent(agentId, origin, generation),
+            closeFailedLaunch: agentId => OpenWindow()?.CloseFailedLaunch(agentId),
+            // Unconditional: the failed launch's close has just moved the navigation generation on.
+            reopenSource: key => OpenWindow()?.OpenSession(key.StartsWith(ServerKeyPrefix, StringComparison.Ordinal) ? key[ServerKeyPrefix.Length..] : key, AgentOrigin.Server),
+            modelCatalog: modelCatalog.Catalog, shutdown: _shutdown.Token);
         // A session the server lists with no daemon behind it: read-only, so no terminal surface.
         RemoteSessionViewModel? BuildServer(string sessionId) =>
             directory.Rows.Lookup($"server:{sessionId}") is { HasValue: true, Value: var row }
@@ -1215,7 +1239,8 @@ public partial class App : Application {
                     pullRequests: readers, requestSignIn: requestSignIn, linkGitHub: linkGitHub,
                     signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts, inputSending: attention.ReplySending,
                     pullRequestSnapshots: pullRequestSnapshots, pullRequestLinksChanged: pullRequestTones.Refresh, readSubagent: readSubagent,
-                    readings: readings, remoteAgents: remoteAgents, notifier: notifier, appSubject: appSubject, serverSessions: sessions)
+                    readings: readings, remoteAgents: remoteAgents, notifier: notifier, appSubject: appSubject, serverSessions: sessions,
+                    handoff: BuildHandoff)
                 : null;
 
         _coordinator = new MainWindowCoordinator(
@@ -2867,7 +2892,7 @@ public partial class App : Application {
             await Dispatcher.UIThread.InvokeAsync(async () => {
                 IDisposable?[] ui = [
                     _tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
-                    _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _accounts, _sessionAccess,
+                    _notificationSessions, _notificationSettings, _permissionFeed, _attention, _handoffDrafts, _commands, _permissions, _accounts, _sessionAccess,
                     _pullRequestTones, _launchApprovals, _webWorkspace, _activity, _home, _localServer, _localStack, _rail, _pause, _staleDaemonNudge, _restartPending, _expectedRestart,
                 ];
                 if (shutdown) {

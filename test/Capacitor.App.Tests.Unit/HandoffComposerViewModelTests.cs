@@ -16,62 +16,22 @@ namespace Capacitor.App.Tests.Unit;
 public class HandoffComposerViewModelTests {
     const string SessionId = "s1";
     const string Checkout = "/w/widgets";
-    const string LaunchedId = "0123456789abcdef0123456789abcdef";
-    const string Sha = "abcdef1234567890abcdef1234567890abcdef12";
+    const string LaunchedId = FakeHandoffLaunchClient.LaunchedId;
+    const string Sha = FakeHandoffProbeOps.Sha;
 
-    static readonly HandoffLaunchStart AttachedStart = new(
-        "", Sha, nameof(HandoffCheckout.CheckoutBranch), "feature/x", null, nameof(HandoffSource.Branch),
-        nameof(HandoffDetachReason.None), null, false, null, null);
+    static readonly HandoffLaunchStart AttachedStart = FakeHandoffProbeOps.AttachedStart;
 
     static HandoffProbeReplyDto Reply(HandoffLaunchStart start, string completeness = "Unconfirmed", IReadOnlyList<string>? missing = null) =>
-        new(null, null, start, completeness, missing ?? []);
+        FakeHandoffProbeOps.Reply(start, completeness, missing);
 
     const string StartChanged = "The branch changed after it was checked, so nothing was started. Check the new starting point and start again.";
     const string SourceUnavailable = "You can no longer hand off this session. It may have been deleted, or your access to it changed.";
 
-    sealed class FakeLaunchClient : ILaunchClient {
-        public IReadOnlySet<string>? Features = FrozenSet.Create("handoff/1");
-        public List<LaunchRequest> Requests { get; } = [];
-        public LaunchOutcome Next = new(true, LaunchedId, null);
-        public Action<LaunchRequest>? During;
-        public Exception? Throw;
-
-        public Task<IReadOnlySet<string>?> GetLaunchFeaturesAsync(CancellationToken ct) => Task.FromResult(Features);
-
-        public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) {
-            Requests.Add(request);
-            During?.Invoke(request);
-            return Throw is { } ex ? Task.FromException<LaunchOutcome>(ex) : Task.FromResult(Next);
-        }
-    }
-
-    sealed class FakeProbeOps : ILocalControlOps {
-        public List<HandoffProbeRequestDto> Probes { get; } = [];
-        public HandoffProbeReplyDto? Next = Reply(AttachedStart);
-
-        public Task<HandoffProbeReplyDto?> ProbeHandoffAsync(HandoffProbeRequestDto request, CancellationToken ct) {
-            Probes.Add(request);
-            return Task.FromResult(Next);
-        }
-
-        public Task<StopAgentResult> StopAgentAsync(string agentId, bool force, CancellationToken ct) => throw new NotSupportedException();
-        public Task<ConsentPolicyDto> GetConsentPolicyAsync(CancellationToken ct) => throw new NotSupportedException();
-        public Task<ConsentAckDto> PutConsentPolicyAsync(ConsentPolicyDto policy, CancellationToken ct) => throw new NotSupportedException();
-        public Task<ConsentAckDto> PutConsentPolicyV2Async(ConsentPolicyPutV2Dto put, CancellationToken ct) => throw new NotSupportedException();
-        public Task<ConsentAckDto> ResolveConsentAsync(ConsentResolveDto resolve, CancellationToken ct) => throw new NotSupportedException();
-        public Task<PermissionAckDto> ResolvePermissionAsync(PermissionResolveDto resolve, CancellationToken ct) => throw new NotSupportedException();
-        public Task<SendTextResult> SendTextAsync(string agentId, string text, CancellationToken ct) => throw new NotSupportedException();
-        public Task<SendTextResult> SendTextWithAttachmentsAsync(string agentId, string text, IReadOnlyList<string> attachmentIds, CancellationToken ct) => throw new NotSupportedException();
-        public Task<DaemonSettingsAckDto> PutDaemonSettingsAsync(DaemonSettingsPutDto put, CancellationToken ct) => throw new NotSupportedException();
-        public Task<SessionRenameAckDto> RenameSessionAsync(SessionRenameDto rename, CancellationToken ct) => throw new NotSupportedException();
-        public Task<HandoffOutcomeDto?> ReadHandoffOutcomeAsync(string sessionId, CancellationToken ct) => throw new NotSupportedException();
-    }
-
     sealed class Rig : IDisposable {
         public FakeDaemonClientService Daemon { get; } = new();
-        public FakeLaunchClient Launch { get; } = new();
+        public FakeHandoffLaunchClient Launch { get; } = new();
         public FakeServerSessionsService Sessions { get; } = new();
-        public FakeProbeOps Ops { get; } = new();
+        public FakeHandoffProbeOps Ops { get; } = new();
         public ScriptedUploader Uploader { get; } = new();
         public Subject<LaunchFailure> Failures { get; } = new();
         public BehaviorSubject<ServerLaneStatus> Lane { get; } = new(new ServerLaneStatus(ServerLaneState.Connected));

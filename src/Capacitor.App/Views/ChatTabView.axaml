@@ -472,7 +472,7 @@
                            Foreground="{StaticResource KcapMutedBrush}" FontSize="13.5"
                            TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis" />
 
-                <Border x:Name="ReadOnlyBanner" Grid.Row="3" IsVisible="{Binding IsReadOnlyParticipant}"
+                <Border x:Name="ReadOnlyBanner" Grid.Row="3" IsVisible="{Binding ShowsReadOnlyBanner}"
                         Background="{StaticResource KcapWarningDimBrush}" BorderBrush="{StaticResource KcapWarningBrush}"
                         BorderThickness="1" CornerRadius="8" Padding="12,7">
                     <TextBlock Text="{Binding ReadOnlyNotice, StringFormat='Read-only: {0}'}"
@@ -485,9 +485,13 @@
                         <MultiBinding Converter="{x:Static BoolConverters.And}">
                             <Binding Path="!ShowsComposer" />
                             <Binding Path="!IsReadOnlyParticipant" />
+                            <Binding Path="Handoff" Converter="{x:Static ObjectConverters.IsNull}" />
                         </MultiBinding>
                     </TextBlock.IsVisible>
                 </TextBlock>
+                <Panel Grid.Row="3" IsVisible="{Binding Handoff, Converter={x:Static ObjectConverters.IsNotNull}}">
+                    <views:HandoffComposerView x:Name="HandoffComposer" DataContext="{Binding Handoff}" />
+                </Panel>
                 <Border x:Name="ComposerCard" Classes="attachTarget" Grid.Row="3" IsVisible="{Binding ShowsComposer}"
                         Background="{StaticResource KcapSurfaceRaisedBrush}"
                         BorderThickness="1" CornerRadius="10" Padding="13,8,13,12">

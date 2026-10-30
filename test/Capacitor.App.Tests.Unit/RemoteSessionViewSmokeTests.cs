@@ -59,10 +59,11 @@ public class RemoteSessionViewSmokeTests {
         public readonly RemoteSessionView View;
         public readonly Window Window;
 
-        public Host(IPlanArtifactSource? planArtifacts = null, string sessionId = "s1", IWindowImpl? windowImpl = null, bool realTerminal = false) {
+        public Host(IPlanArtifactSource? planArtifacts = null, string sessionId = "s1", IWindowImpl? windowImpl = null, bool realTerminal = false,
+                AgentRow? row = null, Func<AgentRow, HandoffComposerViewModel>? handoff = null) {
             _access = new SessionAccessService(Lane, Time);
             Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u1", Epoch: 1));
-            var row = AgentRow.FromRemote(new AgentInstanceDto {
+            row ??= AgentRow.FromRemote(new AgentInstanceDto {
                 AgentId = "a1", SessionId = sessionId, Status = "Running", DaemonName = "work-mac",
                 Vendor = "claude", OwnerUserId = "u1", RegisteredAt = DateTime.UtcNow,
             });
@@ -70,7 +71,7 @@ public class RemoteSessionViewSmokeTests {
             Vm = new RemoteSessionViewModel(row, _directory, _access, Permissions, NewActions(), Lane,
                 (_, _) => Task.FromResult(new SessionDetailFetch(Detail())), new RecordingOpener(), Time, new FakeWorkContextSource(),
                 () => realTerminal ? new XtermTerminalSurface(130, 54) : new FakeTerminalSurface(), planArtifacts,
-                remoteAgents: Remote, notifier: new RecordingNotifier());
+                remoteAgents: Remote, notifier: new RecordingNotifier(), handoff: handoff);
             View = new RemoteSessionView { DataContext = Vm };
             Window = windowImpl is null ? new Window() : new Window(windowImpl);
             Window.Content = View;
@@ -105,6 +106,126 @@ public class RemoteSessionViewSmokeTests {
             Remote.Dispose();
         }
     }
+
+    // ── the ended session's hand-off composer ──────────────────────────────────────────────────
+
+    static AgentRow EndedServerRow() => AgentRow.FromServer(new RepoSessionDto {
+        SessionId = "s1", Status = "ended", AccessLevel = "full", Vendor = "claude", Title = "Widgets",
+        Owner = new() { UserId = "u1", DisplayName = "Alexey" }, Branch = "feature/x",
+        StartedAt = DateTimeOffset.UnixEpoch, LastActivityAt = DateTimeOffset.UnixEpoch.AddHours(1),
+        EndedAt = DateTimeOffset.UnixEpoch.AddHours(1),
+        Repo = new() { Hash = "h", Owner = "acme", Name = "widgets" },
+    }, hostedPresentation: false);
+
+    /// Runs the body over an ended server session whose composer is shown, settled until the
+    /// composer has answered whether it can start.
+    static Task WithHandoffAsync(Func<Host, HandoffComposerFixture, HandoffComposerView, Task> body,
+            Action<HandoffComposerFixture>? arrange = null) =>
+        AvaloniaSession.DispatchAsync(async () => {
+            using var fixture = new HandoffComposerFixture();
+            arrange?.Invoke(fixture);
+            using var host = new Host(row: EndedServerRow(), handoff: fixture.Build);
+            try {
+                await host.SettleUntilAsync(() => host.Vm.Chat.Handoff is { IsProbing: false } composer
+                    && (composer.ProbedStart is not null || composer.DisabledReason is not null), "the hand-off checked");
+                var view = host.View.GetVisualDescendants().OfType<HandoffComposerView>().Single(v => v.IsEffectivelyVisible);
+                await body(host, fixture, view);
+            } finally { await host.Vm.TeardownAsync(); }
+            return true;
+        });
+
+    static T Named<T>(Control root, string name) where T : Control =>
+        root.GetVisualDescendants().OfType<T>().Single(c => c.Name == name);
+
+    /// Real pointer input: a Button's Command runs off its own click handling, which a raised
+    /// ClickEvent never reaches.
+    static void Click(Host host, Control target) {
+        host.Settle();
+        var point = target.TranslatePoint(new Point(target.Bounds.Width / 2, target.Bounds.Height / 2), host.Window)
+            ?? throw new InvalidOperationException("Click target is not under the window.");
+        host.Window.MouseDown(point, MouseButton.Left);
+        host.Window.MouseUp(point, MouseButton.Left);
+        host.Settle();
+    }
+
+    [Test]
+    public Task Typing_and_clicking_start_launches() => WithHandoffAsync(async (host, fixture, view) => {
+        var input = Named<TextBox>(view, "HandoffInput");
+        input.Focus();
+        host.Settle();
+        host.Window.KeyTextInput("carry on");
+        host.Settle();
+
+        Click(host, Named<Button>(view, "StartHandoffButton"));
+        await host.SettleUntilAsync(() => fixture.Launch.Requests.Count == 1, "the launch");
+
+        var request = fixture.Launch.Requests.Single();
+        await Assert.That(request.Prompt).IsEqualTo("carry on");
+        await Assert.That(request.RepoPath).IsEqualTo(HandoffComposerFixture.Checkout);
+        await Assert.That(request.Handoff!.SourceSessionId).IsEqualTo("s1");
+    });
+
+    [Test]
+    public Task Dropping_a_file_adds_it_to_the_tray() => WithHandoffAsync(async (host, fixture, view) => {
+        var composer = host.Vm.Chat.Handoff!;
+        await Assert.That(composer.CanAttach).IsTrue();
+        var card = Named<Border>(view, "HandoffCard");
+        var transfer = new DataTransfer();
+        var item = new DataTransferItem();
+        item.SetFile(FakeStorageFile.Of("dropped.png", new byte[] { 1, 2, 3, 4 }));
+        transfer.Add(item);
+
+        card.RaiseEvent(new DragEventArgs(DragDrop.DragOverEvent, transfer, card, new Point(6, 6), KeyModifiers.None));
+        host.Settle();
+        await Assert.That(card.Classes.Contains("dragOver")).IsTrue();
+
+        card.RaiseEvent(new DragEventArgs(DragDrop.DropEvent, transfer, card, new Point(6, 6), KeyModifiers.None));
+        await (view.PendingIntakeForTesting ?? Task.CompletedTask);
+        host.Settle();
+
+        await Assert.That(composer.Tray.Items.Select(f => f.FileName)).IsEquivalentTo(["dropped.png"]);
+        await Assert.That(Named<AttachmentChipStrip>(view, "HandoffChipStrip").IsEffectivelyVisible).IsTrue();
+        // The chat's own composer is hidden, so the drop reached the hand-off card and nothing else.
+        await Assert.That(host.Vm.Chat.Tray.Items).IsEmpty();
+    });
+
+    [Test]
+    public Task Enter_in_the_box_does_not_launch() => WithHandoffAsync(async (host, fixture, view) => {
+        var input = Named<TextBox>(view, "HandoffInput");
+        input.Focus();
+        host.Settle();
+        host.Window.KeyTextInput("line one");
+        host.Window.KeyPressQwerty(PhysicalKey.Enter, RawInputModifiers.None);
+        host.Window.KeyReleaseQwerty(PhysicalKey.Enter, RawInputModifiers.None);
+        host.Window.KeyTextInput("line two");
+        host.Settle();
+        await Task.Delay(50);
+        host.Settle();
+
+        await Assert.That(fixture.Launch.Requests).IsEmpty();
+        await Assert.That(host.Vm.Chat.Handoff!.Text.ReplaceLineEndings("\n")).IsEqualTo("line one\nline two");
+    });
+
+    [Test]
+    public Task The_agent_chip_flyout_opens_from_the_strip() => WithHandoffAsync(async (host, _, view) => {
+        var chips = view.GetVisualDescendants().OfType<LaunchChipsView>().Single();
+        Click(host, Named<Button>(chips, "AgentChip"));
+
+        var menu = chips.OpenMenuForTesting;
+        await Assert.That(menu).IsNotNull();
+        await Assert.That(menu!.IsOpen).IsTrue();
+        menu.Hide();
+        host.Settle();
+    });
+
+    [Test]
+    public Task A_disabled_handoff_shows_its_reason_and_no_start() => WithHandoffAsync(async (host, _, view) => {
+        var notice = Named<TextBlock>(view, "HandoffNotice");
+        await Assert.That(notice.Text).IsEqualTo(HandoffComposerViewModel.ServerTooOld);
+        await Assert.That(notice.IsEffectivelyVisible).IsTrue();
+        await Assert.That(Named<Button>(view, "StartHandoffButton").IsEffectivelyVisible).IsFalse();
+        await Assert.That(host.Vm.Chat.Handoff!.StripLabel).IsEqualTo("");
+    }, arrange: fixture => fixture.Launch.Features = System.Collections.Frozen.FrozenSet<string>.Empty);
 
     [Test]
     public async Task A_remote_terminal_scrolls_locally_and_sends_keyboard_and_button_arrows() {
