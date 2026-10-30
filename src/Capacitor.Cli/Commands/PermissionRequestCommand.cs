@@ -66,7 +66,7 @@ class PermissionRequestCommand(
         // no journal shared across the two processes. An excluded session is ungoverned entirely
         // (see selfHealWatcher).
         if (selfHealWatcher && !isRenderedAgent
-            && await new ClaudePolicySeam(config, time, Url, PolicyJudgeGateway.ForHook(http, Url, time))
+            && await new ClaudePolicySeam(config, time, new HookSpool(config, time, Url), PolicyJudgeGateway.ForHook(http, Url, time))
                 .HandlePermissionRequestAsync(node, sessionId, stdout ?? Console.Out, judgeBudget?.Invoke())
                 == SeamAnswer.Answered) {
             return 0;

@@ -328,7 +328,7 @@ public sealed class ClaudeHookCommand(
 
                 var rendered = hosted.IsRendered;
 
-                return await new Cli.Harness.Claude.ClaudePolicySeam(config, clock.Time, Url, PolicyJudgeGateway.ForHook(http, Url, clock.Time))
+                return await new Cli.Harness.Claude.ClaudePolicySeam(config, clock.Time, new HookSpool(config, clock.Time, Url), PolicyJudgeGateway.ForHook(http, Url, clock.Time))
                     .HandlePreToolUseAsync(body, sessionId, rendered, stdout ?? Console.Out, JudgeShare(budget));
             } catch { return 0; }
         }

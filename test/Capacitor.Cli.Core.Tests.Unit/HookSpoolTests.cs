@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Core.Tests.Unit;
 
@@ -52,6 +53,23 @@ public class HookSpoolTests {
 
         await Assert.That(await DrainAs("https://kurrent.kcap.ai")).IsEquivalentTo(["""{"n":"legacy"}"""]);
         await Assert.That(await DrainAs("http://LOCALHOST:7248/")).Contains("""{"n":"local"}""");
+    }
+
+    /// <summary>A session spooled both before and after the upgrade has a file of the same name in the root
+    /// and in the partition. The route-agnostic drain must still deliver both, the older one first.</summary>
+    [Test]
+    public async Task a_colliding_unpartitioned_file_drains_before_the_partition_one() {
+        using var config = new TempConfigRoot();
+        const string server = "https://kurrent.kcap.ai";
+        new HookSpool(config.Root.Path(HookSpool.DirName), TimeProvider.System).Append(SidA, "session-start", """{"n":"legacy"}""");
+        var spool = new HookSpool(config.Root, TimeProvider.System, server);
+        spool.Append(SidA, "user-prompt", """{"n":"partitioned"}""");
+
+        var seen = new List<string>();
+        await spool.DrainAllAsync(null, (_, body) => { seen.Add(body); return Task.FromResult(DrainOutcome.Delivered); },
+            TimeSpan.FromSeconds(5), CancellationToken.None);
+
+        await Assert.That(seen).IsEquivalentTo(["""{"n":"legacy"}""", """{"n":"partitioned"}"""], CollectionOrdering.Matching);
     }
 
     [Test]

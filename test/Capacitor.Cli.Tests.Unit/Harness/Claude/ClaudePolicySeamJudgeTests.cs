@@ -27,7 +27,7 @@ public class ClaudePolicySeamJudgeTests : IDisposable {
     /// the production budget before the stub is ever asked.</summary>
     static readonly TimeSpan Ample = TimeSpan.FromSeconds(30);
 
-    ClaudePolicySeam Seam => new(Config.Root, TimeProvider.System, server: null, new PolicyJudgeGateway(
+    ClaudePolicySeam Seam => new(Config.Root, TimeProvider.System, new HookSpool(Config.Root, TimeProvider.System, server: null), new PolicyJudgeGateway(
         () => Task.FromResult(new AuthAttempt(new HttpClient(), AuthStatus.NoAuthRequired)),
         _server.Url, TimeProvider.System));
 

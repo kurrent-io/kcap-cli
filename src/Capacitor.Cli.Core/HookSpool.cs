@@ -13,7 +13,7 @@ public enum DrainOutcome {
 
 /// <summary>
 /// Vendor-neutral on-disk spool for lifecycle hook POSTs whose delivery failed.
-/// Per-session JSONL (<c>{spoolDir}/&lt;dashless-sid&gt;.jsonl</c>), one
+/// Per-session JSONL (<c>{Dir}/&lt;dashless-sid&gt;.jsonl</c>), one
 /// <c>{"route","body"}</c> object per line in arrival order. Drains are
 /// rotate-on-drain: the live file is atomically renamed to a private
 /// <c>.draining</c> temp before reading, so concurrent appends never collide
@@ -21,7 +21,7 @@ public enum DrainOutcome {
 ///
 /// <para>Under a config root, each server has its own directory (see <see cref="SpoolPartition"/>).</para>
 /// </summary>
-public sealed partial class HookSpool(string spoolDir, TimeProvider time, int capBytes = HookSpool.DefaultCapBytes, string? root = null) {
+public sealed partial class HookSpool(SpoolPartition partition, TimeProvider time, int capBytes = HookSpool.DefaultCapBytes) {
     public const int DefaultCapBytes = 1_048_576; // 1 MB per session file
 
     /// <summary>
@@ -44,20 +44,22 @@ public sealed partial class HookSpool(string spoolDir, TimeProvider time, int ca
     // tenants' directories would change every time one of them gained a file.
     public const string DirName = "spool";
 
-    /// <summary>The spool under a config root. The directory overload is for a spool that is not
-    /// under one — a test's own throwaway directory, or a vendor's legacy location.</summary>
+    /// <summary>The spool under a config root. The directory overload is for a test's own throwaway directory.</summary>
     public HookSpool(ConfigRoot config, TimeProvider time, string? server, int capBytes = DefaultCapBytes)
-        : this(SpoolPartition.DirFor(config.Path(DirName), server), time, capBytes, config.Path(DirName)) { }
+        : this(SpoolPartition.Partitioned(config.Path(DirName), server), time, capBytes) { }
+
+    public HookSpool(string dir, TimeProvider time, int capBytes = DefaultCapBytes)
+        : this(SpoolPartition.Standalone(dir), time, capBytes) { }
 
     static readonly Regex SafeSessionId  = SafeSessionIdRegex();
     static readonly Regex LegacyGuidKey = LegacyGuidKeyRegex();
     static          int   seqCounter;
 
     /// <summary>The directory where spool files are stored.</summary>
-    internal string Dir => spoolDir;
+    internal string Dir => partition.Dir;
 
     string? LivePathFor(string sessionId) =>
-        SafeSessionId.IsMatch(sessionId) ? Path.Combine(spoolDir, $"{EncodeKey(sessionId)}.jsonl") : null;
+        SafeSessionId.IsMatch(sessionId) ? Path.Combine(Dir, $"{EncodeKey(sessionId)}.jsonl") : null;
 
     /// <summary>
     /// Appends one payload for a later drain pass. Returns whether it was actually persisted, so a
@@ -67,7 +69,7 @@ public sealed partial class HookSpool(string spoolDir, TimeProvider time, int ca
         var path = LivePathFor(sessionId);
         if (path is null) return false;
         try {
-            Directory.CreateDirectory(spoolDir);
+            Directory.CreateDirectory(Dir);
             var line = new JsonObject { ["route"] = route, ["body"] = rawPayloadJson }.ToJsonString();
             EnsureUnderCap(path, Encoding.UTF8.GetByteCount(line) + 1);
             File.AppendAllText(path, $"{line}\n");
@@ -76,7 +78,6 @@ public sealed partial class HookSpool(string spoolDir, TimeProvider time, int ca
             return false;
         }
     }
-
 
     // ---- filename key encoding -------------------------------------------------------------
     //
@@ -138,8 +139,8 @@ public sealed partial class HookSpool(string spoolDir, TimeProvider time, int ca
             Func<string, string, Task<DrainOutcome>>  poster,
             TimeSpan                                  budget,
             CancellationToken                         ct) {
-        AdoptUnpartitioned();
-        if (!Directory.Exists(spoolDir)) return;
+        AdoptUnpartitioned(FifoTemp);
+        if (!Directory.Exists(Dir)) return;
         poster = RecordingDeliveries(poster);
         var started = time.GetTimestamp();
         bool Expired() => time.GetElapsedTime(started) >= budget;
@@ -155,25 +156,23 @@ public sealed partial class HookSpool(string spoolDir, TimeProvider time, int ca
         var ids = new List<string>();
         if (currentSessionId is not null && SafeSessionId.IsMatch(currentSessionId) && HasAny(currentSessionId))
             ids.Add(currentSessionId);
-        foreach (var f in Directory.EnumerateFiles(spoolDir)) {
+        foreach (var f in Directory.EnumerateFiles(Dir)) {
             var sid = SessionIdOf(f);
             if (sid is not null && !ids.Contains(sid)) ids.Add(sid);
         }
         return ids;
     }
 
-    /// <summary>A live file that collides becomes an ordered-drain temp, which drains before the
-    /// live file, so the older entries still go first.</summary>
-    internal void AdoptUnpartitioned() {
-        if (root is null) return;
-        SpoolPartition.AdoptUnpartitioned(root, spoolDir, name => name.EndsWith(".jsonl", StringComparison.Ordinal)
-            ? $"{name[..^".jsonl".Length]}.ordered-legacy-{Environment.ProcessId}-{Interlocked.Increment(ref seqCounter)}"
-            : null);
-    }
+    /// <summary>For the ordered drain. Each drain reads only its own temps, so a colliding live file
+    /// has to become one of the adopting drain's, which it reads before the live file.</summary>
+    internal void AdoptUnpartitioned() => AdoptUnpartitioned(OrderedTemp);
+
+    void AdoptUnpartitioned(Func<string, string> temp) =>
+        partition.AdoptUnpartitioned(name => name.EndsWith(".jsonl", StringComparison.Ordinal) ? temp(name[..^".jsonl".Length]) : null);
 
     bool HasAny(string sid) =>
-        File.Exists(Path.Combine(spoolDir, $"{EncodeKey(sid)}.jsonl"))
-     || Directory.EnumerateFiles(spoolDir, $"{EncodeKey(sid)}.*.draining").Any();
+        File.Exists(Path.Combine(Dir, $"{EncodeKey(sid)}.jsonl"))
+     || Directory.EnumerateFiles(Dir, $"{EncodeKey(sid)}.*.draining").Any();
 
     static string? SessionIdOf(string filePath) {
         var name = Path.GetFileName(filePath);
@@ -193,15 +192,15 @@ public sealed partial class HookSpool(string spoolDir, TimeProvider time, int ca
     // the two drains from ever cross-consuming each other's in-flight files.
     async Task<bool> DrainSessionAsync(
             string sid, Func<string, string, Task<DrainOutcome>> poster, Func<bool> expired, CancellationToken ct) {
-        foreach (var temp in Directory.EnumerateFiles(spoolDir, $"{EncodeKey(sid)}.*.draining").OrderBy(File.GetCreationTimeUtc)) {
+        foreach (var temp in Directory.EnumerateFiles(Dir, $"{EncodeKey(sid)}.*.draining").OrderBy(File.GetCreationTimeUtc)) {
             if (expired() || ct.IsCancellationRequested) return false;
             if (await DrainFileAsync(temp, poster, expired, ct)) return true;
         }
 
-        var live = Path.Combine(spoolDir, $"{EncodeKey(sid)}.jsonl");
+        var live = Path.Combine(Dir, $"{EncodeKey(sid)}.jsonl");
         if (!File.Exists(live) || expired() || ct.IsCancellationRequested) return false;
 
-        var rotated = Path.Combine(spoolDir, $"{EncodeKey(sid)}.{Environment.ProcessId}-{Interlocked.Increment(ref seqCounter)}.draining");
+        var rotated = Path.Combine(Dir, FifoTemp(EncodeKey(sid)));
         try { File.Move(live, rotated); }
         catch { return false; } // lost the atomic-rename race (or vanished) — the winner handles it
         return await DrainFileAsync(rotated, poster, expired, ct);
@@ -248,17 +247,17 @@ public sealed partial class HookSpool(string spoolDir, TimeProvider time, int ca
     /// withheld ordered-drain phase is still in flight for this session") so both temp namespaces
     /// must be visible here even though only the ordered drain ever creates/consumes the latter.</summary>
     public bool HasBacklog(string sessionId) =>
-        SafeSessionId.IsMatch(sessionId) && Directory.Exists(spoolDir)
-        && (File.Exists(Path.Combine(spoolDir, $"{EncodeKey(sessionId)}.jsonl"))
-            || Directory.EnumerateFiles(spoolDir, $"{EncodeKey(sessionId)}.*.draining").Any()
-            || Directory.EnumerateFiles(spoolDir, $"{EncodeKey(sessionId)}.ordered-*").Any());
+        SafeSessionId.IsMatch(sessionId) && Directory.Exists(Dir)
+        && (File.Exists(Path.Combine(Dir, $"{EncodeKey(sessionId)}.jsonl"))
+            || Directory.EnumerateFiles(Dir, $"{EncodeKey(sessionId)}.*.draining").Any()
+            || Directory.EnumerateFiles(Dir, $"{EncodeKey(sessionId)}.ordered-*").Any());
 
     /// <summary>Every distinct session id with a live .jsonl or recovered .draining/.ordered-* temp,
     /// in no particular order (callers that need current-session-first ordering add it themselves).</summary>
     public IEnumerable<string> SessionIdsWithBacklog() {
-        if (!Directory.Exists(spoolDir)) return [];
+        if (!Directory.Exists(Dir)) return [];
         var ids = new List<string>();
-        foreach (var f in Directory.EnumerateFiles(spoolDir)) {
+        foreach (var f in Directory.EnumerateFiles(Dir)) {
             var sid = SessionIdOf(f);
             if (sid is not null && !ids.Contains(sid)) ids.Add(sid);
         }
@@ -288,22 +287,22 @@ public sealed partial class HookSpool(string spoolDir, TimeProvider time, int ca
     public async Task<int> DrainRoutesAsync(
             string sid, bool isTerminal, Func<string, string, Task<DrainOutcome>> poster,
             Func<bool> expired, CancellationToken ct) {
-        if (!SafeSessionId.IsMatch(sid) || !Directory.Exists(spoolDir)) return 0;
+        if (!SafeSessionId.IsMatch(sid) || !Directory.Exists(Dir)) return 0;
         poster = RecordingDeliveries(poster);
 
         var consumed = 0;
 
-        foreach (var temp in Directory.EnumerateFiles(spoolDir, $"{EncodeKey(sid)}.ordered-*").OrderBy(File.GetCreationTimeUtc)) {
+        foreach (var temp in Directory.EnumerateFiles(Dir, $"{EncodeKey(sid)}.ordered-*").OrderBy(File.GetCreationTimeUtc)) {
             if (expired() || ct.IsCancellationRequested) return consumed;
             var (stopped, n) = await DrainFileRoutesAsync(temp, isTerminal, poster, expired, ct);
             consumed += n;
             if (stopped) return consumed; // stopped — remainder kept
         }
 
-        var live = Path.Combine(spoolDir, $"{EncodeKey(sid)}.jsonl");
+        var live = Path.Combine(Dir, $"{EncodeKey(sid)}.jsonl");
         if (!File.Exists(live) || expired() || ct.IsCancellationRequested) return consumed;
 
-        var rotated = Path.Combine(spoolDir, $"{EncodeKey(sid)}.ordered-{Environment.ProcessId}-{Interlocked.Increment(ref seqCounter)}");
+        var rotated = Path.Combine(Dir, OrderedTemp(EncodeKey(sid)));
         try { File.Move(live, rotated); }
         catch { return consumed; } // lost the atomic-rename race (or vanished) — the winner handles it
         var (_, more) = await DrainFileRoutesAsync(rotated, isTerminal, poster, expired, ct);
@@ -377,7 +376,7 @@ public sealed partial class HookSpool(string spoolDir, TimeProvider time, int ca
     public void MarkEnded(string sessionId) {
         if (!SafeSessionId.IsMatch(sessionId)) return;
         try {
-            Directory.CreateDirectory(spoolDir);
+            Directory.CreateDirectory(Dir);
             File.WriteAllText(EndedMarkerPath(sessionId), "");
         } catch { }
     }
@@ -397,25 +396,25 @@ public sealed partial class HookSpool(string spoolDir, TimeProvider time, int ca
     public void DiscardRemainder(string sessionId) {
         if (!SafeSessionId.IsMatch(sessionId)) return;
         try {
-            if (!Directory.Exists(spoolDir)) return;
+            if (!Directory.Exists(Dir)) return;
 
-            var live = Path.Combine(spoolDir, $"{EncodeKey(sessionId)}.jsonl");
+            var live = Path.Combine(Dir, $"{EncodeKey(sessionId)}.jsonl");
             if (File.Exists(live)) File.Delete(live);
 
-            foreach (var temp in Directory.EnumerateFiles(spoolDir, $"{EncodeKey(sessionId)}.*.draining"))
+            foreach (var temp in Directory.EnumerateFiles(Dir, $"{EncodeKey(sessionId)}.*.draining"))
                 try { File.Delete(temp); } catch { }
-            foreach (var temp in Directory.EnumerateFiles(spoolDir, $"{EncodeKey(sessionId)}.ordered-*"))
+            foreach (var temp in Directory.EnumerateFiles(Dir, $"{EncodeKey(sessionId)}.ordered-*"))
                 try { File.Delete(temp); } catch { }
         } catch { }
     }
 
-    string EndedMarkerPath(string sessionId) => Path.Combine(spoolDir, $".ended-{EncodeKey(sessionId)}");
+    string EndedMarkerPath(string sessionId) => Path.Combine(Dir, $".ended-{EncodeKey(sessionId)}");
 
     public const string PolicySnapshotRoute = "policy-snapshot";
 
     string? PolicySnapshotMarkerPath(string sessionId, string snapshotId) =>
         SafeSessionId.IsMatch(sessionId)
-            ? Path.Combine(spoolDir, $".policy-snapshot-{EncodeKey(sessionId)}-{snapshotId[..Math.Min(16, snapshotId.Length)]}")
+            ? Path.Combine(Dir, $".policy-snapshot-{EncodeKey(sessionId)}-{snapshotId[..Math.Min(16, snapshotId.Length)]}")
             : null;
 
     /// <summary>Whether a drain has had this session's policy snapshot accepted by the server.
@@ -441,8 +440,7 @@ public sealed partial class HookSpool(string spoolDir, TimeProvider time, int ca
         } catch { }
     }
 
-    /// <summary>Sweeps every server's directory, so one no longer configured is reaped too.</summary>
-    public void DeleteExpired() => SpoolPartition.Reap(root ?? spoolDir, (time.GetUtcNow() - SpoolPartition.Retention).UtcDateTime);
+    public void DeleteExpired() => partition.DeleteExpired(time);
 
     // Filename-safe superset of the old dashless-GUID form. The filename IS the session id --
     // LifecycleSpoolDrain posts it verbatim as session_id for session-needs-import -- so the key may
@@ -450,6 +448,9 @@ public sealed partial class HookSpool(string spoolDir, TimeProvider time, int ca
     // and '\\', preserving both the path-traversal property and the parse-before-first-dot split.
     // Vendors such as OpenCode use ids like "ses_7f3a9c21b8", which the old form silently dropped.
     /// <summary>The pre-upgrade key space: a dashless GUID, case-insensitively one id.</summary>
+    static string FifoTemp(string key)    => $"{key}.{Environment.ProcessId}-{Interlocked.Increment(ref seqCounter)}.draining";
+    static string OrderedTemp(string key) => $"{key}.ordered-{Environment.ProcessId}-{Interlocked.Increment(ref seqCounter)}";
+
     [GeneratedRegex("^[0-9a-fA-F]{32}$", RegexOptions.Compiled)]
     private static partial Regex LegacyGuidKeyRegex();
 

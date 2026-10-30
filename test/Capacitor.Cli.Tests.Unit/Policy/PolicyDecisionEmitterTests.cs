@@ -1,5 +1,6 @@
 namespace Capacitor.Cli.Tests.Unit.Policy;
 
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Policy;
 using WireMock.Server;
@@ -9,7 +10,7 @@ public class PolicyDecisionEmitterTests : IDisposable {
     readonly WireMockServer _server = WireMockServer.Start();
     public void Dispose() => _server.Stop();
 
-    PolicyDecisionEmitter Emitter => new(Config.Root, TimeProvider.System, server: null);
+    PolicyDecisionEmitter Emitter => new(Config.Root, new HookSpool(Config.Root, TimeProvider.System, server: null));
 
     /// <summary>Points the config's active profile at the stub server, so "no request reached it" is
     /// a live guard: any inline POST reintroduced here would resolve this URL and be logged.</summary>
@@ -79,7 +80,7 @@ public class PolicyDecisionEmitterTests : IDisposable {
     [Test]
     public async Task Snapshot_is_spooled_ahead_of_the_decision_it_names() {
         await Emitter.EmitAsync(Event("s4"), Snapshot);
-        var routes = File.ReadAllLines(Path.Combine(new Capacitor.Cli.Core.HookSpool(Config.Root, TimeProvider.System, server: null).Dir, "s4.jsonl"))
+        var routes = File.ReadAllLines(Path.Combine(new HookSpool(Config.Root, TimeProvider.System, server: null).Dir, "s4.jsonl"))
             .Select(l => System.Text.Json.Nodes.JsonNode.Parse(l)!["route"]!.GetValue<string>())
             .ToList();
         await Assert.That(routes.Count).IsEqualTo(2);
