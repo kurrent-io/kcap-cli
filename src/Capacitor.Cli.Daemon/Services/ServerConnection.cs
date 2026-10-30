@@ -1269,9 +1269,11 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     }
 
     /// <summary>Releases the takeover. Best effort: the lease lapses on its own.</summary>
+    // Its own deadline rather than the shutdown token: the end runs while the daemon stops, after that token fired.
     public virtual async Task EndHandoffTakeoverAsync(string token) {
         try {
-            await _hub.InvokeAsync("EndHandoffTakeover", token, cancellationToken: _ct);
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5), _time);
+            await _hub.InvokeAsync("EndHandoffTakeover", token, cancellationToken: deadline.Token);
         } catch (Exception ex) when (ex is not OperationCanceledException) {
             LogHandoffTakeoverFailed(ex, "end");
         }
