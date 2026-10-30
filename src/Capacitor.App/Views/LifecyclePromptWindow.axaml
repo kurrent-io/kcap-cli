@@ -9,7 +9,7 @@
                      Title="{Binding Title}"
                      Icon="avares://kcap-desktop/Assets/kcap-icon.png"
                      Width="480" SizeToContent="Height" MaxHeight="560"
-                     CanResize="False" Topmost="True" WindowStartupLocation="CenterOwner"
+                     CanResize="False" CanMinimize="False" CanMaximize="False" Topmost="True" WindowStartupLocation="CenterOwner"
                      Background="{StaticResource KcapCanvasBrush}"
                      ExtendClientAreaToDecorationsHint="True">
     <!-- The disclosure TextBlocks carry an explicit Width: SizeToContent="Height" needs a bound for

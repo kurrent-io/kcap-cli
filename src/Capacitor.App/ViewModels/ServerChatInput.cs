@@ -14,6 +14,9 @@ internal sealed class ServerChatInput : ChatInput {
     const string Unconfirmed = "delivery unconfirmed — check the chat before sending again";
     const string InterruptUnconfirmed = "interrupt delivery unconfirmed — check the agent's terminal";
     const string InterruptDenied = "you cannot interrupt this session";
+    /// A server session may have run elsewhere or been imported, and the listing says neither, so
+    /// the hint names only what holds for both: the recording stays and nothing can be sent.
+    internal const string EndedHint = "This session has ended. Its recorded history is read-only.";
 
     readonly string _agentId;
     readonly IServerLane _lane;
@@ -96,7 +99,7 @@ internal sealed class ServerChatInput : ChatInput {
     public override string Hint => _notice ?? Availability switch {
         SendAvailability.Ready   => "Enter sends · Shift+Enter for a new line",
         SendAvailability.Sending => "Sending…",
-        SendAvailability.Ended   => "This session has ended",
+        SendAvailability.Ended   => EndedHint,
         _                        => "Connecting to the session…",
     };
 

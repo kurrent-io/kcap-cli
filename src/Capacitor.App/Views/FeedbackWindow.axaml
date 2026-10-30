@@ -7,9 +7,13 @@
         x:DataType="vm:FeedbackViewModel"
         Title="kcap — Send feedback"
         Icon="avares://kcap-desktop/Assets/kcap-icon.png"
-        Width="560" Height="560" CanResize="False" WindowStartupLocation="CenterOwner"
-        Background="{StaticResource KcapCanvasBrush}">
-    <Grid Margin="28,24" RowDefinitions="Auto,*,Auto">
+        Width="560" Height="560" CanResize="False" CanMinimize="False" CanMaximize="False" WindowStartupLocation="CenterOwner"
+        Background="{StaticResource KcapCanvasBrush}"
+        ExtendClientAreaToDecorationsHint="True">
+    <Panel>
+    <Border x:Name="FeedbackChromeStrip" Height="32" VerticalAlignment="Top" Background="Transparent"
+            PointerPressed="OnChromePointerPressed" />
+    <Grid Margin="28,40,28,24" RowDefinitions="Auto,*,Auto">
         <StackPanel Spacing="4">
             <TextBlock Classes="kcapTitle" Text="Send feedback" />
             <TextBlock Classes="kcapSubtitle" Text="{Binding Subtitle}" TextWrapping="Wrap" />
@@ -64,4 +68,5 @@
                     IsDefault="{Binding !IsSent}" />
         </StackPanel>
     </Grid>
+    </Panel>
 </Window>

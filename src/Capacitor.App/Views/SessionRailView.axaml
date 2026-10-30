@@ -450,8 +450,17 @@
                                     <Button Classes="sectionHeader expandable railRepoHeader" Command="{Binding ToggleCommand}" IsVisible="{Binding ShowsHeader}"
                                             ToolTip.Tip="{Binding Tooltip}" AutomationProperties.Name="{Binding ToggleAccessibleName}">
                                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
-                                            <TextBlock Text="{Binding Label, Converter={x:Static views:UppercaseConverter.Instance}}"
-                                                       Classes="eyebrow" TextTrimming="CharacterEllipsis" />
+                                            <Grid ColumnDefinitions="Auto,*">
+                                                <!-- A group named by its folder must not read as a repository. -->
+                                                <views:AppIcon Kind="Folder" Size="12" Margin="0,0,6,0" VerticalAlignment="Center"
+                                                               Foreground="{StaticResource KcapMutedBrush}" IsVisible="{Binding IsFolder}" />
+                                                <!-- A mixed count ("1 live · 3 ended") is wide: the name wraps
+                                                     to a second line before it gives up characters. -->
+                                                <TextBlock x:Name="RailRepoHeaderLabel" Grid.Column="1"
+                                                           Text="{Binding Label, Converter={x:Static views:UppercaseConverter.Instance}}"
+                                                           Classes="eyebrow" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"
+                                                           VerticalAlignment="Center" />
+                                            </Grid>
                                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                                 <Border IsVisible="{Binding ShowsHeaderBadge}" VerticalAlignment="Center" MaxWidth="76">
                                                     <views:AgentStatusMark Classes="railRepoStatus" DataContext="{Binding HeaderStatus}" ToolTip.Tip="{x:Null}" />
@@ -479,6 +488,9 @@
                                                                     Classes="railRow" Classes.selected="{Binding IsSelected}">
                                                                 <ToolTip.Tip>
                                                                     <StackPanel Spacing="10" MaxWidth="320">
+                                                                        <!-- The row trims its title; the tip carries it whole. -->
+                                                                        <TextBlock x:Name="SessionTitleTip" Text="{Binding Primary}" TextWrapping="Wrap"
+                                                                                   IsVisible="{Binding HasTitle}" />
                                                                         <views:AgentStatusTip DataContext="{Binding Status}" />
                                                                         <StackPanel Spacing="1" IsVisible="{Binding IsRemote}">
                                                                             <TextBlock Text="{Binding MachineBadge}" TextWrapping="Wrap" />

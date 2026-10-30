@@ -224,17 +224,26 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     /// shows no age.
     string MetaFor(AgentRow row) {
         var now = _time.GetUtcNow();
-        if (row.IsEndedSession && row.EndedAt is { } ended) {
-            var endedAt = new DateTimeOffset(DateTime.SpecifyKind(ended, DateTimeKind.Utc));
-            return $"{RelativeTime.Format(endedAt, now)} · {UptimeFormat.Format(ended - row.CreatedAt)}";
+        var created = AsUtc(row.CreatedAt);
+        if (row.IsEndedSession && row.EndedAt is { } endedRaw) {
+            var ended = AsUtc(endedRaw);
+            return $"{RelativeTime.Ago(new DateTimeOffset(ended), now)} · {UptimeFormat.Format(ended - created)}";
         }
         var kind = row.Kind is "agent" or "session" ? null : row.Kind;
         var borrowed = row.WorkLocation == WorkLocationText.Borrowed ? "borrowed" : null;
-        var age = row.Origin == AgentOrigin.Remote ? null : UptimeFormat.Format(
-            now.UtcDateTime - DateTime.SpecifyKind(row.CreatedAt, DateTimeKind.Utc));
+        var age = row.Origin == AgentOrigin.Remote ? null : LiveAge(now.UtcDateTime - created);
         var subagents = row.LiveSubagents is int live and > 0 ? $"{live} subagent{(live == 1 ? "" : "s")}" : null;
         return Join(kind, borrowed, age, subagents);
     }
+
+    /// The age ticks once a minute, so a count of seconds would sit still beside the status word
+    /// and read as how long the agent has been working, which the chat counts per turn.
+    internal static string LiveAge(TimeSpan age) => age < TimeSpan.FromMinutes(1) ? "<1m" : UptimeFormat.Format(age);
+
+    /// A local stamp is converted rather than relabelled: relabelling shifts it by the UTC offset,
+    /// enough to move an age across a day boundary.
+    static DateTime AsUtc(DateTime at) =>
+        at.Kind == DateTimeKind.Local ? at.ToUniversalTime() : DateTime.SpecifyKind(at, DateTimeKind.Utc);
 
     void RefreshAge() {
         var row = _row.Value;

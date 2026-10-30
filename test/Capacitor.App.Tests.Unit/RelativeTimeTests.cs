@@ -24,6 +24,18 @@ public class RelativeTimeTests {
         await Assert.That(RelativeTime.Format(new DateTimeOffset(2025, 12, 24, 0, 0, 0, TimeSpan.Zero), Now)).IsEqualTo("Dec 24, 2025");
     }
 
+    /// The rail compares rows by eye, so an old row stays relative instead of turning into a date.
+    [Test]
+    [Arguments(6, "6d ago")]
+    [Arguments(7, "1w ago")]
+    [Arguments(59, "8w ago")]
+    [Arguments(60, "2mo ago")]
+    [Arguments(364, "12mo ago")]
+    [Arguments(365, "1y ago")]
+    public async Task Ago_stays_relative_at_every_age(int daysAgo, string expected) {
+        await Assert.That(RelativeTime.Ago(Now.AddDays(-daysAgo), Now)).IsEqualTo(expected);
+    }
+
     [Test]
     public async Task A_future_stamp_reads_as_just_now() {
         await Assert.That(RelativeTime.Format(Now.AddMinutes(5), Now)).IsEqualTo("just now");

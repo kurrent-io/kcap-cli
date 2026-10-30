@@ -127,7 +127,7 @@ public class SessionRailViewModelTests {
             using var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, time);
             directory.Rows.AddOrUpdate(AgentRow.FromLocal(Dto("a", "/repo", created: time.GetUtcNow().UtcDateTime), new RepoIdentity("path:/repo", "repo")));
             var session = rail.Groups.Single().Sessions.Single();
-            await Assert.That(session.Meta).IsEqualTo("0s");
+            await Assert.That(session.Meta).IsEqualTo("<1m");
             time.Advance(TimeSpan.FromMinutes(2));
             await Assert.That(session.Meta).IsEqualTo("2m");
         });
@@ -451,6 +451,28 @@ public class SessionRailViewModelTests {
 
                 var beta = rail.Groups.Single(r => r.Label == "beta");
                 await Assert.That(beta.RootDisplay).IsEqualTo("/srv/beta on work-mac");
+            }
+        });
+    }
+
+    /// A group named by its folder says so; one named by a repository's remote does not.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_folder_group_reads_as_a_folder_and_a_remote_repository_does_not() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var (service, remote, rail) = Build();
+            using (rail) {
+                service.Agents.AddOrUpdate(Dto("a1", "/dev/scratch"));
+                remote.Cache.AddOrUpdate(RemoteDto("b1", "kurrent-io", "kcap-cli"));
+
+                var folder = rail.Groups.Single(r => r.Label == "scratch");
+                await Assert.That(folder.IsFolder).IsTrue();
+                await Assert.That(folder.Tooltip).StartsWith("/dev/scratch\nFolder, not a repository with a remote");
+                await Assert.That(folder.ToggleAccessibleName).Contains(" folder scratch");
+
+                var repository = rail.Groups.Single(r => r.Label == "kurrent-io/kcap-cli");
+                await Assert.That(repository.IsFolder).IsFalse();
+                await Assert.That(repository.ToggleAccessibleName).DoesNotContain("folder");
             }
         });
     }

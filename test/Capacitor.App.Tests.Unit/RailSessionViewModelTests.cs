@@ -461,6 +461,20 @@ public class RailSessionViewModelTests {
         });
     }
 
+    /// A stamp that arrives as local time is the same instant as its UTC form, so the age does not
+    /// move by the machine's UTC offset.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_local_time_stamp_ages_from_the_same_instant_as_its_utc_form() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var local = ServerRow() with { CreatedAt = Started.ToLocalTime(), EndedAt = Ended.ToLocalTime() };
+            using var row = new RailSessionViewModel(local, new BehaviorSubject<string?>(null), NoPending, NotStale,
+                _ => { }, _ => { }, At(Ended.AddDays(3).AddMinutes(30)));
+
+            await Assert.That(row.Meta).IsEqualTo("3d ago · 3h 52m");
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_live_terminal_row_carries_the_chip_and_ages() {

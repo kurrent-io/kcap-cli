@@ -13,4 +13,14 @@ public static class RelativeTime {
         if (age < TimeSpan.FromDays(7))    return $"{(int)age.TotalDays}d ago";
         return at.ToString(at.Year == now.Year ? "MMM d" : "MMM d, yyyy", CultureInfo.InvariantCulture);
     }
+
+    /// Relative at every age, for a list read by comparing rows: as Format for a week, then weeks
+    /// under two months, months under a year, then years.
+    public static string Ago(DateTimeOffset at, DateTimeOffset now) {
+        var age = now - at;
+        if (age < TimeSpan.FromDays(7))   return Format(at, now);
+        if (age < TimeSpan.FromDays(60))  return $"{(int)(age.TotalDays / 7)}w ago";
+        if (age < TimeSpan.FromDays(365)) return $"{(int)(age.TotalDays / 30)}mo ago";
+        return $"{(int)(age.TotalDays / 365)}y ago";
+    }
 }
