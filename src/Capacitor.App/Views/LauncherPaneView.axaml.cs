@@ -30,7 +30,7 @@ public partial class LauncherPaneView : UserControl {
 
     static readonly TimeSpan NudgeHold = TimeSpan.FromMilliseconds(450);
     readonly Transitions _nudgeFadeIn = [new DoubleTransition { Property = OpacityProperty, Duration = TimeSpan.FromMilliseconds(250), Easing = new CubicEaseOut() }];
-    readonly Transitions _nudgeFadeOut = [new DoubleTransition { Property = OpacityProperty, Duration = TimeSpan.FromMilliseconds(750), Easing = new CubicEaseOut() }];
+    readonly Transitions _nudgeFadeOut = [new DoubleTransition { Property = OpacityProperty, Duration = TimeSpan.FromSeconds(2), Easing = new LinearEasing() }];
 
     /// A picker search term matches a model by its label or its launch id, so a Pi row is found by
     /// model name, provider, or `provider/` prefix alike.
@@ -52,6 +52,7 @@ public partial class LauncherPaneView : UserControl {
     /// briefly, so the press does not read as a dead button.
     public void Nudge() {
         FocusComposer();
+        GoalCard.BringIntoView();
         _nudgeEnd?.Dispose();
         GoalNudgeRing.Transitions = _nudgeFadeIn;
         GoalNudgeRing.Classes.Set("on", true);
