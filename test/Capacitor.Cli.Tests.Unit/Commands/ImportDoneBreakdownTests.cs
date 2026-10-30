@@ -126,6 +126,25 @@ public class ImportDoneBreakdownTests {
         await Assert.That(counts.Errored).IsEqualTo(0);
     }
 
+    [Test]
+    public async Task chain_vendor_reports_resumed_sessions_as_resumed_like_the_totals() {
+        var classifications = new[] {
+            Cls("s1", HarnessId.Claude, ImportCommand.ClassificationStatus.New),
+            Cls("s2", HarnessId.Claude, ImportCommand.ClassificationStatus.Partial),
+            Cls("s3", HarnessId.Claude, ImportCommand.ClassificationStatus.Partial),
+        };
+
+        var counts = ImportCommand.ComputePerSourceFinalCounts(
+            classifications:  classifications,
+            imported:         3,
+            routedOutcomes:   null,
+            resumed:          2);
+
+        await Assert.That(counts.Loaded).IsEqualTo(1);
+        await Assert.That(counts.Resumed).IsEqualTo(2);
+        await Assert.That(counts.Errored).IsEqualTo(0);
+    }
+
     // --- Multi-source invariant: sub-grid sum == totals ---
 
     [Test]

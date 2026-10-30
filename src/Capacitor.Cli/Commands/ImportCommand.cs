@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Frozen;
+using System.Net;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -592,14 +594,14 @@ class ImportCommand(
     /// <remarks>
     /// Routed-phase vendors (Cursor today) get exact attribution: <c>routedOutcomes.Skipped</c>
     /// folds into Excluded (server said "already current"), <c>routedOutcomes.Failed</c> into Errored.
-    /// Chain-phase vendors (Claude/Codex) still use the best-effort approximation:
-    /// imported sessions → Loaded; (New+Partial)−imported → Errored — because the chain worker
-    /// doesn't record per-session outcome by vendor yet.
+    /// Chain-phase vendors (Claude/Codex) split their imported sessions into Loaded and
+    /// <paramref name="resumed"/> the way the totals do, and count (New+Partial)−imported as Errored.
     /// </remarks>
     internal static FinalCounts ComputePerSourceFinalCounts(
             IReadOnlyList<SessionClassification>   classifications,
             int                                    imported,
-            (int Loaded, int Skipped, int Failed)? routedOutcomes
+            (int Loaded, int Skipped, int Failed)? routedOutcomes,
+            int                                    resumed = 0
         ) {
         var counts = ComputeCounts(classifications);
 
@@ -623,11 +625,9 @@ class ImportCommand(
             );
         }
 
-        // Chain-phase vendor: best-effort approximation because the chain worker
-        // doesn't record per-session outcome by vendor yet.
         return new FinalCounts(
-            Loaded: imported,
-            Resumed: 0,
+            Loaded: imported - resumed,
+            Resumed: resumed,
             AlreadyLoaded: counts.AlreadyLoaded,
             TooShort: counts.TooShort,
             Excluded: counts.Excluded,
@@ -1394,6 +1394,7 @@ class ImportCommand(
         var       titleFailures      = new ConcurrentBag<(string SessionId, string Reason)>();
         var       summaryFailures    = new ConcurrentBag<(string SessionId, string Reason)>();
         var       importedSessionIds = new ConcurrentBag<string>();
+        var       resumedSessionIds  = new ConcurrentBag<string>();
         var       partitionSucceeded = new ConcurrentBag<string>();
         var       partitionSkipped   = new ConcurrentBag<string>();
         var       partitionFailed    = new ConcurrentBag<string>();
@@ -1419,6 +1420,7 @@ class ImportCommand(
             OnSessionWarning = (_, sid, message) => WarnSession(sid, message),
             OnSessionEnded = (_, c, outcome, lines) => {
                 importedSessionIds.Add(c.SessionId);
+                if (outcome == SessionImportOutcome.Resumed) resumedSessionIds.Add(c.SessionId);
                 if (selectedIds?.Contains(c.SessionId) == true) partitionSucceeded.Add(c.SessionId);
 
                 var verb = outcome == SessionImportOutcome.Resumed
@@ -1713,8 +1715,9 @@ class ImportCommand(
                                         slots[slot].Description     = LoadingDesc(slot, currentSid[slot], currentVerb[slot]);
                                     }
                                 },
-                                OnSessionEnded = (slot, c, _, _) => {
+                                OnSessionEnded = (slot, c, outcome, _) => {
                                     importedSessionIds.Add(c.SessionId);
+                                    if (outcome == SessionImportOutcome.Resumed) resumedSessionIds.Add(c.SessionId);
                                     // Partition accounting must happen on BOTH the TTY and non-TTY
                                     // paths (the base handler records it too); it drives the
                                     // foreground outcome and the background-spawn decision.
@@ -2106,6 +2109,7 @@ class ImportCommand(
 
         if (sources.Count > 1) {
             var importedSet = importedSessionIds.ToHashSet(StringComparer.Ordinal);
+            var resumedSet  = resumedSessionIds.ToHashSet(StringComparer.Ordinal);
 
             doneBySource = classifications
                 .GroupBy(c => c.Vendor)
@@ -2120,7 +2124,8 @@ class ImportCommand(
                         return ComputePerSourceFinalCounts(
                             slice,
                             imported,
-                            hasRouted ? routed : null
+                            hasRouted ? routed : null,
+                            slice.Count(c => resumedSet.Contains(c.SessionId))
                         );
                     },
                     StringComparer.Ordinal
@@ -3195,6 +3200,7 @@ class ImportCommand(
         var loaded  = 0;
         var resumed = 0;
         var errored = 0;
+        var ledger  = TranscriptImportLedger.ForRecording(config);
 
         var queue = Channel.CreateUnbounded<List<SessionClassification>>(
             new() {
@@ -3224,7 +3230,7 @@ class ImportCommand(
                                 var linesSent = 0;
 
                                 try {
-                                    (r, linesSent) = await ImportSingleSessionAsync(httpClient, baseUrl, session, slot, events, ct, sessionCwds, defaultVisibility);
+                                    (r, linesSent) = await ImportSingleSessionAsync(httpClient, baseUrl, session, slot, events, ledger, ct, sessionCwds, defaultVisibility);
                                 } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
                                     throw;
                                 } catch (Exception ex) {
@@ -3249,7 +3255,11 @@ class ImportCommand(
             );
         }
 
-        await Task.WhenAll(workers);
+        try {
+            await Task.WhenAll(workers);
+        } finally {
+            ledger.Save();
+        }
 
         return new(loaded, resumed, errored);
     }
@@ -3271,12 +3281,13 @@ class ImportCommand(
             : session.Meta.Cwd ?? SessionImporter.DecodeCwdFromDirName(session.EncodedCwd);
 
     async Task<(SessionImportOutcome Outcome, int LinesSent)> ImportSingleSessionAsync(
-            HttpClient            httpClient,
-            string                baseUrl,
-            SessionClassification session,
-            int                   slot,
-            ChainWorkerEvents     events,
-            CancellationToken     ct,
+            HttpClient             httpClient,
+            string                 baseUrl,
+            SessionClassification  session,
+            int                    slot,
+            ChainWorkerEvents      events,
+            TranscriptImportLedger ledger,
+            CancellationToken      ct,
             IReadOnlyDictionary<string, string>? sessionCwds       = null,
             string?                              defaultVisibility = null
         ) {
@@ -3292,8 +3303,11 @@ class ImportCommand(
             )
             : 0;
 
+        var transcriptDropped = false;
+
         IProgress<ImportProgress> perSessionProgress = new CallbackProgress(ev => {
                 switch (ev) {
+                    case BatchDropped { AgentId: null }: transcriptDropped = true; break;
                     // Only parent-transcript batches (AgentId == null) advance the
                     // slot bar; subagent batches are surfaced via the subagent events.
                     case BatchFlushed { AgentId: null } bf: events.OnSessionProgress(slot, bf.LinesAdded, sendableTotal); break;
@@ -3308,6 +3322,7 @@ class ImportCommand(
             try {
                 // Fail-closed tail: a rejected/half-applied resume must NOT be finalized
                 // (posting session-end after a gap would mark the session ended with a hole).
+                var completeLines = new StrongBox<int>();
                 var linesSent = await SessionImporter.SendTranscriptBatches(
                     httpClient,
                     baseUrl,
@@ -3317,7 +3332,8 @@ class ImportCommand(
                     startLine: session.ResumeFromLine, time: time,
                     progress: perSessionProgress,
                     vendor: session.Vendor,
-                    failOnError: true
+                    failOnError: true,
+                    completeLines: completeLines
                 );
 
                 var (_, resumeTitleCancelled) = await TryPostCodexHarnessTitleAsync(httpClient, baseUrl, session, perSessionProgress, ct);
@@ -3353,6 +3369,8 @@ class ImportCommand(
 
                     return (SessionImportOutcome.Errored, linesSent);
                 }
+
+                if (!transcriptDropped) await RecordImportMarkAsync(httpClient, baseUrl, session.SessionId, completeLines.Value, ledger, ct);
 
                 return (SessionImportOutcome.Resumed, linesSent);
             } catch (HttpRequestException ex) {
@@ -3531,10 +3549,35 @@ class ImportCommand(
 
         if (titleCancelled) ct.ThrowIfCancellationRequested();
 
+        if (!transcriptDropped) await RecordImportMarkAsync(httpClient, baseUrl, session.SessionId, importResult.CompleteLines, ledger, ct);
+
         if (!harnessTitled) events.OnTitleTaskReady((session.SessionId, session.FilePath, session.PreviousSessionId, session.Vendor));
         events.OnBackgroundWorkReady((session.SessionId, generateWhatsDone, session.Vendor));
 
         return (SessionImportOutcome.Loaded, importResult.LinesSent);
+    }
+
+    /// <summary>
+    /// Asks the server where its watermark settled once the transcript landed, and records it beside the lines
+    /// that were sent, so the next import can tell lines the server ignored from lines it never got.
+    /// </summary>
+    static async Task RecordImportMarkAsync(
+            HttpClient             httpClient,
+            string                 baseUrl,
+            string                 sessionId,
+            int                    completeLines,
+            TranscriptImportLedger ledger,
+            CancellationToken      ct
+        ) {
+        try {
+            using var resp = await httpClient.GetAsync($"{baseUrl}/api/sessions/{sessionId}/last-line", ct);
+            if (resp.StatusCode != HttpStatusCode.OK) return;
+
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+            if (doc.RootElement.Num("last_line_number") is { } watermark && completeLines > watermark)
+                ledger.Record(baseUrl, sessionId, new TranscriptImportMark(completeLines, (int)watermark));
+        } catch (Exception e) when (e is HttpRequestException or JsonException or InvalidOperationException
+                                     || e is OperationCanceledException && !ct.IsCancellationRequested) { }
     }
 
     // A cancellation during the title post is held until session-end has been sent, which then runs uncancelled and is
