@@ -97,8 +97,8 @@ public class LocalPreflightTests {
         await Assert.That(LocalPreflight.SocketLimit(new(false, true, false, Architecture.X64))).IsEqualTo(107);
     }
 
-    // The longer of the two sockets is `/run/kurrentdb.sock`, 19 bytes after the root.
-    const int LongestSuffix = 19;
+    // The longer of the two sockets is the embedded KurrentDB's `/data/kurrentdb/kurrent.sock`, 28 bytes after the root.
+    const int LongestSuffix = 28;
 
     static LocalRoot RootWithBytes(int rootBytes, string fill = "a") {
         var baseDir = "/tmp";
@@ -114,6 +114,26 @@ public class LocalPreflightTests {
     }
 
     [Test]
+    public async Task The_sockets_are_the_ones_the_server_binds() {
+        var root  = new LocalRoot(Tmp.PathTo("local"));
+        var paths = LocalPreflight.SocketPaths(root).Select(p => p.Path).ToList();
+
+        await Assert.That(LocalSockets.KurrentDb(root)).IsEqualTo(Path.Combine(root.Directory, "data", "kurrentdb", "kurrent.sock"));
+        await Assert.That(LocalSockets.Postgres(root)).IsEqualTo(Path.Combine(root.Directory, "run", ".s.PGSQL.5432"));
+        await Assert.That(paths.Count).IsEqualTo(2);
+        await Assert.That(paths.Any(p => p.EndsWith(Path.Combine("data", "kurrentdb", "kurrent.sock"), StringComparison.Ordinal))).IsTrue();
+        await Assert.That(paths.Any(p => p.EndsWith(Path.Combine("run", ".s.PGSQL.5432"), StringComparison.Ordinal))).IsTrue();
+    }
+
+    [Test]
+    public async Task Socket_path_one_byte_under_the_limit_passes() {
+        var root = RootWithBytes(103 - LongestSuffix - 1);
+
+        await Assert.That(LocalPreflight.SocketPaths(root).Max(p => p.Bytes)).IsEqualTo(102);
+        await Assert.That(Preflight(root, realLimit: true).Check(Version).Hint).IsEqualTo(PlanHint.Install);
+    }
+
+    [Test]
     public async Task Socket_path_at_the_limit_passes() {
         var root = RootWithBytes(103 - LongestSuffix);
 
@@ -122,14 +142,51 @@ public class LocalPreflightTests {
     }
 
     [Test]
-    public async Task Socket_path_one_byte_over_is_refused_naming_both() {
+    public async Task Socket_path_one_byte_over_is_refused_naming_only_the_socket_that_does_not_fit() {
         var root    = RootWithBytes(103 - LongestSuffix + 1);
         var failure = await Refusal(() => Preflight(root, realLimit: true).Check(Version));
 
         await Assert.That(failure.Code).IsEqualTo(LocalInstallFailureCode.SocketPathTooLong);
-        await Assert.That(failure.Message).Contains(".s.PGSQL.5432");
-        await Assert.That(failure.Message).Contains("kurrentdb.sock");
-        await Assert.That(failure.Message).Contains("104");
+        await Assert.That(failure.Message).Contains("kurrent.sock is 104 bytes");
+        await Assert.That(failure.Message).DoesNotContain(".s.PGSQL.5432");
+        await Assert.That(failure.Message).Contains($"Set {LocalRoot.EnvVar} to a directory at least 1 byte shorter.");
+    }
+
+    /// <summary>An 80-byte root fits the Postgres socket, so a check of that socket alone passes a root whose
+    /// KurrentDB socket the server cannot bind.</summary>
+    [Test]
+    public async Task An_80_byte_root_is_refused_for_its_kurrentdb_socket() {
+        var root    = RootWithBytes(80);
+        var failure = await Refusal(() => Preflight(root, realLimit: true).Check(Version));
+
+        await Assert.That(LocalPreflight.SocketPaths(root).Min(p => p.Bytes)).IsLessThanOrEqualTo(103);
+        await Assert.That(failure.Code).IsEqualTo(LocalInstallFailureCode.SocketPathTooLong);
+        await Assert.That(failure.Message).Contains("kurrent.sock is 108 bytes");
+        await Assert.That(failure.Message).Contains("at least 5 bytes shorter");
+    }
+
+    [Test]
+    public async Task Both_sockets_over_the_limit_are_both_named() {
+        var root    = RootWithBytes(103);
+        var failure = await Refusal(() => Preflight(root, realLimit: true).Check(Version));
+
+        await Assert.That(failure.Message).Contains(".s.PGSQL.5432 is 121 bytes");
+        await Assert.That(failure.Message).Contains("kurrent.sock is 131 bytes");
+        await Assert.That(failure.Message).Contains("at least 28 bytes shorter");
+    }
+
+    [Test]
+    [ExcludeOn(OS.Windows), UnsupportedOSPlatform("windows")]
+    public async Task A_root_spelled_through_a_link_is_measured_as_the_server_binds_it() {
+        var target = Tmp.CreateDir("t");
+        var link   = Tmp.PathTo(new string('l', 60));
+        Directory.CreateSymbolicLink(link, target.Path);
+        var root   = new LocalRoot(Path.Combine(link, "local"));
+
+        var kurrent = LocalPreflight.SocketPaths(root).Single(p => p.Path.EndsWith("kurrent.sock", StringComparison.Ordinal));
+
+        await Assert.That(kurrent.Path).IsEqualTo(LocalSockets.KurrentDb(root));
+        await Assert.That(kurrent.Bytes).IsEqualTo(Encoding.UTF8.GetByteCount(LocalSockets.KurrentDb(root)));
     }
 
     [Test]

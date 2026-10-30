@@ -39,4 +39,25 @@ public class LocalServerReadinessTests {
         await Assert.That(() => LocalServerReadiness.WaitAsync(new HttpClient(handler), Unit, LocalServerReadiness.StartBudget, time, CancellationToken.None))
             .Throws<LocalLifecycleException>().WithMessageContaining(Unit.OutputLog);
     }
+
+    /// <summary>A server whose logger started writes nothing to the output log, so naming only that file points
+    /// at an empty one.</summary>
+    [Test]
+    public async Task A_server_that_never_gets_ready_names_the_rolling_log_that_holds_its_failure() {
+        using var tmp = new TempDir();
+        var unit    = LocalServerUnit.ForInstallation(new LocalRoot(tmp.PathTo("local")), 51234);
+        var rolling = tmp.CreateFile(["local", "logs", "server-20261030.log"], "KurrentDB could not bind its socket\n");
+        tmp.CreateFile(["local", "logs", "server.out.log"], "");
+        var time    = new FakeTimeProvider();
+        var handler = new Handler(_ => {
+            time.Advance(TimeSpan.FromMinutes(11));
+            throw new HttpRequestException("connection refused");
+        });
+
+        var failure = await Assert.That(() => LocalServerReadiness.WaitAsync(new HttpClient(handler), unit, LocalServerReadiness.StartBudget, time, CancellationToken.None))
+            .Throws<LocalLifecycleException>();
+
+        await Assert.That(failure!.Message).Contains(rolling);
+        await Assert.That(failure.Message).DoesNotContain(unit.OutputLog);
+    }
 }
