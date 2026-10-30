@@ -1133,14 +1133,17 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     void ApplyAccount(ChatSessionInfo info) {
         var directory = info.AccountDirectory;
+        var fallback  = string.IsNullOrWhiteSpace(info.AccountLabel) && directory is not null ? AccountRows.LastSegment(directory) : info.AccountLabel;
+        var source    = (info.AccountId, fallback);
+        // The row's label arrives a dispatcher hop later; until then the launch label stands beside the new
+        // directory. An unchanged push must not reset it, or the bars would flicker on every session update.
+        if (!_tracksAccountReadings || source != _accountSources.Value) SetAccountStrip(new(fallback, null));
         AccountVendor = info.Vendor;
         AccountDirectory = directory;
-        var fallback = string.IsNullOrWhiteSpace(info.AccountLabel) && directory is not null ? AccountRows.LastSegment(directory) : info.AccountLabel;
         ShowsAccountStrip = directory is not null
             && (string.Equals(info.Vendor, HarnessId.Claude.VendorId, StringComparison.OrdinalIgnoreCase)
              || string.Equals(info.Vendor, HarnessId.Codex.VendorId, StringComparison.OrdinalIgnoreCase));
-        if (_tracksAccountReadings) _accountSources.OnNext((info.AccountId, fallback));
-        else SetAccountStrip(new(fallback, null));
+        if (_tracksAccountReadings) _accountSources.OnNext(source);
     }
 
     /// A panel command such as /status writes nothing to the transcript, so the panel opening

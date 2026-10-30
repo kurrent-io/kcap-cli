@@ -3972,6 +3972,55 @@ public class ChatTabViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task Account_label_is_never_empty_beside_the_directory_while_the_row_catches_up() {
+        await RunOnUiAsync(async () => {
+            var readings = new BehaviorSubject<AccountsSnapshotDto?>(null);
+            var h = new Harness(TranscriptChat.For("claude"), accountReadings: readings, usageClock: Observable.Return(StripReadings.Now));
+            try {
+                readings.OnNext(StripReadings.Snapshot(
+                    LabelledRow("new@x", ReadingAt(42)),
+                    StripReadings.Account("a2", ReadingAt(17)) with { Label = "second@x" }));
+                var seen = new List<(string? Label, string? Percent)>();
+                h.Chat.PropertyChanged += (_, _) => {
+                    if (h.Chat.AccountDirectory is not null) seen.Add((h.Chat.AccountLabel, h.Chat.AccountStripUsage?.Bars[0].PercentText));
+                };
+
+                await PushLaunchLabelAsync(h);
+                await WaitUntilAsync(() => h.Chat.AccountLabel == "new@x", what: "the row's label");
+                await h.PushAsync(Dto(null) with { AccountDirectory = StripReadings.Directory, AccountId = "a2", AccountLabel = "other@x" });
+                await WaitUntilAsync(() => h.Chat.AccountLabel == "second@x", what: "the second account's row");
+
+                (string?, string?)[] whole = [("old@x", null), ("new@x", "42%"), ("other@x", null), ("second@x", "17%")];
+                await Assert.That(seen.Where(p => !whole.Contains(p))).IsEmpty();
+                await Assert.That(seen.Distinct()).IsEquivalentTo(whole);
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Unchanged_account_pushes_leave_the_strip_alone() {
+        await RunOnUiAsync(async () => {
+            var readings = new BehaviorSubject<AccountsSnapshotDto?>(null);
+            var h = new Harness(TranscriptChat.For("claude"), accountReadings: readings, usageClock: Observable.Return(StripReadings.Now));
+            try {
+                readings.OnNext(StripReadings.Snapshot(LabelledRow("new@x", ReadingAt(42))));
+                await PushLaunchLabelAsync(h);
+                await WaitUntilAsync(() => h.Chat.AccountLabel == "new@x", what: "the row's label");
+
+                var changes = 0;
+                h.Chat.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(ChatTabViewModel.AccountStripUsage)) changes++; };
+                await h.PushAsync(Dto(null) with { AccountDirectory = StripReadings.Directory, AccountId = "a1", AccountLabel = "old@x", Model = "other-model" });
+                await SettleAsync();
+
+                await Assert.That(changes).IsEqualTo(0);
+                await Assert.That(h.Chat.AccountLabel).IsEqualTo("new@x");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Account_label_without_readings_source_is_the_launch_label() {
         await RunOnUiAsync(async () => {
             var h = new Harness(TranscriptChat.For("claude"));
