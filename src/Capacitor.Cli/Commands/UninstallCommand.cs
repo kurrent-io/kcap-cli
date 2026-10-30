@@ -67,12 +67,15 @@ sealed class UninstallCommand(
         LocalStack?     local       = null;
         LocalStackState localState  = LocalStackState.NotInstalled.Instance;
         var             localFailed = false;
+        // A server this build cannot manage (another build installed it, or it was started by hand)
+        // is never removed here, and its root stays out of the config-directory delete.
+        string?         keptLocal   = null;
 
         try {
             local      = stacks.Create();
             localState = local.Read();
         } catch (LocalInstallFailure ex) when (ex.Code == LocalInstallFailureCode.UnsupportedPlatform) {
-            // No local edition runs on this platform, so there is none to remove.
+            if (HoldsLocalServer(stacks.Root)) keptLocal = stacks.Root.Directory;
         } catch (LocalInstallFailure ex) {
             await console.Error.WriteLineAsync($"Could not read the local server: {ex.Message}");
             localFailed = true;
@@ -123,6 +126,9 @@ sealed class UninstallCommand(
                 break;
         }
 
+        if (keptLocal is not null)
+            await console.Out.WriteLineAsync($"  • Keep the local server in {keptLocal} and every session it recorded: this kcap cannot remove a local server on this platform");
+
         await console.Out.WriteLineAsync($"  • Remove kcap entries from {harnesses.Of<ClaudeHarness>().Paths.UserSettings}");
         await console.Out.WriteLineAsync($"  • Remove kcap entries from {harnesses.Of<CodexHarness>().Paths.UserHooksJson}");
         await console.Out.WriteLineAsync($"  • Remove kcap entries from {harnesses.Of<CursorHarness>().Paths.UserHooksJson}");
@@ -155,9 +161,13 @@ sealed class UninstallCommand(
         }
 
         if (!keepConfig) {
-            await console.Out.WriteLineAsync(local is not null && Directory.Exists(local.Root.Directory)
-                ? $"  • Remove kcap configuration from {configDir} (local lifecycle safety metadata is kept)"
+            await console.Out.WriteLineAsync(
+                keptLocal is not null ? $"  • Remove kcap configuration from {configDir}, except the local server in {keptLocal}"
+                : local is not null && Directory.Exists(local.Root.Directory) ? $"  • Remove kcap configuration from {configDir} (local lifecycle safety metadata is kept)"
                 : $"  • Delete the kcap config directory ({configDir})");
+
+            if (!localFailed)
+                foreach (var line in CaptureScopeNotice.Lines(config)) await console.Out.WriteLineAsync(line);
         }
 
         // KCAP_CONFIG_DIR never moves it, so the config-directory delete does not cover it.
@@ -184,7 +194,7 @@ sealed class UninstallCommand(
         // integrations still go: nothing about them depends on the local server.
         if (localFailed) return await CleanupAsync(local?.Root.Directory, hadFailures: true);
         // Taking the lease creates the root, so a machine where no setup has started is cleaned without it.
-        if (local is null || !Directory.Exists(local.Root.Directory)) return await CleanupAsync(null);
+        if (local is null || !Directory.Exists(local.Root.Directory)) return await CleanupAsync(keptLocal);
 
         var cleanupStarted = false;
         try {
@@ -398,7 +408,9 @@ sealed class UninstallCommand(
                     try {
                         UninstallFiles.DeleteConfig(configDir, localRoot);
                         await console.Out.WriteLineAsync($"Removed configuration from: {configDir}");
-                        if (localRoot is not null)
+                        if (keptLocal is not null)
+                            await console.Out.WriteLineAsync($"Kept the local server and its data in {keptLocal}.");
+                        else if (localRoot is not null)
                             await console.Out.WriteLineAsync($"Kept local lifecycle safety metadata in {localRoot} (no recordings).");
                     } catch (Exception ex) {
                         await console.Error.WriteLineAsync($"Could not remove config directory {configDir}: {ex.Message}");
@@ -450,6 +462,9 @@ sealed class UninstallCommand(
 
         return null;
     }
+
+    static bool HoldsLocalServer(LocalRoot root) =>
+        File.Exists(root.RegistryPath) || StackDirectories.Any(name => Directory.Exists(Path.Combine(root.Directory, name)));
 
     static string ShellQuote(string value) => "'" + value.Replace("'", "'\\''") + "'";
 

@@ -44,6 +44,11 @@ Options:
   --yes, -y           Skip the confirmation prompt.
 
 Notes:
+  Deleting the config directory deletes your capture exclusions: paths from
+  `kcap ignore`, excluded repos, and allow lists. The prompt lists them, since
+  a later setup and import capture those projects again. --keep-config keeps
+  them.
+
   A local server (kcap setup --local) is purged as `kcap local uninstall --purge`
   does: its service, binaries, data and logs are deleted, with every session
   it recorded. The prompt names it; with --yes, pass --purge-local. A failure
