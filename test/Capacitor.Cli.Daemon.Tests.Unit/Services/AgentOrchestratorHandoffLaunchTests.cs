@@ -48,9 +48,9 @@ public class AgentOrchestratorHandoffLaunchTests {
     static HandoffLaunchStart Start(string sha, string checkout, string? localBranchSha = null, string detachReason = "None") =>
         new(Source.SessionId, sha, checkout, "feature", localBranchSha, "Branch", detachReason, null, false, null, null);
 
-    static LaunchAgentCommand Launch(string repoPath, HandoffLaunchStart start, string? prompt = UserText) =>
+    static LaunchAgentCommand Launch(string repoPath, HandoffLaunchStart start, string? prompt = UserText, HandoffSourceContext? source = null) =>
         new(AgentId: AgentId, Prompt: prompt ?? "", Model: "", Effort: null, RepoPath: repoPath, Tools: null, AttachmentIds: null, Vendor: "cursor") {
-            Handoff = new HandoffLaunch(start, Source, SessionCommits: [])
+            Handoff = new HandoffLaunch(start, source ?? Source, SessionCommits: [])
         };
 
     [Test]
@@ -150,6 +150,34 @@ public class AgentOrchestratorHandoffLaunchTests {
         await Assert.That(prompt).EndsWith(UserText);
     }
 
+    /// <summary>With no text in the box the prompt is all boilerplate, so the title names the session handed off,
+    /// by its title or else by its id.</summary>
+    [Test]
+    [Arguments("Wire the widget", "", "Hand-off of Wire the widget")]
+    [Arguments(null, "", "Hand-off of 0f0f0f0f")]
+    [Arguments("Wire the widget", UserText, UserText)]
+    public async Task A_handoff_without_text_is_titled_after_its_source(string? title, string text, string expected) {
+        await using var f = new Fixture();
+        var source = Source with { SessionId = "0f0f0f0f-2222-4222-8222-000000000002", Title = title };
+
+        await f.Orch.HandleLaunchAgentForTest(Launch(f.Repo.Path, Start(f.Repo.Head, "CreateBranch"), text, source));
+
+        await Assert.That(f.Orch.GetAgentForTest(AgentId)!.StartTitle?.Text).IsEqualTo(expected);
+        await Assert.That(f.Server.AgentRegisteredTitles.Single(t => t.AgentId == AgentId).Title?.Text).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task A_handoff_title_keeps_the_title_cap() {
+        await using var f = new Fixture();
+        var source = Source with { Title = new string('w', 200) };
+
+        await f.Orch.HandleLaunchAgentForTest(Launch(f.Repo.Path, Start(f.Repo.Head, "CreateBranch"), "", source));
+
+        var title = f.Orch.GetAgentForTest(AgentId)!.StartTitle!.Value.Text;
+        await Assert.That(title.Length).IsEqualTo(120);
+        await Assert.That(title).StartsWith("Hand-off of www");
+    }
+
     /// <summary>The worktree checks out the user's own branch, so the failed launch's cleanup must leave
     /// that branch where it was.</summary>
     [Test]
@@ -161,6 +189,8 @@ public class AgentOrchestratorHandoffLaunchTests {
         await f.Orch.HandleLaunchAgentForTest(Launch(f.Repo.Path, Start(tip, "CheckoutBranch", tip)));
 
         await Assert.That(f.Factory.StartCalls).IsEqualTo(1);
+        await Assert.That(f.Factory.LastContext!.Worktree.Branch).IsEqualTo("feature");
+        await Assert.That(f.Factory.LastContext.Worktree.OwnsBranch).IsFalse();
         await Assert.That(f.Refusal()).IsEqualTo("the agent exited before its handshake");
         await Assert.That(f.Repo.RevParse("refs/heads/feature")).IsEqualTo(tip);
         await Assert.That(f.Worktrees()).IsEmpty();

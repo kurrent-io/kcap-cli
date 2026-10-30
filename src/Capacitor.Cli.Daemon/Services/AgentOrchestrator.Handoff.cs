@@ -105,11 +105,23 @@ internal partial class AgentOrchestrator {
             _ when resuming || cmd.ResumeSessionId is not null => "invalid_handoff: a resumed launch cannot hand off",
             _ when cmd.Kind != LaunchKind.Default              => "invalid_handoff: a review launch cannot hand off",
             _ when cmd.Borrowed                                => "invalid_handoff: a borrowed launch cannot hand off",
-            _ when cmd.ScratchWorkspace                        => "invalid_handoff: a scratch-workspace launch cannot hand off",
             { Start: null } or { Source: null }                => "invalid_handoff: the block is incomplete",
             { Start: var start } when start.ToStart() is null  => "invalid_handoff: the start's shape is not one this daemon knows",
             _                                                  => null
         };
+
+    const int HandoffTitleCap = 120;
+
+    /// <summary>A derived title naming the session handed off, by its title or else by the start of its id.</summary>
+    internal static AgentStartTitle HandoffStartTitle(HandoffSourceContext source) {
+        var id    = source.SessionId ?? "";
+        var named = string.IsNullOrWhiteSpace(source.Title) ? id[..Math.Min(8, id.Length)] : source.Title.Trim();
+        var text  = $"Hand-off of {named}";
+        if (text.Length > HandoffTitleCap)
+            text = text[..(char.IsHighSurrogate(text[HandoffTitleCap - 1]) ? HandoffTitleCap - 1 : HandoffTitleCap)];
+
+        return new AgentStartTitle(text, Derived: true);
+    }
 
     /// <summary>Creates the hand-off worktree at the launch's start and builds the prompt that replaces the
     /// user's text. A start that moved since the probe throws <c>handoff_start_changed</c> and leaves no

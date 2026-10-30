@@ -18,6 +18,7 @@ using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Core.Resume;
+using HandoffSourceContext = Capacitor.Cli.Core.Handoff.HandoffSourceContext;
 using Capacitor.Cli.Daemon.Harness.Antigravity;
 using Capacitor.Cli.Daemon.Harness.Claude;
 using Capacitor.Cli.Daemon.Harness.Codex;
@@ -79,7 +80,7 @@ internal record AgentInstance(
     public string?              ContinuedFromSessionId { get; set; }
 
     /// The ended session this agent was launched to hand off from.
-    public Capacitor.Cli.Core.Handoff.HandoffSourceContext? HandoffSource { get; set; }
+    public HandoffSourceContext? HandoffSource { get; set; }
 
     /// The agent this one continues, announced on every registration so the server can follow its wake-ups here.
     public string?              ContinuesAgentId  { get; init; }
@@ -2513,11 +2514,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             : AccountResolution.ResolveForResume(registry, vendor, resumed.AccountId, resumed.AccountDirectory, defaultDirectory);
     }
 
-    /// <summary>The server's start title, or — from a server that sends none — one derived from the prompt.</summary>
+    /// <summary>The server's start title, or — from a server that sends none — one derived from the prompt, or
+    /// for a hand-off with no text, one naming its source.</summary>
     internal static AgentStartTitle? StartTitleOf(LaunchAgentCommand cmd) =>
         !string.IsNullOrWhiteSpace(cmd.Title)
             ? new AgentStartTitle(cmd.Title.Trim(), cmd.TitleDerived)
-            : AgentStartTitle.FromPrompt(cmd.Prompt);
+            : AgentStartTitle.FromPrompt(cmd.Prompt) ?? (cmd.Handoff?.Source is { } source ? HandoffStartTitle(source) : null);
 
     /// <summary>The launch body. Its outcome drives the sequenced lane: a pre-flight rejection is
     /// <c>LaunchRejected</c> (capacity as <c>daemon_capacity</c>, every other validation as
@@ -2844,7 +2846,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             if (resume is not null) {
                 worktree = resume.Worktree;
             } else if (cmd.Handoff is not null) {
-                var handoff = await PrepareHandoffAsync(cmd, repoPath, _shutdownCts.Token);
+                using var handoffCts = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token, cancel);
+                var handoff = await PrepareHandoffAsync(cmd, repoPath, handoffCts.Token);
                 if (handoff.Refusal is { } handoffRefused) {
                     await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, handoffRefused);
 
