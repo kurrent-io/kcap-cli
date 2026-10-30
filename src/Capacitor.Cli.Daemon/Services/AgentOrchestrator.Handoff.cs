@@ -198,8 +198,12 @@ internal partial class AgentOrchestrator {
     /// that fails cancels the run at once, since the server may already have given the source to someone else.</summary>
     async Task<HandoffOutcomeDto> TakeOverHandoffAsync(string agentId, HandoffSourceContext source, string successor, CancellationToken ct) {
         var sourceWire = SessionIds.Canonical(source.SessionId) ?? source.SessionId;
-        var admission  = await BeginHandoffTakeoverAsync(sourceWire, successor, ct);
-        if (admission is null) return new HandoffOutcomeDto(source.SessionId, source.Title, "failed", "server_unsupported", []);
+        HandoffTakeoverAdmission admission;
+        switch (await BeginHandoffTakeoverAsync(sourceWire, successor, ct)) {
+            case HandoffBeginResult.Answered answered: admission = answered.Admission; break;
+            case HandoffBeginResult.Unsupported:       return Failed(source, "server_unsupported");
+            default:                                   return Failed(source, "server_unreachable");
+        }
         if (admission.Token is not { } token) return HandoffOutcomeDto.Refused(source.SessionId, source.Title, admission.Refusal ?? "refused");
 
         using var run      = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -223,14 +227,18 @@ internal partial class AgentOrchestrator {
         }
     }
 
+    static HandoffOutcomeDto Failed(HandoffSourceContext source, string code) => new(source.SessionId, source.Title, "failed", code, []);
+
     /// <summary>The server can learn the successor's session after this daemon does, from the status that names
-    /// it, so a begin it answers <c>successor_unknown</c> is retried for <see cref="HandoffSuccessorWindow"/>.</summary>
-    async Task<HandoffTakeoverAdmission?> BeginHandoffTakeoverAsync(string source, string successor, CancellationToken ct) {
+    /// it, so a begin it answers <c>successor_unknown</c> is retried for <see cref="HandoffSuccessorWindow"/>, and so
+    /// is one that did not reach it.</summary>
+    async Task<HandoffBeginResult> BeginHandoffTakeoverAsync(string source, string successor, CancellationToken ct) {
         var deadline = _time.GetUtcNow() + HandoffSuccessorWindow;
 
         while (true) {
-            var admission = await _server.BeginHandoffTakeoverAsync(source, successor, ct);
-            if (admission?.Refusal != SuccessorUnknown || _time.GetUtcNow() + HandoffSuccessorRetry > deadline) return admission;
+            var begin = await _server.BeginHandoffTakeoverAsync(source, successor, ct);
+            var retry = begin is HandoffBeginResult.Unreachable or HandoffBeginResult.Answered { Admission.Refusal: SuccessorUnknown };
+            if (!retry || _time.GetUtcNow() + HandoffSuccessorRetry > deadline) return begin;
 
             await Task.Delay(HandoffSuccessorRetry, _time, ct);
         }

@@ -1235,19 +1235,27 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     }
 
     /// <summary>Asks the server to reserve the ended <paramref name="source"/> for the <paramref name="successor"/>
-    /// this daemon runs. Null when the server lacks the method or the call fails; a refusal is an admission
-    /// carrying its reason.</summary>
-    public virtual async Task<HandoffTakeoverAdmission?> BeginHandoffTakeoverAsync(
+    /// this daemon runs; a refusal is an answer carrying its reason. A server that relayed the hand-off has the
+    /// method, so any failure but the hub's own missing-method reply is unreachable, not unsupported.</summary>
+    public virtual async Task<HandoffBeginResult> BeginHandoffTakeoverAsync(
             string source, string successor, CancellationToken ct) {
         try {
-            return await _hub.InvokeAsync<HandoffTakeoverAdmission?>(
-                "BeginHandoffTakeover", new HandoffTakeoverBeginRequest(source, successor), ct);
+            return await InvokeBeginHandoffTakeoverRawAsync(source, successor, ct) is { } admission
+                ? new HandoffBeginResult.Answered(admission)
+                : new HandoffBeginResult.Unreachable();
         } catch (Exception ex) when (ex is not OperationCanceledException) {
             LogHandoffTakeoverFailed(ex, "begin");
 
-            return null;
+            return IsUnknownHubMethod(ex, BeginHandoffTakeoverMethod)
+                ? new HandoffBeginResult.Unsupported()
+                : new HandoffBeginResult.Unreachable();
         }
     }
+
+    internal virtual Task<HandoffTakeoverAdmission?> InvokeBeginHandoffTakeoverRawAsync(string source, string successor, CancellationToken ct) =>
+        _hub.InvokeAsync<HandoffTakeoverAdmission?>(BeginHandoffTakeoverMethod, new HandoffTakeoverBeginRequest(source, successor), ct);
+
+    internal const string BeginHandoffTakeoverMethod = "BeginHandoffTakeover";
 
     /// <summary>Extends the takeover lease; false when the server no longer holds it or the call fails.</summary>
     public virtual async Task<bool> RenewHandoffTakeoverAsync(string token, CancellationToken ct) {

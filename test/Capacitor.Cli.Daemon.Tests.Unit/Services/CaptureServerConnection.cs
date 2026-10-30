@@ -71,7 +71,8 @@ sealed class CaptureServerConnection : ServerConnection {
         return Task.CompletedTask;
     }
 
-    /// <summary>The server's answer to each takeover begin; unset, the server lacks the method.</summary>
+    /// <summary>The server's answer to each takeover begin, which may throw as the hub would; unset, the server
+    /// lacks the method.</summary>
     public Func<string, string, HandoffTakeoverAdmission?>? BeginHandoff { get; set; }
 
     /// <summary>The server's answer to each lease renewal; unset, every renewal succeeds.</summary>
@@ -81,9 +82,17 @@ sealed class CaptureServerConnection : ServerConnection {
     public ConcurrentQueue<string> HandoffRenews { get; } = new();
     public ConcurrentQueue<string> HandoffEnds   { get; } = new();
 
-    public override Task<HandoffTakeoverAdmission?> BeginHandoffTakeoverAsync(string source, string successor, CancellationToken ct) {
-        var admission = BeginHandoff?.Invoke(source, successor);
-        HandoffBegins.Enqueue((source, successor, admission));
+    internal override Task<HandoffTakeoverAdmission?> InvokeBeginHandoffTakeoverRawAsync(string source, string successor, CancellationToken ct) {
+        HandoffTakeoverAdmission? admission = null;
+        try {
+            if (BeginHandoff is null)
+                throw new Microsoft.AspNetCore.SignalR.HubException(
+                    $"Failed to invoke '{BeginHandoffTakeoverMethod}' due to an error on the server. HubException: Method does not exist.");
+
+            admission = BeginHandoff(source, successor);
+        } finally {
+            HandoffBegins.Enqueue((source, successor, admission));
+        }
 
         return Task.FromResult(admission);
     }

@@ -282,6 +282,40 @@ public class AgentOrchestratorHandoffTakeoverTests : IDisposable {
         await AssertStillRunningAsync(f);
     }
 
+    /// <summary>A server that relayed the hand-off has the method, so a begin that fails is a dropped hub, not
+    /// an old server.</summary>
+    [Test]
+    public async Task A_begin_that_fails_is_retried_until_admitted() {
+        ServeSource();
+        await using var f = Build();
+        var calls = 0;
+        f.Server.BeginHandoff = (_, _) => Interlocked.Increment(ref calls) <= 2 ? throw new InvalidOperationException("reconnecting") : Admitted;
+
+        await f.Orch.HandleLaunchAgentForTest(Launch(f.Repo));
+        var outcome = await SettledAsync(f, step: TimeSpan.FromSeconds(2));
+
+        await Assert.That(outcome.State).IsEqualTo("done");
+        await Assert.That(f.Server.HandoffBegins.Count).IsEqualTo(3);
+        await Assert.That(Declares()).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_begin_that_never_reaches_the_server_fails_as_unreachable_after_the_window() {
+        ServeSource();
+        await using var f = Build();
+        f.Server.BeginHandoff = (_, _) => throw new InvalidOperationException("reconnecting");
+        var started = f.Time.GetUtcNow();
+
+        await f.Orch.HandleLaunchAgentForTest(Launch(f.Repo));
+        var outcome = await SettledAsync(f, step: TimeSpan.FromSeconds(2));
+
+        await Assert.That(outcome.State).IsEqualTo("failed");
+        await Assert.That(outcome.Detail).IsEqualTo("server_unreachable");
+        await Assert.That(f.Time.GetUtcNow() - started).IsGreaterThanOrEqualTo(TimeSpan.FromSeconds(58));
+        await Assert.That(Writes()).IsEmpty();
+        await AssertStillRunningAsync(f);
+    }
+
     [Test]
     public async Task Every_write_carries_the_lease_token() {
         ServeSource(workItems: 2);
