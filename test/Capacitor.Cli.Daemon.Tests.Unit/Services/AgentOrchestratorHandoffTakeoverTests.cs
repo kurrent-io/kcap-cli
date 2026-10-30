@@ -70,7 +70,10 @@ public class AgentOrchestratorHandoffTakeoverTests : IDisposable {
         }
     }
 
-    Fixture Build(bool ptyStyle = false, HandoffTakeoverAdmission? admission = null, bool oldServer = false) {
+    /// <summary><paramref name="beforeStart"/> sees the config before the orchestrator exists, as a file left by an
+    /// earlier daemon would be there before this one starts.</summary>
+    Fixture Build(
+            bool ptyStyle = false, HandoffTakeoverAdmission? admission = null, bool oldServer = false, Action<DaemonConfig>? beforeStart = null) {
         var repo = GitRepo.CreateWithCommit();
         repo.AddRemote("https://github.com/acme/widgets.git");
         var server = new CaptureServerConnection();
@@ -83,6 +86,7 @@ public class AgentOrchestratorHandoffTakeoverTests : IDisposable {
             configure: c => {
                 captured    = c;
                 c.ServerUrl = _server.Url!;
+                beforeStart?.Invoke(c);
             },
             timeProvider: time);
 
@@ -509,9 +513,9 @@ public class AgentOrchestratorHandoffTakeoverTests : IDisposable {
     [Test]
     public async Task A_recovered_successor_still_reads_interrupted() {
         ServeSource();
-        await using var f = Build();
-        var stateDir = f.Config.Store.StateDirectory(f.Config.Name);
-        new HandoffOutcomeStore(stateDir, TimeProvider.System).Put(Successor, HandoffOutcomeDto.Running(Source, "Wire the widget"));
+        await using var f = Build(beforeStart: c =>
+            new HandoffOutcomeStore(c.Store.StateDirectory(c.Name), TimeProvider.System)
+                .Put(Successor, HandoffOutcomeDto.Running(Source, "Wire the widget")));
         WriteResumableEntry(f);
 
         f.Orch.LoadResumeLedger();
