@@ -141,8 +141,8 @@ public static class TelemetryState {
     /// A plain <c>File.WriteAllText(path, ...)</c> truncates the target before rewriting it — a
     /// concurrent unlocked <see cref="Read"/> landing in that window sees partial JSON, hits its
     /// catch, and returns <c>default</c> (<c>Enabled = null</c>), which
-    /// <see cref="TelemetrySettings.Resolve(bool?)"/> treats as "no persisted choice → enabled by
-    /// default" — silently re-enabling telemetry a process just opted out of. The temp file lives
+    /// <see cref="TelemetrySettings.Resolve(bool?, UnsavedConsent)"/> treats as "no persisted
+    /// choice", falling back to the edition default and undoing an opt-out a process just saved. The temp file lives
     /// next to the target so the rename stays on one volume (required for it to be atomic), and a
     /// reader then only ever sees the fully-old or fully-new file, never a torn one.
     /// </summary>
