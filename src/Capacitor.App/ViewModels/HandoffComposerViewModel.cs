@@ -25,6 +25,8 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
     public const string ProbeFailed = "Your local kcap daemon didn't answer, so the starting point couldn't be checked";
     public const string InvalidTarget = "There's no branch or commit to start this hand-off from";
     public const string SignInToHandOff = "Sign in to your kcap server to hand off";
+    public const string Checking = "Checking where the new session would start…";
+    public const string WaitingForDaemon = "Waiting for your local kcap daemon…";
     const string StripPrefix = "New session in a fresh worktree";
     const string FullAccess = "full";
 
@@ -160,7 +162,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
     public int FreeSlots => Tray.FreeSlots;
     string? _intakeNotice;
 
-    /// The tray takes what it can; the rest becomes the bottom row's error until the next intake.
+    /// The tray takes what it can; the rest becomes the error until the next intake.
     public void Accept(IntakeResult result) {
         if (_intakeNotice is not null && Error == _intakeNotice) Error = null;
         _intakeNotice = null;
@@ -171,8 +173,6 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
         Error = notice;
     }
 
-    /// The bottom row's line: what went wrong, else why Start is unavailable.
-    public string? Notice => Error ?? DisabledReason;
     public ILaunchChoices Choices => _choices;
     public ReactiveCommand<Unit, Unit> StartCommand { get; }
 
@@ -203,10 +203,14 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
     string? _disabledReason;
     public string? DisabledReason {
         get => _disabledReason;
-        private set {
-            this.RaiseAndSetIfChanged(ref _disabledReason, value);
-            this.RaisePropertyChanged(nameof(Notice));
-        }
+        private set => this.RaiseAndSetIfChanged(ref _disabledReason, value);
+    }
+
+    string? _progress;
+    /// What the composer is waiting on while Start cannot run yet and nothing is wrong.
+    public string? Progress {
+        get => _progress;
+        private set => this.RaiseAndSetIfChanged(ref _progress, value);
     }
 
     bool _isProbing;
@@ -216,12 +220,10 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
     }
 
     string? _error;
+    /// What went wrong with the last launch or intake; shown beside DisabledReason, never instead of it.
     public string? Error {
         get => _error;
-        private set {
-            this.RaiseAndSetIfChanged(ref _error, value);
-            this.RaisePropertyChanged(nameof(Notice));
-        }
+        private set => this.RaiseAndSetIfChanged(ref _error, value);
     }
 
     HandoffLaunchStart? _probedStart;
@@ -269,6 +271,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
         CompletenessNote = null;
         DisabledReason = null;
         IsProbing = true;
+        Progress = Checking;
         Evaluation result;
         try {
             result = await EvaluateAsync(cts.Token);
@@ -280,6 +283,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
         }
         if (_disposed || cts.IsCancellationRequested || !ReferenceEquals(cts, _evaluation)) return;
         IsProbing = result.Waiting;
+        Progress = result.Waiting ? WaitingForDaemon : null;
         DisabledReason = result.Reason;
         _checkout = result.Checkout;
         StripLabel = result.Label ?? "";

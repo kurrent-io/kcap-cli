@@ -12,6 +12,7 @@ using Avalonia.VisualTree;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Remote.Models;
 using DynamicData;
 using Microsoft.Extensions.Time.Testing;
@@ -126,8 +127,9 @@ public class RemoteSessionViewSmokeTests {
             arrange?.Invoke(fixture);
             using var host = new Host(row: EndedServerRow(), handoff: fixture.Build);
             try {
-                await host.SettleUntilAsync(() => host.Vm.Chat.Handoff is { IsProbing: false } composer
-                    && (composer.ProbedStart is not null || composer.DisabledReason is not null), "the hand-off checked");
+                await host.SettleUntilAsync(() => host.Vm.Chat.Handoff is { } composer
+                    && (composer is { IsProbing: false } && (composer.ProbedStart is not null || composer.DisabledReason is not null)
+                     || composer.Progress == HandoffComposerViewModel.WaitingForDaemon), "the hand-off checked");
                 var view = host.View.GetVisualDescendants().OfType<HandoffComposerView>().Single(v => v.IsEffectivelyVisible);
                 await body(host, fixture, view);
             } finally { await host.Vm.TeardownAsync(); }
@@ -226,6 +228,29 @@ public class RemoteSessionViewSmokeTests {
         await Assert.That(Named<Button>(view, "StartHandoffButton").IsEffectivelyVisible).IsFalse();
         await Assert.That(host.Vm.Chat.Handoff!.StripLabel).IsEqualTo("");
     }, arrange: fixture => fixture.Launch.Features = System.Collections.Frozen.FrozenSet<string>.Empty);
+
+    [Test]
+    public Task A_refusal_and_the_reprobes_reason_both_show() => WithHandoffAsync(async (host, fixture, view) => {
+        fixture.Launch.Next = new LaunchOutcome(false, null, "handoff_start_changed: feature/x moved");
+        fixture.Ops.Next = new HandoffProbeReplyDto(null, "Authentication failed", null, null, null);
+
+        Click(host, Named<Button>(view, "StartHandoffButton"));
+        await host.SettleUntilAsync(() => host.Vm.Chat.Handoff!.DisabledReason is not null, "the re-probe");
+
+        var error = Named<TextBlock>(view, "HandoffErrorText");
+        await Assert.That(error.Text).IsEqualTo(HandoffFailureText.StartChanged);
+        await Assert.That(error.IsEffectivelyVisible).IsTrue();
+        var notice = Named<TextBlock>(view, "HandoffNotice");
+        await Assert.That(notice.Text).IsEqualTo(HandoffComposerViewModel.OriginUnreachable("Authentication failed"));
+        await Assert.That(notice.IsEffectivelyVisible).IsTrue();
+    });
+
+    [Test]
+    public Task A_connecting_daemon_shows_why_start_waits() => WithHandoffAsync(async (host, _, view) => {
+        var progress = Named<TextBlock>(view, "HandoffProgress");
+        await Assert.That(progress.Text).IsEqualTo(HandoffComposerViewModel.WaitingForDaemon);
+        await Assert.That(progress.IsEffectivelyVisible).IsTrue();
+    }, arrange: fixture => fixture.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connecting, null, null)));
 
     [Test]
     public async Task A_remote_terminal_scrolls_locally_and_sends_keyboard_and_button_arrows() {

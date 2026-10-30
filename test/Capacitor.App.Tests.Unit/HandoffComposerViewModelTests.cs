@@ -321,6 +321,48 @@ public class HandoffComposerViewModelTests {
         await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsFalse();
     });
 
+    /// The refusal keeps its own line, so the re-probe's reason is not hidden behind it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_reprobe_after_a_refusal_shows_its_own_reason_beside_the_refusal() => Run(async rig => {
+        rig.Launch.Next = new LaunchOutcome(false, null, "handoff_start_changed: feature/x moved");
+        var vm = await rig.ReadyAsync();
+        rig.Ops.Next = new HandoffProbeReplyDto(null, "Authentication failed", null, null, null);
+
+        await vm.StartCommand.Execute();
+        await vm.PendingEvaluationForTesting;
+
+        await Assert.That(vm.Error).IsEqualTo(StartChanged);
+        await Assert.That(vm.DisabledReason).IsEqualTo("Couldn't reach origin: Authentication failed");
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_probe_in_flight_says_it_is_checking() => Run(async rig => {
+        var gate = new TaskCompletionSource<HandoffProbeReplyDto?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.Ops.Gate = gate;
+        var vm = rig.Build();
+
+        var evaluating = vm.InitializeAsync(CancellationToken.None);
+        await Assert.That(vm.Progress).IsEqualTo("Checking where the new session would start…");
+        await Assert.That(vm.DisabledReason).IsNull();
+        gate.SetResult(Reply(AttachedStart));
+        await evaluating;
+
+        await Assert.That(vm.Progress).IsNull();
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_connecting_daemon_says_it_is_waiting() => Run(async rig => {
+        rig.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connecting, null, null));
+        var vm = await rig.ReadyAsync();
+
+        await Assert.That(vm.Progress).IsEqualTo("Waiting for your local kcap daemon…");
+        await Assert.That(vm.DisabledReason).IsNull();
+        await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsFalse();
+    });
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public Task Missing_commits_set_the_completeness_note() => Run(async rig => {
