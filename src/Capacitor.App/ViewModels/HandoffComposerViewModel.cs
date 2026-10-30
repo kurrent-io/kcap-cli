@@ -127,10 +127,10 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
         var canStart = this.WhenAnyValue(x => x.ProbedStart, x => x.DisabledReason, x => x.IsLaunching,
             (start, reason, launching) => start is not null && reason is null && !launching);
         StartCommand = ReactiveCommand.CreateFromTask(StartAsync, canStart);
-        // An unobserved command fault takes ReactiveUI's crash path.
+        // An unobserved command fault takes ReactiveUI's crash path, and a launch can fault after
+        // Dispose, so the observer lives as long as the command rather than in _disposables.
         StartCommand.ThrownExceptions
-            .Subscribe(ex => Console.Error.WriteLine($"kcap: hand-off start: {ex.Message}"))
-            .DisposeWith(_disposables);
+            .Subscribe(ex => Console.Error.WriteLine($"kcap: hand-off start: {ex.Message}"));
     }
 
     public AttachmentTray Tray { get; } = new();
@@ -344,7 +344,8 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
                 // placeholder is taken back; anyone else finds the draft on the source's next open.
                 var stillThere = openedUnder is { } opened && navigationGeneration() == opened;
                 closeFailedLaunch(agentId);
-                if (stillThere) reopenSource(sourceKey);
+                // A close that left the generation alone closed nothing: the workspace holds another session.
+                if (stillThere && navigationGeneration() != openedUnder) reopenSource(sourceKey);
             });
             if (hold == HandoffHold.AlreadyFailed) {
                 if (_disposed) return;

@@ -34,13 +34,14 @@ public class HandoffComposerViewModelTests {
         public List<LaunchRequest> Requests { get; } = [];
         public LaunchOutcome Next = new(true, LaunchedId, null);
         public Action<LaunchRequest>? During;
+        public Exception? Throw;
 
         public Task<IReadOnlySet<string>?> GetLaunchFeaturesAsync(CancellationToken ct) => Task.FromResult(Features);
 
         public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) {
             Requests.Add(request);
             During?.Invoke(request);
-            return Task.FromResult(Next);
+            return Throw is { } ex ? Task.FromException<LaunchOutcome>(ex) : Task.FromResult(Next);
         }
     }
 
@@ -108,9 +109,11 @@ public class HandoffComposerViewModelTests {
 
         /// MainWindowViewModel.CloseFailedLaunch: closes only the failed launch's own workspace, and
         /// the close is a navigation.
+        public bool CloseClosesNothing;
+
         void Close(string id) {
             Closed.Add(id);
-            if (Current != id) return;
+            if (CloseClosesNothing || Current != id) return;
             Current = null;
             Generation++;
         }
@@ -631,5 +634,35 @@ public class HandoffComposerViewModelTests {
         await Assert.That(vm.Tray.Items.Single()).IsSameReferenceAs(chip);
         await Assert.That(vm.Choices.SelectedVendor).IsEqualTo("claude");
         await Assert.That(vm.Error).IsEqualTo(StartChanged);
+    });
+
+    [Test]
+    [NotInParallel]
+    public Task A_fault_after_dispose_is_logged_not_raised() => Run(async rig => {
+        using var capture = ConsoleOutput.StartErrorCapture();
+        var vm = await rig.ReadyAsync();
+        rig.Launch.During = _ => vm.Dispose();
+        rig.Launch.Throw = new InvalidOperationException("hub went away");
+
+        try { await vm.StartCommand.Execute(); } catch (InvalidOperationException) { }
+
+        await Assert.That(capture.GetCapturedError()).Contains("kcap: hand-off start: hub went away");
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_trailing_failure_does_not_move_a_user_whose_workspace_filled() => Run(async rig => {
+        var vm = await rig.ReadyAsync();
+        vm.Text = "carry on";
+        await vm.StartCommand.Execute();
+        vm.Dispose();
+        // The agent's own row filled the open workspace, so the failed-launch close closes nothing.
+        rig.CloseClosesNothing = true;
+
+        rig.Failures.OnNext(new LaunchFailure(LaunchedId, "handoff_start_changed: moved"));
+
+        await Assert.That(rig.Closed).IsEquivalentTo([LaunchedId]);
+        await Assert.That(rig.Reopened).IsEmpty();
+        await Assert.That((await rig.ReadyAsync()).Text).IsEqualTo("carry on");
     });
 }
