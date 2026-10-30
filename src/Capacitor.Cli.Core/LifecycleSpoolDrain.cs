@@ -22,8 +22,8 @@ public static class LifecycleSpoolDrain {
         var started = time.GetTimestamp();
         bool Expired() => time.GetElapsedTime(started) >= budget || ct.IsCancellationRequested;
 
-        lifecycle.AdoptUnpartitioned();
-        transcript.AdoptUnpartitioned();
+        lifecycle.AdoptLegacyFiles();
+        transcript.AdoptLegacyFiles();
 
         foreach (var sid in OrderedSessions(lifecycle, transcript, currentSessionId)) {
             if (Expired()) return;

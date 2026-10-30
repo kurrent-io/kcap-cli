@@ -42,11 +42,11 @@ public sealed partial class HookSpool(SpoolPartition partition, TimeProvider tim
 
     // The subdirectory name belongs to the spool, not to ConfigRoot: a root that enumerated its
     // tenants' directories would change every time one of them gained a file.
-    public const string DirName = "spool";
+    public const string DirectoryName = "spool";
 
     /// <summary>The spool under a config root. The directory overload is for a test's own throwaway directory.</summary>
     public HookSpool(ConfigRoot config, TimeProvider time, string? server, int capBytes = DefaultCapBytes)
-        : this(SpoolPartition.Partitioned(config.Path(DirName), server), time, capBytes) { }
+        : this(SpoolPartition.Server(config.Path(DirectoryName), server), time, capBytes) { }
 
     public HookSpool(string dir, TimeProvider time, int capBytes = DefaultCapBytes)
         : this(SpoolPartition.Standalone(dir), time, capBytes) { }
@@ -141,7 +141,7 @@ public sealed partial class HookSpool(SpoolPartition partition, TimeProvider tim
             Func<string, string, Task<DrainOutcome>>  poster,
             TimeSpan                                  budget,
             CancellationToken                         ct) {
-        AdoptUnpartitioned(FifoTemp);
+        AdoptLegacyFiles(NewFifoTempName);
         poster = RecordingDeliveries(poster);
         var started = time.GetTimestamp();
         bool Expired() => time.GetElapsedTime(started) >= budget;
@@ -157,10 +157,10 @@ public sealed partial class HookSpool(SpoolPartition partition, TimeProvider tim
 
     /// <summary>For the ordered drain. Each drain reads only its own temps, so a colliding live file
     /// has to become one of the adopting drain's, which it reads before the live file.</summary>
-    internal void AdoptUnpartitioned() => AdoptUnpartitioned(OrderedTemp);
+    internal void AdoptLegacyFiles() => AdoptLegacyFiles(NewOrderedTempName);
 
-    void AdoptUnpartitioned(Func<string, string> temp) =>
-        partition.AdoptUnpartitioned(name => name.EndsWith(".jsonl", StringComparison.Ordinal) ? temp(name[..^".jsonl".Length]) : null);
+    void AdoptLegacyFiles(Func<string, string> temp) =>
+        partition.AdoptLegacyFiles(name => name.EndsWith(".jsonl", StringComparison.Ordinal) ? temp(name[..^".jsonl".Length]) : null);
 
     static string? SessionIdOf(string filePath) {
         var name = Path.GetFileName(filePath);
@@ -188,7 +188,7 @@ public sealed partial class HookSpool(SpoolPartition partition, TimeProvider tim
         var live = Path.Combine(DirectoryPath, $"{EncodeKey(sid)}.jsonl");
         if (!File.Exists(live) || expired() || ct.IsCancellationRequested) return false;
 
-        var rotated = Path.Combine(DirectoryPath, FifoTemp(EncodeKey(sid)));
+        var rotated = Path.Combine(DirectoryPath, NewFifoTempName(EncodeKey(sid)));
         try { File.Move(live, rotated); }
         catch { return false; } // lost the atomic-rename race (or vanished) — the winner handles it
         return await DrainFileAsync(rotated, poster, expired, ct);
@@ -246,14 +246,14 @@ public sealed partial class HookSpool(SpoolPartition partition, TimeProvider tim
         if (!SafeSessionId.IsMatch(sessionId)) return false;
 
         var key            = EncodeKey(sessionId);
-        var hasLiveFile    = HasFile($"{key}.jsonl");
-        var hasFifoTemp    = HasFile($"{key}.*.draining");
-        var hasOrderedTemp = HasFile($"{key}.ordered-*");
+        var hasLiveFile    = AnyFileMatches($"{key}.jsonl");
+        var hasFifoTemp    = AnyFileMatches($"{key}.*.draining");
+        var hasOrderedTemp = AnyFileMatches($"{key}.ordered-*");
 
         return hasLiveFile || hasFifoTemp || hasOrderedTemp;
     }
 
-    bool HasFile(string pattern) => Directory.Exists(DirectoryPath) && Directory.EnumerateFiles(DirectoryPath, pattern).Any();
+    bool AnyFileMatches(string pattern) => Directory.Exists(DirectoryPath) && Directory.EnumerateFiles(DirectoryPath, pattern).Any();
 
     /// <summary>Every distinct session id with a live .jsonl or recovered .draining/.ordered-* temp,
     /// in no particular order (callers that need current-session-first ordering add it themselves).</summary>
@@ -300,7 +300,7 @@ public sealed partial class HookSpool(SpoolPartition partition, TimeProvider tim
         var live = Path.Combine(DirectoryPath, $"{EncodeKey(sid)}.jsonl");
         if (!File.Exists(live) || expired() || ct.IsCancellationRequested) return consumed;
 
-        var rotated = Path.Combine(DirectoryPath, OrderedTemp(EncodeKey(sid)));
+        var rotated = Path.Combine(DirectoryPath, NewOrderedTempName(EncodeKey(sid)));
         try { File.Move(live, rotated); }
         catch { return consumed; } // lost the atomic-rename race (or vanished) — the winner handles it
         var (_, more) = await DrainFileRoutesAsync(rotated, isTerminal, poster, expired, ct);
@@ -472,8 +472,8 @@ public sealed partial class HookSpool(SpoolPartition partition, TimeProvider tim
     // and '\\', preserving both the path-traversal property and the parse-before-first-dot split.
     // Vendors such as OpenCode use ids like "ses_7f3a9c21b8", which the old form silently dropped.
     /// <summary>The pre-upgrade key space: a dashless GUID, case-insensitively one id.</summary>
-    static string FifoTemp(string key)    => $"{key}.{Environment.ProcessId}-{Interlocked.Increment(ref seqCounter)}.draining";
-    static string OrderedTemp(string key) => $"{key}.ordered-{Environment.ProcessId}-{Interlocked.Increment(ref seqCounter)}";
+    static string NewFifoTempName(string key)    => $"{key}.{Environment.ProcessId}-{Interlocked.Increment(ref seqCounter)}.draining";
+    static string NewOrderedTempName(string key) => $"{key}.ordered-{Environment.ProcessId}-{Interlocked.Increment(ref seqCounter)}";
 
     [GeneratedRegex("^[0-9a-fA-F]{32}$", RegexOptions.Compiled)]
     private static partial Regex LegacyGuidKeyRegex();

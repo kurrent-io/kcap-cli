@@ -37,7 +37,7 @@ public class HookSpoolTests {
         const string local = "http://localhost:7248";
         new HookSpool(config.Root, TimeProvider.System, local).Append(SidA, "session-start", """{"n":"local"}""");
         new TranscriptSpool(config.Root, TimeProvider.System, local).Append(SidC, """{"n":"local-tail"}""");
-        new HookSpool(config.Root.Path(HookSpool.DirName), TimeProvider.System).Append(SidB, "session-start", """{"n":"legacy"}""");
+        new HookSpool(config.Root.Path(HookSpool.DirectoryName), TimeProvider.System).Append(SidB, "session-start", """{"n":"legacy"}""");
 
         async Task<List<string>> DrainAs(string server) {
             var seen = new List<string>();
@@ -61,7 +61,7 @@ public class HookSpoolTests {
     public async Task a_colliding_unpartitioned_file_drains_before_the_partition_one() {
         using var config = new TempConfigRoot();
         const string server = "https://kurrent.kcap.ai";
-        new HookSpool(config.Root.Path(HookSpool.DirName), TimeProvider.System).Append(SidA, "session-start", """{"n":"legacy"}""");
+        new HookSpool(config.Root.Path(HookSpool.DirectoryName), TimeProvider.System).Append(SidA, "session-start", """{"n":"legacy"}""");
         var spool = new HookSpool(config.Root, TimeProvider.System, server);
         spool.Append(SidA, "user-prompt", """{"n":"partitioned"}""");
 

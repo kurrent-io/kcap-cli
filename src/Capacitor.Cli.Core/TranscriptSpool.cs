@@ -15,11 +15,11 @@ public sealed partial class TranscriptSpool(SpoolPartition partition, TimeProvid
     public const long DefaultCapBytes = 8_388_608; // 8 MB per session
 
     // Named here rather than on ConfigRoot, for the same reason as HookSpool's.
-    public const string DirName = "transcript-spool";
+    public const string DirectoryName = "transcript-spool";
 
     /// <summary>The spool under a config root. The directory overload is for a test's own throwaway directory.</summary>
     public TranscriptSpool(ConfigRoot config, TimeProvider time, string? server, long capBytes = DefaultCapBytes)
-        : this(SpoolPartition.Partitioned(config.Path(DirName), server), time, capBytes) { }
+        : this(SpoolPartition.Server(config.Path(DirectoryName), server), time, capBytes) { }
 
     public TranscriptSpool(string dir, TimeProvider time, long capBytes = DefaultCapBytes)
         : this(SpoolPartition.Standalone(dir), time, capBytes) { }
@@ -134,9 +134,9 @@ public sealed partial class TranscriptSpool(SpoolPartition partition, TimeProvid
     }
 
     /// <summary>A live file that collides becomes a draining temp, which drains before the live file.</summary>
-    internal void AdoptUnpartitioned() =>
-        partition.AdoptUnpartitioned(name => name.EndsWith(".transcript.jsonl", StringComparison.Ordinal)
-            ? DrainingTemp(name[..^".transcript.jsonl".Length])
+    internal void AdoptLegacyFiles() =>
+        partition.AdoptLegacyFiles(name => name.EndsWith(".transcript.jsonl", StringComparison.Ordinal)
+            ? NewDrainingTempName(name[..^".transcript.jsonl".Length])
             : null);
 
     /// <summary>True if this session still has undelivered spool entries (live .jsonl or .draining temp).</summary>
@@ -144,13 +144,13 @@ public sealed partial class TranscriptSpool(SpoolPartition partition, TimeProvid
         if (!SafeSessionId.IsMatch(sessionId)) return false;
 
         var key             = EncodeKey(sessionId);
-        var hasLiveFile     = HasFile($"{key}.transcript.jsonl");
-        var hasDrainingTemp = HasFile($"{key}.*.transcript.draining");
+        var hasLiveFile     = AnyFileMatches($"{key}.transcript.jsonl");
+        var hasDrainingTemp = AnyFileMatches($"{key}.*.transcript.draining");
 
         return hasLiveFile || hasDrainingTemp;
     }
 
-    bool HasFile(string pattern) => Directory.Exists(DirectoryPath) && Directory.EnumerateFiles(DirectoryPath, pattern).Any();
+    bool AnyFileMatches(string pattern) => Directory.Exists(DirectoryPath) && Directory.EnumerateFiles(DirectoryPath, pattern).Any();
 
     /// <summary>Every distinct session id with a live .jsonl, a recovered .draining temp, or a
     /// needs-import marker (a marker can outlive its transcript file if a prior pass ran out of
@@ -184,7 +184,7 @@ public sealed partial class TranscriptSpool(SpoolPartition partition, TimeProvid
 
         if (!File.Exists(live) || expired() || ct.IsCancellationRequested) return;
 
-        var rotated = Path.Combine(DirectoryPath, DrainingTemp(EncodeKey(sessionId)));
+        var rotated = Path.Combine(DirectoryPath, NewDrainingTempName(EncodeKey(sessionId)));
         try { File.Move(live, rotated); }
         catch { return; } // lost the atomic-rename race (or vanished) — the winner handles it
         await DrainFileAsync(rotated, poster, expired, ct);
@@ -233,7 +233,7 @@ public sealed partial class TranscriptSpool(SpoolPartition partition, TimeProvid
     // and '\\', preserving both the path-traversal property and the parse-before-first-dot split.
     // Vendors such as OpenCode use ids like "ses_7f3a9c21b8", which the old form silently dropped.
     /// <summary>The pre-upgrade key space: a dashless GUID, case-insensitively one id.</summary>
-    static string DrainingTemp(string key) => $"{key}.{Environment.ProcessId}-{Interlocked.Increment(ref seqCounter)}.transcript.draining";
+    static string NewDrainingTempName(string key) => $"{key}.{Environment.ProcessId}-{Interlocked.Increment(ref seqCounter)}.transcript.draining";
 
     [GeneratedRegex("^[0-9a-fA-F]{32}$", RegexOptions.Compiled)]
     private static partial Regex LegacyGuidKeyRegex();

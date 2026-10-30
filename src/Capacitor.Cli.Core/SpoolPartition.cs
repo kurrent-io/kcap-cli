@@ -21,14 +21,14 @@ public sealed class SpoolPartition {
         Root          = root;
     }
 
-    public static SpoolPartition Partitioned(string root, string? server) => new(Path.Combine(root, Key(server)), root);
+    public static SpoolPartition Server(string root, string? server) => new(Path.Combine(root, DirectoryName(server)), root);
 
     /// <summary>A directory outside any root: nothing to adopt, and the reap stays inside it.</summary>
     public static SpoolPartition Standalone(string dir) => new(dir, null);
 
     /// <param name="collisionName">The name a root file takes when its own name is already taken, or
     /// null to leave it for the reap. It must be a temp the adopting drain reads before the live file.</param>
-    public void AdoptUnpartitioned(Func<string, string?> collisionName) {
+    public void AdoptLegacyFiles(Func<string, string?> collisionName) {
         if (Root is null || !Directory.Exists(Root)) return;
         try {
             foreach (var file in Directory.EnumerateFiles(Root)) {
@@ -65,7 +65,7 @@ public sealed class SpoolPartition {
         }
     }
 
-    static string Key(string? server) => server is null
+    static string DirectoryName(string? server) => server is null
         ? "none"
         : Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(ServerIdentity.Canonicalize(server) ?? server)))[..16];
 }
