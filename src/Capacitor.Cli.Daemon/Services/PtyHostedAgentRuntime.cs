@@ -188,6 +188,9 @@ internal sealed partial class PtyHostedAgentRuntime(
     async Task<bool> WaitForStartupToSettleAsync(CancellationToken ct) {
         var started = time.GetTimestamp();
 
+        var sawCooked  = false;
+        var uncookedAt = 0L;
+
         while (!pty.HasExited && !_stopRequested) {
             if (DialogGone is not null) {
                 await WaitWhileDialogShowsAsync(ct);
@@ -197,12 +200,19 @@ internal sealed partial class PtyHostedAgentRuntime(
             }
 
             // Before the TUI turns raw input on, the line discipline rewrites the submit CR as LF,
-            // which the composer takes as a newline: the prompt sits there unsent.
+            // which the composer takes as a newline: the prompt sits there unsent. The switch is no
+            // sign the composer is drawn, so the quiet window runs again from it.
             if (pty.IsInputCooked) {
                 await Task.Delay(LaunchPromptPoll, time, ct);
                 started = time.GetTimestamp();
+                sawCooked = true;
 
                 continue;
+            }
+
+            if (sawCooked) {
+                uncookedAt = time.GetTimestamp();
+                sawCooked  = false;
             }
 
             var remaining = LaunchPromptMaxWait - time.GetElapsedTime(started);
@@ -214,7 +224,7 @@ internal sealed partial class PtyHostedAgentRuntime(
                 continue;
             }
 
-            var quietFor = time.GetElapsedTime(Volatile.Read(ref _lastOutputAt));
+            var quietFor = time.GetElapsedTime(Math.Max(Volatile.Read(ref _lastOutputAt), uncookedAt));
             if (quietFor >= LaunchPromptQuietWindow) return true;
 
             await Task.Delay(LaunchPromptQuietWindow - quietFor, time, ct);

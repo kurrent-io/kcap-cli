@@ -378,6 +378,10 @@ public class PtyHostedAgentRuntimeTests {
         await Assert.That(pty.Writes).IsEmpty();
 
         pty.IsInputCooked = false;
+        time.Advance(TimeSpan.FromMilliseconds(250));
+        await Task.Delay(100);
+        await Assert.That(pty.Writes).IsEmpty();
+
         await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow + PtyHostedAgentRuntime.SingleSubmitDelay,
             () => runtime.LaunchPromptDelivery!.IsCompleted);
 
