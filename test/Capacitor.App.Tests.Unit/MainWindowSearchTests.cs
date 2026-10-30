@@ -1,0 +1,359 @@
+using System.Reactive.Concurrency;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using Capacitor.App.Services;
+using Capacitor.App.ViewModels;
+using Capacitor.Remote.Models;
+using DynamicData;
+using Microsoft.Extensions.Time.Testing;
+
+namespace Capacitor.App.Tests.Unit;
+
+public class MainWindowSearchTests {
+    static readonly PinPresentation NoPresentation = new(null, null, null);
+
+    sealed class Harness : IDisposable {
+        public RemoteHost Host { get; } = new();
+        public FakeDaemonClientService Service { get; } = new();
+        public HistoricalScheduler Scheduler { get; } = new();
+        public List<string> Built { get; } = [];
+        public int Teardowns { get; private set; }
+        public MainWindowViewModel Vm { get; }
+
+        public Harness() {
+            Vm = new MainWindowViewModel(
+                Service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                trackWorkspaceTeardown: _ => Teardowns++,
+                originOf: _ => AgentOrigin.Server,
+                remoteWorkspaceFactory: id => { Built.Add(id); return Host.New(id, "S"); },
+                directory: Host.Directory,
+                serverWorkspaceFactory: id => { Built.Add(id); return Host.NewServer(id); },
+                searchFactory: open => new SessionSearchViewModel(
+                    (_, _) => Task.FromResult(new SearchFetch(ServerReadOutcome.Ok, new SearchResponseDto {
+                        Sessions = [new() { SessionId = "T", Slug = "slug-t", Title = "Tee", StartedAt = "2026-10-29T09:00:00Z", MatchedField = "title", Snippet = "Tee" }],
+                    })),
+                    Host.Sessions.Identity, Observable.Never<string>(), new FakeTimeProvider(), Scheduler, open),
+                sessions: Host.Sessions);
+        }
+
+        public FakeServerSessionsService Sessions => Host.Sessions;
+
+        public ISessionWorkspace OpenServer(string sessionId) {
+            Host.Directory.Rows.AddOrUpdate(RemoteHost.ServerRow(sessionId));
+            Vm.OpenSession(sessionId, AgentOrigin.Server);
+            return Vm.CurrentWorkspace!;
+        }
+
+        public SearchHitViewModel TypeAndSettle(string query) {
+            Vm.Search!.Query = query;
+            Scheduler.AdvanceBy(TimeSpan.FromMilliseconds(151));
+            return Vm.Search.Hits[0];
+        }
+
+        public Task OpenSearch() => Vm.OpenSearchCommand.Execute().ToTask();
+
+        /// The open session-only workspace's session is taken up by a daemon on another machine.
+        public void HandOffToRemote(string agentId) =>
+            Host.Directory.Rows.Edit(rows => {
+                rows.RemoveKey("server:S");
+                rows.AddOrUpdate(AgentRow.FromRemote(new AgentInstanceDto {
+                    AgentId = agentId, SessionId = "S", Status = "Running", DaemonName = "work-mac", OwnerUserId = "u1",
+                    Vendor = "claude", RegisteredAt = DateTime.UtcNow,
+                }));
+            });
+
+        public void ListServer(string sessionId) {
+            Host.Directory.Rows.AddOrUpdate(RemoteHost.ServerRow(sessionId));
+            Host.Directory.SessionRows[sessionId] = (sessionId, AgentOrigin.Server);
+        }
+
+        public void Dispose() {
+            Vm.CloseWorkspace();
+            Vm.Search?.Dispose();
+            Host.Dispose();
+        }
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Opening_search_keeps_the_current_workspace_and_bumps_navigation() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            var open = h.OpenServer("S");
+            var generation = h.Vm.NavigationGeneration;
+
+            await h.OpenSearch();
+
+            await Assert.That(h.Vm.IsSearchOpen).IsTrue();
+            await Assert.That(h.Vm.CurrentWorkspace).IsSameReferenceAs(open);
+            await Assert.That(h.Vm.NavigationGeneration).IsGreaterThan(generation);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Escape_uncovers_the_workspace_without_teardown() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            var open = h.OpenServer("S");
+            h.Sessions.PinnedIdSubject.OnNext("S");
+            await h.OpenSearch();
+
+            await h.Vm.DismissSearchCommand.Execute().ToTask();
+
+            await Assert.That(h.Vm.IsSearchOpen).IsFalse();
+            await Assert.That(h.Vm.CurrentWorkspace).IsSameReferenceAs(open);
+            await Assert.That(h.Teardowns).IsEqualTo(0);
+            await Assert.That(h.Sessions.UnpinCalls).IsEqualTo(0);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Covered_workspace_hand_off_does_not_dismiss_search() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            var open = h.OpenServer("S");
+            h.Sessions.PinnedIdSubject.OnNext("S");
+            await h.OpenSearch();
+
+            h.HandOffToRemote("r1");
+
+            await Assert.That(h.Vm.CurrentWorkspace).IsNotSameReferenceAs(open);
+            await Assert.That(h.Vm.CurrentWorkspace!.AgentId).IsEqualTo("r1");
+            await Assert.That(h.Vm.IsSearchOpen).IsTrue();
+            await Assert.That(h.Sessions.UnpinCalls).IsEqualTo(0);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Delayed_pin_still_opens_after_a_covered_hand_off() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            h.OpenServer("S");
+            await h.OpenSearch();
+            var gate = new TaskCompletionSource<PinOutcome>();
+            h.Sessions.PinGate = gate;
+
+            var opening = h.Vm.OpenSearchHitAsync("T", NoPresentation, CancellationToken.None);
+            h.HandOffToRemote("r1");
+            await Assert.That(h.Vm.CurrentWorkspace!.AgentId).IsEqualTo("r1");
+            h.ListServer("T");
+            gate.SetResult(PinOutcome.Pinned);
+
+            await Assert.That(await opening).IsEqualTo(SearchOpenOutcome.Opened);
+            await Assert.That(h.Vm.CurrentWorkspace!.AgentId).IsEqualTo("T");
+            await Assert.That(h.Vm.IsSearchOpen).IsFalse();
+            await Assert.That(h.Sessions.PinnedSessionId).IsEqualTo("T");
+            await Assert.That(h.Sessions.UnpinCalls).IsEqualTo(0);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Delayed_pin_after_escape_opens_nothing() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            var open = h.OpenServer("S");
+            await h.OpenSearch();
+            var gate = new TaskCompletionSource<PinOutcome>();
+            h.Sessions.PinGate = gate;
+
+            var opening = h.Vm.OpenSearchHitAsync("T", NoPresentation, CancellationToken.None);
+            await h.Vm.DismissSearchCommand.Execute().ToTask();
+            h.ListServer("T");
+            gate.SetResult(PinOutcome.Pinned);
+
+            await Assert.That(await opening).IsEqualTo(SearchOpenOutcome.Superseded);
+            await Assert.That(h.Vm.CurrentWorkspace).IsSameReferenceAs(open);
+            await Assert.That(h.Built).IsEquivalentTo(["S"]);
+            await Assert.That(h.Sessions.PinnedSessionId).IsNull();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Rail_click_dismisses_search_and_releases_the_pin() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            h.ListServer("P");
+            await Assert.That(await h.Vm.OpenSearchHitAsync("P", NoPresentation, CancellationToken.None)).IsEqualTo(SearchOpenOutcome.Opened);
+            h.Sessions.PinnedIdSubject.OnNext("P");
+            await h.OpenSearch();
+
+            h.OpenServer("S");
+
+            await Assert.That(h.Vm.IsSearchOpen).IsFalse();
+            await Assert.That(h.Vm.CurrentWorkspace!.AgentId).IsEqualTo("S");
+            await Assert.That(h.Sessions.UnpinCalls).IsEqualTo(1);
+            await Assert.That(h.Sessions.PinnedSessionId).IsNull();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Rail_click_on_the_pinned_session_keeps_the_pin() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            h.OpenServer("S");
+            h.Sessions.PinnedIdSubject.OnNext("S");
+            await h.OpenSearch();
+
+            h.Vm.OpenSession("S", AgentOrigin.Server);
+
+            await Assert.That(h.Vm.IsSearchOpen).IsFalse();
+            await Assert.That(h.Sessions.UnpinCalls).IsEqualTo(0);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task New_session_dismisses_search() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            h.OpenServer("S");
+            h.Sessions.PinnedIdSubject.OnNext("S");
+            await h.OpenSearch();
+
+            await h.Vm.NewSessionCommand.Execute().ToTask();
+
+            await Assert.That(h.Vm.IsSearchOpen).IsFalse();
+            await Assert.That(h.Vm.CurrentWorkspace).IsNull();
+            await Assert.That(h.Sessions.UnpinCalls).IsEqualTo(1);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Opening_the_already_open_session_closes_search_without_rebuild() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            var open = h.OpenServer("S");
+            h.Host.Directory.SessionRows["S"] = ("S", AgentOrigin.Server);
+            await h.OpenSearch();
+
+            var outcome = await h.Vm.OpenSearchHitAsync("S", NoPresentation, CancellationToken.None);
+
+            await Assert.That(outcome).IsEqualTo(SearchOpenOutcome.Opened);
+            await Assert.That(h.Vm.IsSearchOpen).IsFalse();
+            await Assert.That(h.Vm.CurrentWorkspace).IsSameReferenceAs(open);
+            await Assert.That(h.Built).IsEquivalentTo(["S"]);
+            await Assert.That(h.Teardowns).IsEqualTo(0);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Shortcut_while_open_requests_focus_without_reset() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            await h.OpenSearch();
+            h.Vm.Search!.Query = "abc";
+            h.Vm.Search.Tab = SearchMode.Transcripts;
+            var focus = 0;
+            using var _ = h.Vm.SearchFocusRequests.Subscribe(_ => focus++);
+            var generation = h.Vm.NavigationGeneration;
+
+            await h.OpenSearch();
+
+            await Assert.That(focus).IsEqualTo(1);
+            await Assert.That(h.Vm.IsSearchOpen).IsTrue();
+            await Assert.That(h.Vm.Search.Query).IsEqualTo("abc");
+            await Assert.That(h.Vm.Search.Tab).IsEqualTo(SearchMode.Transcripts);
+            await Assert.That(h.Vm.NavigationGeneration).IsEqualTo(generation);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Opening_search_resets_the_page() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            await h.OpenSearch();
+            h.Vm.Search!.Query = "abc";
+            await h.Vm.DismissSearchCommand.Execute().ToTask();
+
+            await h.OpenSearch();
+
+            await Assert.That(h.Vm.Search.Query).IsEqualTo("");
+            await Assert.That(h.Vm.Search.Tab).IsEqualTo(SearchMode.Sessions);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Opening_search_invalidates_a_pending_launch_auto_open() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            h.Host.Directory.Rows.AddOrUpdate(RemoteHost.ServerRow("S"));
+            var generation = h.Vm.NavigationGeneration;
+
+            await h.OpenSearch();
+            h.Vm.OpenSessionIfCurrent("S", AgentOrigin.Server, generation);
+
+            await Assert.That(h.Vm.CurrentWorkspace).IsNull();
+            await Assert.That(h.Vm.IsSearchOpen).IsTrue();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_pin_failure_keeps_the_page_open_and_maps_the_outcome() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            await h.OpenSearch();
+
+            h.Sessions.PinResult = PinOutcome.Unauthorized;
+            await Assert.That(await h.Vm.OpenSearchHitAsync("T", NoPresentation, CancellationToken.None)).IsEqualTo(SearchOpenOutcome.SignInRequired);
+            h.Sessions.PinResult = PinOutcome.Unavailable;
+            await Assert.That(await h.Vm.OpenSearchHitAsync("T", NoPresentation, CancellationToken.None)).IsEqualTo(SearchOpenOutcome.Unavailable);
+            h.Sessions.PinResult = PinOutcome.Failed;
+            await Assert.That(await h.Vm.OpenSearchHitAsync("T", NoPresentation, CancellationToken.None)).IsEqualTo(SearchOpenOutcome.Failed);
+
+            await Assert.That(h.Vm.IsSearchOpen).IsTrue();
+            await Assert.That(h.Vm.CurrentWorkspace).IsNull();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_hit_chosen_on_the_page_opens_and_closes_it() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            await h.OpenSearch();
+            h.ListServer("T");
+            var hit = h.TypeAndSettle("tee");
+
+            await h.Vm.Search!.OpenAsync(hit);
+            h.Scheduler.AdvanceBy(TimeSpan.FromMilliseconds(1));
+
+            await Assert.That(h.Vm.CurrentWorkspace!.AgentId).IsEqualTo("T");
+            await Assert.That(h.Vm.IsSearchOpen).IsFalse();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Escape_cancels_the_pages_pending_open() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            await h.OpenSearch();
+            var hit = h.TypeAndSettle("tee");
+            var gate = new TaskCompletionSource<PinOutcome>();
+            h.Sessions.PinGate = gate;
+
+            var opening = h.Vm.Search!.OpenAsync(hit);
+            await h.Vm.DismissSearchCommand.Execute().ToTask();
+            await h.OpenSearch();
+            h.ListServer("T");
+            gate.SetResult(PinOutcome.Pinned);
+            await opening;
+            h.Scheduler.AdvanceBy(TimeSpan.FromMilliseconds(1));
+
+            await Assert.That(h.Vm.CurrentWorkspace).IsNull();
+            await Assert.That(h.Vm.IsSearchOpen).IsTrue();
+            await Assert.That(h.Sessions.PinnedSessionId).IsNull();
+        });
+    }
+}

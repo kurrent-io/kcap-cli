@@ -44,10 +44,14 @@ sealed class FakeServerSessionsService : IServerSessionsService, IDisposable {
     public IObservable<SessionIdentity> Identity => IdentitySubject;
     public string? PinnedSessionId => PinnedIdSubject.Value;
 
-    public Task<PinOutcome> PinAsync(string sessionId, PinPresentation presentation, CancellationToken ct) {
+    /// When set, PinAsync answers once the test completes it rather than with PinResult.
+    public TaskCompletionSource<PinOutcome>? PinGate;
+
+    public async Task<PinOutcome> PinAsync(string sessionId, PinPresentation presentation, CancellationToken ct) {
         PinCalls.Add((sessionId, presentation));
-        if (PinResult == PinOutcome.Pinned) PinnedIdSubject.OnNext(sessionId);
-        return Task.FromResult(PinResult);
+        var result = PinGate is { } gate ? await gate.Task : PinResult;
+        if (result == PinOutcome.Pinned) PinnedIdSubject.OnNext(sessionId);
+        return result;
     }
 
     public void Unpin() {
