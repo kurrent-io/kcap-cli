@@ -137,6 +137,27 @@ public class MainWindowViewModelTests {
         return shown;
     }
 
+    /// A remote launch opens on its placeholder, which the launcher's failure wording would sit
+    /// behind; once the registry has listed the agent, a trailing failure report leaves it open.
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_failed_remote_launch_closes_only_a_workspace_still_on_its_placeholder(bool placeholder) {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var host = new RemoteHost();
+            var vm = NewVm(new FakeDaemonClientService(),
+                remoteWorkspaceFactory: id => placeholder ? host.NewPlaceholder(id) : host.New(id),
+                trackWorkspaceTeardown: teardown => _ = teardown(), directory: host.Directory);
+            vm.OpenSession("a1", AgentOrigin.Remote);
+            await Assert.That(vm.CurrentWorkspace).IsNotNull();
+
+            vm.CloseFailedLaunch("a1");
+
+            await Assert.That(vm.CurrentWorkspace is null).IsEqualTo(placeholder);
+        });
+    }
+
     [Test]
     [Arguments(false)]
     [Arguments(true)]

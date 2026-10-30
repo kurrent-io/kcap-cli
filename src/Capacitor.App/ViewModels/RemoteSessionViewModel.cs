@@ -257,6 +257,9 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         _ => "",
     };
 
+    /// Still on the launch's stand-in row: the registry has not listed the agent yet.
+    public bool IsPlaceholder => _row.IsPlaceholder;
+
     public RemoteSessionViewModel(
             AgentRow row, IAgentDirectory directory, SessionAccessService access, IPermissionService permissions,
             AgentActionService actions, IServerLane lane, SessionDetailReader readDetail, IUrlOpener opener, TimeProvider time, IWorkContextSource workContext,

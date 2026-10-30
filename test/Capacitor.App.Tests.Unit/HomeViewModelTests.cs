@@ -2049,8 +2049,11 @@ public class HomeViewModelTests {
         Vendor = "claude", RepoOwner = "o", RepoName = "r",
     });
 
+    /// Each open bumps the generation, as the window's swap does.
     static HomeViewModel RemoteLauncher(
-            string path, FakeAgentDirectory directory, List<(string AgentId, AgentOrigin Origin, int Generation)> opened) {
+            string path, FakeAgentDirectory directory, List<(string AgentId, AgentOrigin Origin, int Generation)> opened,
+            RecordingLaunchClient? launch = null) {
+        var navigation = 7;
         var remote = new FakeRemoteAgents();
         remote.DaemonsSubject.OnNext([
             new DaemonInfo { Name = "home-pc", OwnerUserId = "u1", Connected = true, RepoPaths = ["/w/repo"] },
@@ -2058,18 +2061,19 @@ public class HomeViewModelTests {
         var lane = new FakeServerLane();
         lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
         return new HomeViewModel(
-            new FakeDaemonClientService(), new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
-            navigationGeneration: () => 7,
-            openSessionIfCurrent: (id, origin, generation) => opened.Add((id, origin, generation)),
+            new FakeDaemonClientService(), new AppStateStore(path), launch ?? new RecordingLaunchClient(), Known(), TimeProvider.System,
+            navigationGeneration: () => navigation,
+            openSessionIfCurrent: (id, origin, generation) => {
+                opened.Add((id, origin, generation));
+                if (generation == navigation) navigation++;
+            },
             daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status,
             directory: directory);
     }
 
-    /// A remote launch has no placeholder row, and the remote workspace cannot open an id no lane
-    /// holds — so the open waits for the remote row, carrying the generation captured at launch.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task ARemoteLaunchOpensItsSessionWhenItsRowArrives() {
+    public async Task ARemoteLaunchOpensOnItsPlaceholderAtOnce() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             using var directory = new FakeAgentDirectory();
@@ -2078,11 +2082,52 @@ public class HomeViewModelTests {
 
             await vm.SelectMachineAsync("home-pc", isLocal: false);
             await vm.StartCommand.Execute();
-            await Assert.That(opened).IsEmpty();
+
+            await Assert.That(directory.RemotePlaceholders).IsEquivalentTo([(LaunchedId, "home-pc", (string?)"u1", vm.SelectedVendor, "/w/repo")]);
+            await Assert.That(opened).IsEquivalentTo([(LaunchedId, AgentOrigin.Remote, 7)]);
+        });
+    }
+
+    /// The placeholder row in the directory does not settle the launch; the registry's row does,
+    /// and it reaches the open placeholder workspace under the generation that open left behind.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task ARemoteLaunchSettlesOnTheRegistryRowNotItsPlaceholder() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            using var directory = new FakeAgentDirectory();
+            var opened = new List<(string AgentId, AgentOrigin Origin, int Generation)>();
+            using var vm = RemoteLauncher(path, directory, opened);
+
+            await vm.SelectMachineAsync("home-pc", isLocal: false);
+            await vm.StartCommand.Execute();
+            directory.Rows.AddOrUpdate(AgentRow.RemotePlaceholder(
+                LaunchedId, "home-pc", "claude", "/w/repo", null, null, DateTime.UtcNow, new RepoIdentity("repo:o/r", "o/r"), "u1/home-pc"));
+            await Assert.That(opened).Count().IsEqualTo(1);
 
             directory.Rows.AddOrUpdate(RemoteRow(LaunchedId));
 
-            await Assert.That(opened).IsEquivalentTo([(LaunchedId, AgentOrigin.Remote, 7)]);
+            await Assert.That(opened).IsEquivalentTo([(LaunchedId, AgentOrigin.Remote, 7), (LaunchedId, AgentOrigin.Remote, 8)]);
+        });
+    }
+
+    /// The registry may spell the id another way than the launch's accept did; its row still takes
+    /// over from the placeholder workspace.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task ARegistryRowSpelledDifferentlyStillOpensFromThePlaceholder() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            using var directory = new FakeAgentDirectory();
+            var opened = new List<(string AgentId, AgentOrigin Origin, int Generation)>();
+            var dashed = Guid.ParseExact(LaunchedId, "N").ToString("D");
+            using var vm = RemoteLauncher(path, directory, opened, new RecordingLaunchClient { Next = new LaunchOutcome(true, dashed, null) });
+
+            await vm.SelectMachineAsync("home-pc", isLocal: false);
+            await vm.StartCommand.Execute();
+            directory.Rows.AddOrUpdate(RemoteRow(LaunchedId));
+
+            await Assert.That(opened).IsEquivalentTo([(dashed, AgentOrigin.Remote, 7), (LaunchedId, AgentOrigin.Remote, 8)]);
         });
     }
 
@@ -2103,10 +2148,10 @@ public class HomeViewModelTests {
         });
     }
 
-    /// A same-id local row is a different agent: only the remote lane's row opens a remote launch.
+    /// A same-id local row is a different agent: only the remote lane's row settles a remote launch.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task ALocalRowWithTheSameIdDoesNotOpenARemoteLaunch() {
+    public async Task ALocalRowWithTheSameIdDoesNotSettleARemoteLaunch() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             using var directory = new FakeAgentDirectory();
@@ -2117,8 +2162,9 @@ public class HomeViewModelTests {
             await vm.StartCommand.Execute();
             directory.Rows.AddOrUpdate(AgentRow.FromLocal(
                 WorkspaceFixtures.Agent(LaunchedId, "claude", false, "/w/repo"), new RepoIdentity("path:/w/repo", "repo")));
+            directory.Rows.AddOrUpdate(RemoteRow(LaunchedId));
 
-            await Assert.That(opened).IsEmpty();
+            await Assert.That(opened).IsEquivalentTo([(LaunchedId, AgentOrigin.Remote, 7), (LaunchedId, AgentOrigin.Remote, 8)]);
         });
     }
 
@@ -2170,7 +2216,7 @@ public class HomeViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task ARemoteLaunchAddsNoPlaceholder() {
+    public async Task ARemoteLaunchAddsNoLocalPlaceholder() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             var daemon = new FakeDaemonClientService();
@@ -2845,6 +2891,8 @@ public class HomeViewModelTests {
         public bool IsProvenLocalTwin(string agentId) => false;
         public bool IsHostedNow(AgentRow row) => false;
         public void AddPlaceholder(string agentId, string vendor, string repoPath, string? title, string? model) { }
+        public void AddRemotePlaceholder(
+            string agentId, string machine, string? ownerUserId, string vendor, string repoPath, string? title, string? model) { }
         public void RemovePlaceholder(string agentId) { }
 
         public void Add(string agentId) => _source.AddOrUpdate(

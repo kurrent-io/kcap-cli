@@ -717,8 +717,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// The launcher words a launch failure, and an open workspace covers the launcher. Only a
     /// workspace the daemon never filled is closed: a failure report can trail the agent it names.
     public void CloseFailedLaunch(string agentId) {
-        if (CurrentWorkspace is WorkspaceViewModel { HasAgent: false } open
-            && AgentIds.Normalize(open.AgentId) == AgentIds.Normalize(agentId))
+        if (CurrentWorkspace is WorkspaceViewModel { HasAgent: false } or RemoteSessionViewModel { IsPlaceholder: true }
+            && AgentIds.Normalize(CurrentWorkspace.AgentId) == AgentIds.Normalize(agentId))
             CloseWorkspace();
     }
 
