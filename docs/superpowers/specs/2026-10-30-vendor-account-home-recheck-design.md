@@ -51,14 +51,19 @@ account id stays the handle the app looks things up by. The checks run against t
 
 ### Periodic probe
 
-- `AccountRefresher` gains a recurring timer. Each tick calls `Request(id)` for every account in the
-  registry at that moment. `Request` already coalesces queued, deferred and running work and honours the
-  cooldown, so the timer adds no new concurrency rule.
-- Interval: 10 minutes, the same as `Cooldown`. Make it a constant beside `Cooldown`, using the injected
-  `TimeProvider` so tests drive it.
+- Interval: 10 minutes, the same as `Cooldown`. A home is due once the last refresh, or the start of a
+  refresh still running, is at least one interval old, by whichever daemon did it.
 - The registry is shared by every named daemon of the user (`AccountStore.Beside(daemons)`), and each
-  daemon has its own refresher. A tick skips an account whose stored `RefreshedAt` is younger than the
-  interval, so N daemons do not mean N probes per home per interval. *My call.*
+  daemon has its own refresher. The budget is therefore shared through the registry, not through any
+  one refresher's memory. *My calls:*
+  - A refresh records when it began (`probe_started_at`) in the same registry mutation that takes its
+    `ProbeSeq`.
+  - A periodic refresh checks that the home is due inside that same mutation, and stands down if it is
+    not. Two daemons ticking at the same moment therefore cannot both probe.
+  - The timer ticks every 2 minutes and queues every registered account. The registry-side check decides,
+    so probes land 10 to 12 minutes apart however many daemons run.
+- Explicit, limit-hit and wiring requests keep today's path and per-refresher cooldown. They do not go
+  through the due check.
 - The probe is the existing one, run against the account's `Directory`:
   - Claude: `ClaudeIdentityProbe` (`claude auth status --json`).
   - Codex: `CodexAccountProbe`, which also refreshes limits for idle accounts, the same as at daemon start.
@@ -78,8 +83,10 @@ blocks the sessions that are already on the new login. Nothing can tell the two 
 
 - No new ids are added to `RetiredSessions`.
 - `ReadingStore.TryRecord` stops refusing a session for being retired.
-- The persisted `retired_sessions` field must still parse in registries written by older builds. It can be
-  dropped on the next registry write, or kept and ignored. *Left to the builder.*
+- The persisted `retired_sessions` field must still parse in registries written by older builds. The
+  member is deleted, and the registry's JSON context ignores unknown members. *My call.*
+- The switch records `generation_started_at`: when the committing probe began. It is saved in the same
+  registry write as the generation bump, so no crash can separate the two.
 
 ### Producers record against the home's current generation
 
@@ -109,21 +116,30 @@ With retirement gone, two paths can still deliver one. Both get their own guard.
   which may be hours old (`ClaudeStatusLineReading`). A session idle since before the switch still holds
   the old login's `rate_limits`, and its next render sends them. `ReadingMerge.MergeWindow` keeps whichever
   window resets later, so one such replay can stick over the new login's fresh numbers for up to a week.
-  - Guard: on a generation bump, the new reading starts with the old reading's session baselines
-    (`Sessions` with their `ApiDurationMs`) carried over and marked as carried.
-  - A payload from a carried session merges its windows only when it is fresh, meaning its
-    `total_api_duration_ms` moved past the carried baseline. That means the session made an API call after
-    the switch, so the response belongs to the home's current login.
-  - A session with no carried baseline (started after the switch) behaves as today.
-  - Tests pin both cases: an idle pre-switch session's replay leaves the new reading's windows untouched,
-    and the same session's next fresh payload records.
+  - Guard: once a home has switched (`generation_started_at` is set), a status-line payload merges its
+    windows only when it is fresh, meaning its `total_api_duration_ms` moved past the baseline the
+    current reading holds for that session. Otherwise it only records the baseline.
+  - That covers every case: a session with no baseline, a counter that went backwards, a missing counter,
+    a baseline evicted by the 64-session cap, and a reading lost to a crash after the registry save. None
+    of them counts until the session makes an API call after the switch.
+  - A fresh payload follows a real API call made after the switch, so it belongs to the home's current
+    login.
+  - The cost is one render for a session started after the switch: its first payload records a baseline,
+    and its next one, after its first response, counts.
+  - A home that never switched keeps today's behaviour, where a session's first payload merges
+    unconfirmed.
+  - Tests pin:
+    - an idle pre-switch session's replay leaves the new reading's windows untouched, and the same
+      session's next fresh payload records;
+    - a counter reset (1000 → 200 → 200 → 300): only 300 records;
+    - an evicted baseline and a missing counter;
+    - a producer that commits just before the switch, then replays, then advances, run through the real
+      `AccountRefresh` and `TryRecord` interleaving.
 - **Codex rollout backlog.** `CodexRolloutReadings` stamps an observation with the rollout line's own
   timestamp. A watcher catching up on lines written before the switch would otherwise record them into
   the new reading.
-  - Guard: the switch records when the new generation began (a new registry field, for example
-    `generation_started_at`, set from the committing probe's time).
-  - An observation produced before that instant is dropped. This applies to every producer that carries a
-    `ProducedAt`, not only the rollout watcher.
+  - Guard: an observation produced before `generation_started_at` is dropped. This applies to every
+    producer that carries a `ProducedAt`, not only the rollout watcher.
 - What remains is a race inside the seconds between a fresh observation and its write, across a commit.
   It is accepted.
 
@@ -138,8 +154,9 @@ With retirement gone, two paths can still deliver one. Both get their own guard.
     the app cannot draw (`AccountReadings.Remote` serves only `DrawableDaemonAccounts`).
   - On such a remote host there are no bars either, so the label and the bars cannot disagree. The label
     there comes from the server. Making it current is Part 2.
-  - The label and the bars must change together. Derive both from one lookup, so a snapshot can never
-    show the new label with the old bars, or the reverse.
+  - The label and the bars must change together. Derive both from one lookup and swap them as one value
+    before raising any notification. A listener must never see the new label with the old bars, or the
+    reverse.
 - **Daemon reports.** The daemon fills `AccountLabel` from the registry's current label for `AccountId`
   when it builds `AgentStatusDto` (live rows and the resume ledger's `LedgerStatusRow` alike),
   `LiveAgentInfo` (heartbeat) and a re-registration. It falls back to
