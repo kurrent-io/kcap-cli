@@ -734,7 +734,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null, LocalTranscripts? transcripts = null,
             IMessageSenderSource? senders = null, IObservable<AccountsSnapshotDto?>? accountReadings = null,
             IObservable<DateTimeOffset>? usageClock = null, IObservable<Unit>? signInCompleted = null,
-            IObservable<HandoffOutcomeDto>? handoffOutcome = null)
+            IObservable<HandoffOutcomeDto?>? handoffOutcome = null)
         : this(agentId, AgentOrigin.Local, LocalSession(agentId, daemon), daemon.Snapshots.Select(s => s.Daemon.SupportedVendors),
                input, uploader, projection is null ? null : LocalFeed(agentId, projection, time, transcripts), opener, time, permissions,
                runs, unavailableNote, null, sessionId, localDaemonOnAppServer, planActivity: planActivity, openCard: openCard,
@@ -749,7 +749,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             IObservable<IReadOnlyList<QueuedInputItem>>? serverQueue = null, PlanActivity? planActivity = null,
             Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null, IMessageSenderSource? senders = null,
             IObservable<AccountsSnapshotDto?>? accountReadings = null, IObservable<DateTimeOffset>? usageClock = null,
-            IObservable<Unit>? signInCompleted = null, IObservable<HandoffOutcomeDto>? handoffOutcome = null) {
+            IObservable<Unit>? signInCompleted = null, IObservable<HandoffOutcomeDto?>? handoffOutcome = null) {
         _drafts = drafts;
         _origin = origin;
         _agentId = agentId;
@@ -757,7 +757,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         drafts?.Watch(origin, agentId, OnStoredDraftChanged).DisposeWith(_disposables);
         _planActivity = planActivity;
         _openCard = openCard;
-        handoffOutcome?.Select(outcome => new HandoffOutcomeViewModel(outcome))
+        // Null clears the card: the outcome belonged to a session the chat no longer shows.
+        handoffOutcome?.Select(outcome => outcome is null ? null : new HandoffOutcomeViewModel(outcome))
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(card => HandoffOutcome = card, ex => LogOnce($"hand-off outcome: {ex.Message}"))
             .DisposeWith(_disposables);

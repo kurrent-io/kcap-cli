@@ -11,8 +11,9 @@ public sealed class HandoffOutcomeReader(IDaemonClientService daemon, ILocalCont
     internal static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
     internal static readonly TimeSpan NullWindow = TimeSpan.FromMinutes(2);
 
-    /// Emits each outcome that differs in value from the last; every read deserializes fresh lists, so reference equality would re-emit each poll. An answer of null (nothing stored yet, or a failed
-    /// read) is retried for <see cref="NullWindow"/>; a running outcome is followed without limit.
+    /// Emits each outcome that differs in value from the last: every read deserializes fresh lists,
+    /// so reference equality would re-emit each poll. An answer of null (nothing stored yet, or a
+    /// failed read) is retried for <see cref="NullWindow"/>; a running outcome is followed without limit.
     /// Completes on a terminal state or when the window lapses, and emits nothing for a daemon
     /// without handoff/1.
     public IObservable<HandoffOutcomeDto> Watch(string sessionId) =>
@@ -22,6 +23,13 @@ public sealed class HandoffOutcomeReader(IDaemonClientService daemon, ILocalCont
             .SelectMany(status => status.Capabilities?.Contains(HandoffWire.Capability) == true
                 ? Poll(sessionId)
                 : Observable.Empty<HandoffOutcomeDto>());
+
+    /// The chat card's stream for one session id, inside a Switch over ids: it opens with null so a
+    /// card from the previous id is cleared rather than carried over.
+    public static IObservable<HandoffOutcomeDto?> CardFor(HandoffOutcomeReader reader, string? sessionId) =>
+        sessionId is null
+            ? Observable.Return<HandoffOutcomeDto?>(null)
+            : reader.Watch(sessionId).Select(outcome => (HandoffOutcomeDto?)outcome).StartWith((HandoffOutcomeDto?)null);
 
     IObservable<HandoffOutcomeDto> Poll(string sessionId) =>
         Observable.Create<HandoffOutcomeDto>(async (observer, ct) => {

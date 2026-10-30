@@ -104,6 +104,34 @@ public class WorkspaceViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task A_new_session_id_clears_the_previous_sessions_handoff_outcome() {
+        await RunOnUiAsync(async () => {
+            const string next = "fedcba9876543210fedcba9876543210";
+            var daemon = new FakeDaemonClientService();
+            daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, [Cli.Core.LocalIpc.HandoffWire.Capability]));
+            var ops = new ScriptedLocalControlOps {
+                ReadHandoffOutcome = id => Task.FromResult<Cli.Core.Handoff.HandoffOutcomeDto?>(
+                    id == Session ? new("s1", "Old", "done", null, []) : null),
+            };
+            var time = new FakeTimeProvider();
+            var vm = new WorkspaceViewModel("a1", daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()),
+                new FakeTerminalAttachClientFactory().Factory, () => new FakeTerminalSurface(), time, new RecordingOpener(),
+                new FakePermissionService(), new FakeWorkContextSource(), ops, new NoAttachmentUploader(),
+                handoffOutcomes: new HandoffOutcomeReader(daemon, ops, time));
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: Session));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await WaitUntilAsync(() => vm.Chat?.HandoffOutcome is not null, what: "the outcome");
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: next));
+
+            await WaitUntilAsync(() => vm.Chat!.HandoffOutcome is null, what: "the card cleared");
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task An_empty_session_does_not_flash_the_artefacts_tab_while_loading() {
         await RunOnUiAsync(async () => {
             var daemon = new FakeDaemonClientService();

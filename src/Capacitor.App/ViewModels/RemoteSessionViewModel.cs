@@ -5,7 +5,6 @@ using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Capacitor.App.Services;
-using Capacitor.Cli.Core.Handoff;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests;
 using Capacitor.Remote.Models;
@@ -351,7 +350,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             accountReadings: row.MachineBadge is { } daemon ? readings?.Remote(daemon) : null, usageClock: readings?.Clock,
             signInCompleted: signInCompleted,
             handoffOutcome: handoffOutcomes is null ? null : Observable.Switch(_sessionIds.DistinctUntilChanged()
-                .Select(sid => sid is null ? Observable.Empty<HandoffOutcomeDto>() : handoffOutcomes.Watch(sid)))) { InputSending = inputSending };
+                .Select(sid => HandoffOutcomeReader.CardFor(handoffOutcomes, sid)))) { InputSending = inputSending };
         lane.Status.Select(s => s.Subject).DistinctUntilChanged()
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(subject => {

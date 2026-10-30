@@ -4,7 +4,6 @@ using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
-using Capacitor.Cli.Core.Handoff;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests;
@@ -368,7 +367,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                     agentId, daemon, input, uploader, projection, opener, time, permissions, runs, note, sessionIds, localDaemonOnAppServer, planActivity, OpenCard, drafts, transcripts,
                     senders, readings?.Local, readings?.Clock, signInCompleted,
                     handoffOutcome: handoffOutcomes is null ? null : Observable.Switch(sessionIds
-                        .Select(sid => sid is null ? Observable.Empty<HandoffOutcomeDto>() : handoffOutcomes.Watch(sid)))) {
+                        .Select(sid => HandoffOutcomeReader.CardFor(handoffOutcomes, sid)))) {
                     ShowTerminal = hasTerminal ? () => ActiveTab = WorkspaceTab.Terminal : null,
                     InputSending = inputSending,
                 };
