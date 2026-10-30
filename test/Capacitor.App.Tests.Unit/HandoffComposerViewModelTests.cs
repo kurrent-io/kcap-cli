@@ -633,6 +633,15 @@ public class HandoffComposerViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public Task A_signed_out_lane_asks_for_a_sign_in() => Run(async rig => {
+        rig.Lane.OnNext(new ServerLaneStatus(ServerLaneState.SignedOut));
+        var vm = await rig.ReadyAsync();
+
+        await Assert.That(vm.DisabledReason).IsEqualTo("Sign in to your kcap server to hand off");
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public Task Refusal_codes_are_worded_without_the_code() => Run(async rig => {
         (string Reason, string? Worded)[] cases = [
             ("handoff_start_changed: feature/x is at 1a2b, not 3c4d", StartChanged),

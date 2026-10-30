@@ -63,6 +63,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
     volatile AttachStatus? _attach;
     volatile bool _signedIn;
     volatile bool _serverConnected;
+    volatile bool _signedOut;
     bool _initialized;
     bool _disposed;
     bool _sourceChangedWhileLaunching;
@@ -108,6 +109,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
         daemon.Status.Subscribe(s => _attach = s).DisposeWith(_disposables);
         var connected = laneStatus.Select(s => s.State == ServerLaneState.Connected);
         connected.Subscribe(c => _signedIn = _serverConnected = c).DisposeWith(_disposables);
+        laneStatus.Subscribe(s => _signedOut = s.State == ServerLaneState.SignedOut).DisposeWith(_disposables);
         // An empty feature list read while disconnected says nothing about the server.
         connected
             .DistinctUntilChanged()
@@ -297,7 +299,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
         if (!accessUnknown && !string.Equals(_session.AccessLevel, FullAccess, StringComparison.OrdinalIgnoreCase))
             return new(NeedsFullAccess);
 
-        if (!_serverConnected) return new(ServerUnreachable);
+        if (!_serverConnected) return new(_signedOut ? SignInToHandOff : ServerUnreachable);
         if (_features is not { Count: > 0 }) {
             // Null is no answer at all, which says nothing about the server's version.
             if (await _launch.GetLaunchFeaturesAsync(ct) is not { } read) return new(ServerUnreachable);
