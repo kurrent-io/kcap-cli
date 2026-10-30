@@ -672,6 +672,13 @@
         <Style Selector="Border.attachTarget">
             <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
         </Style>
+        <Style Selector="Border.goalNudgeRing">
+            <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
+            <Setter Property="Opacity" Value="0" />
+        </Style>
+        <Style Selector="Border.goalNudgeRing.on">
+            <Setter Property="Opacity" Value="1" />
+        </Style>
         <Style Selector="Border.attachTarget.dragOver">
             <Setter Property="BorderBrush" Value="{StaticResource KcapPrimaryBrush}" />
         </Style>

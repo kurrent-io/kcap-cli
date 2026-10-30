@@ -1280,12 +1280,13 @@ public class MainWindowSmokeTests {
     }
 
     /// Cmd+N / Ctrl+N: the window binds the advertised New session shortcut, which drops an open
-    /// workspace back to the launcher (the new-session empty state).
+    /// workspace back to the launcher (the new-session empty state) and, pressed again there,
+    /// focuses the goal and rings its card.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task New_session_shortcut_is_bound_and_returns_to_the_launcher() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var (hadWorkspace, hasMeta, hasCtrl, afterInvoke) = await AvaloniaSession.DispatchAsync(() => {
+            var (hadWorkspace, hasMeta, hasCtrl, afterInvoke, nudged, goalFocused) = await AvaloniaSession.DispatchAsync(() => {
                 var service = new FakeDaemonClientService();
                 var (actions, _) = NewActions(service);
                 var vm = new MainWindowViewModel(
@@ -1304,19 +1305,29 @@ public class MainWindowSmokeTests {
                 var meta = Bound(KeyModifiers.Meta);
                 var ctrl = Bound(KeyModifiers.Control);
 
-                window.KeyBindings.First(k => k.Gesture is { Key: Key.N } g && g.KeyModifiers.HasFlag(KeyModifiers.Meta))
-                    .Command!.Execute(null);
+                var newSession = window.KeyBindings
+                    .First(k => k.Gesture is { Key: Key.N } g && g.KeyModifiers.HasFlag(KeyModifiers.Meta)).Command!;
+                newSession.Execute(null);
                 Dispatcher.UIThread.RunJobs();
                 var after = vm.CurrentWorkspace;
+                var nudgedOnClose = window.LauncherView.IsNudgingForTesting;
+
+                window.Focus();
+                newSession.Execute(null);
+                Dispatcher.UIThread.RunJobs();
+                var ringed = !nudgedOnClose && window.LauncherView.IsNudgingForTesting;
+                var focused = window.LauncherView.GoalInput.IsFocused;
 
                 window.Close();
                 Dispatcher.UIThread.RunJobs();
-                return (had, meta, ctrl, after);
+                return (had, meta, ctrl, after, ringed, focused);
             });
             await Assert.That(hadWorkspace).IsTrue();
             await Assert.That(hasMeta).IsTrue();
             await Assert.That(hasCtrl).IsTrue();
             await Assert.That(afterInvoke).IsNull();
+            await Assert.That(nudged).IsTrue();
+            await Assert.That(goalFocused).IsTrue();
         });
     }
 

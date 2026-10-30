@@ -156,6 +156,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public const string AgentCountTip = "Agents running on this daemon";
 
     readonly BehaviorSubject<string?> _startMessageChanges = new(null);
+    readonly Subject<Unit> _launcherNudges = new();
 
     /// Constructed once at the composition root; the prompt window's onConcluded callback nudges
     /// the same instance.
@@ -216,7 +217,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public ReactiveCommand<Unit, Unit> CloseWorkspaceCommand { get; }
 
     /// Back to the launcher as the user's own navigation: it also dismisses search and releases the pin.
+    /// Pressed over the launcher already showing, it nudges the launcher so the press visibly lands.
     public ReactiveCommand<Unit, Unit> NewSessionCommand { get; }
+
+    /// Fires when New session is pressed while the launcher is already showing.
+    public IObservable<Unit> LauncherNudges => _launcherNudges.AsObservable();
 
     /// Null without a server sessions service.
     public SessionSearchViewModel? Search { get; }
@@ -760,9 +765,13 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         return true;
     }
 
+    // Closes even over the launcher: the swap bumps the navigation generation, which keeps an
+    // in-flight launch from opening its workspace over the next draft.
     void NewSession() {
+        var onLauncher = CurrentWorkspace is null && !IsSearchOpen;
         CloseSearch();
         CloseWorkspace();
+        if (onLauncher) _launcherNudges.OnNext(Unit.Default);
     }
 
     void OpenSearch() {
