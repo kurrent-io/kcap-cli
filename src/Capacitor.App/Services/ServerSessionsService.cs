@@ -388,7 +388,10 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
                 _pinRow = PinnedSessionRow.From(summary, _pinPresentation);
                 EmitSnapshot();
             } else if (fetch.Outcome == ServerReadOutcome.Unavailable) {
+                // Announced before the snapshot, as a deletion is, so the open workspace closes.
+                _dropped.OnNext(sessionId);
                 _tombstones[sessionId] = ++_deleteSeq;
+                if (_kept == sessionId) _keptRow = null;
                 MarkPinGone();
                 EmitSnapshot();
             }

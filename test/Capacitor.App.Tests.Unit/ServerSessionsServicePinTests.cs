@@ -228,6 +228,24 @@ public class ServerSessionsServicePinTests {
     }
 
     [Test]
+    public async Task Unavailable_refresh_drops_the_session_and_keeps_the_pin_id() {
+        using var rig = new Rig();
+        var dropped = ImmutableList<string>.Empty;
+        using var sub = rig.Service.Dropped.Subscribe(id => ImmutableInterlocked.Update(ref dropped, l => l.Add(id)));
+        rig.Connect();
+        await rig.PinUnlistedAsync("x", Summary("x"));
+
+        rig.Push(SessionPushKind.ActiveChanged, "x");
+        await Eventually(() => rig.Summaries.Calls.Count == 2, "refresh");
+        rig.Summaries.Fail(1, ServerReadOutcome.Unavailable);
+
+        await Eventually(() => dropped.Contains("x"), "drop announced");
+        await Assert.That(rig.Latest.Pinned).IsNull();
+        await Assert.That(rig.Latest.PinnedSessionId).IsEqualTo("x");
+        await Assert.That(rig.Service.PinnedSessionId).IsEqualTo("x");
+    }
+
+    [Test]
     public async Task Listing_row_wins_while_present_and_the_pin_rehydrates_after_it_leaves() {
         using var rig = new Rig();
         var listed = Row("x", owner: "teammate");
