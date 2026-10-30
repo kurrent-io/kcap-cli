@@ -740,28 +740,31 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         };
     }
 
-    /// Opens what a rail click on the hit's session would. A session the directory has no row for
-    /// is pinned first, and opens only if the page is still up and the intent still current when
-    /// the pin lands: Escape or another navigation in the meantime wins.
+    /// Opens what a rail click on the hit's session would, and pins the session. A listed session
+    /// opens at once and pins beside it; one the directory has no row for is pinned first, and opens
+    /// only if the page is still up and the intent still current when the pin lands.
     public async Task<SearchOpenOutcome> OpenSearchHitAsync(string sessionId, PinPresentation presentation, CancellationToken ct) {
         if (_directory is null) return SearchOpenOutcome.Failed;
-        if (_directory.RowForSession(sessionId) is not { } row) {
-            if (_sessions is null) return SearchOpenOutcome.Failed;
-            var pinned = await _sessions.PinAsync(sessionId, presentation, ct);
-            switch (pinned) {
-                case PinOutcome.Unauthorized: return SearchOpenOutcome.SignInRequired;
-                case PinOutcome.Unavailable: return SearchOpenOutcome.Unavailable;
-                case PinOutcome.Failed: return SearchOpenOutcome.Failed;
-                case PinOutcome.Superseded: return SearchOpenOutcome.Superseded;
-            }
-            var current = !ct.IsCancellationRequested && IsSearchOpen;
-            if (!current || _directory.RowForSession(sessionId) is not { } found) {
-                ReleaseUnopenedPin(sessionId);
-                return current ? SearchOpenOutcome.Failed : SearchOpenOutcome.Superseded;
-            }
-            row = found;
+        if (_directory.RowForSession(sessionId) is { } listed) {
+            if (!Navigate(listed.Id, listed.Origin, sessionId)) return SearchOpenOutcome.Failed;
+            // A failed pin only costs the session its exemption from the rail's filters later.
+            _ = _sessions?.PinAsync(sessionId, presentation, CancellationToken.None);
+            return SearchOpenOutcome.Opened;
         }
-        return Navigate(row.Id, row.Origin, sessionId) ? SearchOpenOutcome.Opened : SearchOpenOutcome.Failed;
+        if (_sessions is null) return SearchOpenOutcome.Failed;
+        var pinned = await _sessions.PinAsync(sessionId, presentation, ct);
+        switch (pinned) {
+            case PinOutcome.Unauthorized: return SearchOpenOutcome.SignInRequired;
+            case PinOutcome.Unavailable: return SearchOpenOutcome.Unavailable;
+            case PinOutcome.Failed: return SearchOpenOutcome.Failed;
+            case PinOutcome.Superseded: return SearchOpenOutcome.Superseded;
+        }
+        var current = !ct.IsCancellationRequested && IsSearchOpen;
+        if (!current || _directory.RowForSession(sessionId) is not { } found) {
+            ReleaseUnopenedPin(sessionId);
+            return current ? SearchOpenOutcome.Failed : SearchOpenOutcome.Superseded;
+        }
+        return Navigate(found.Id, found.Origin, sessionId) ? SearchOpenOutcome.Opened : SearchOpenOutcome.Failed;
     }
 
     /// A pin that landed for a session nothing opened would keep a rail row for it.

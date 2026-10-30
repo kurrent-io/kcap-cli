@@ -174,6 +174,27 @@ public class MainWindowSearchTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task A_listed_session_opened_from_search_is_pinned_and_stays_pinned_across_a_scope_switch() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            h.Sessions.Scope = RailScope.Team;
+            h.ListServer("T");
+            await h.OpenSearch();
+            var teammate = new PinPresentation("mate", "Team Mate", null);
+
+            var outcome = await h.Vm.OpenSearchHitAsync("T", teammate, CancellationToken.None);
+            h.Sessions.Scope = RailScope.Mine;
+
+            await Assert.That(outcome).IsEqualTo(SearchOpenOutcome.Opened);
+            await Assert.That(h.Vm.CurrentWorkspace!.AgentId).IsEqualTo("T");
+            await Assert.That(h.Sessions.PinCalls).IsEquivalentTo([("T", teammate)]);
+            await Assert.That(h.Sessions.PinnedSessionId).IsEqualTo("T");
+            await Assert.That(h.Sessions.UnpinCalls).IsEqualTo(0);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Rail_click_dismisses_search_and_releases_the_pin() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var h = new Harness();
