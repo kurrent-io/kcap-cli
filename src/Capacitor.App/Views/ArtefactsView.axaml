@@ -56,6 +56,37 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                    <TextBlock Text="PAGES" FontSize="11.5" FontWeight="Bold" LetterSpacing="1.2"
+                               Foreground="{StaticResource KcapMutedBrush}" Margin="10,14,0,6" />
+                    <ItemsControl x:Name="PageList" ItemsSource="{Binding Pages}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Spacing="2" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:PageRow">
+                                <Button Classes="artefactRow"
+                                        Command="{Binding $parent[ItemsControl].((vm:ArtefactsTabViewModel)DataContext).OpenPageCommand}"
+                                        CommandParameter="{Binding}" ToolTip.Tip="{Binding Url}" AutomationProperties.Name="{Binding Title}">
+                                    <StackPanel Spacing="2">
+                                        <TextBlock Text="{Binding Title}" FontSize="13" Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock FontSize="11" Foreground="{StaticResource KcapFaintBrush}" TextTrimming="CharacterEllipsis">
+                                            <TextBlock.Text>
+                                                <MultiBinding StringFormat="Page · v{0} · {1}">
+                                                    <Binding Path="LatestVersion" />
+                                                    <Binding Path="UpdatedLabel" />
+                                                </MultiBinding>
+                                            </TextBlock.Text>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Button>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock x:Name="PagesNote" Text="{Binding PagesNote}" FontSize="12" Foreground="{StaticResource KcapMutedBrush}"
+                               TextWrapping="Wrap" Margin="10,2,10,0"
+                               IsVisible="{Binding PagesNote, Converter={x:Static ObjectConverters.IsNotNull}}" />
                 </StackPanel>
             </ScrollViewer>
         </Border>
