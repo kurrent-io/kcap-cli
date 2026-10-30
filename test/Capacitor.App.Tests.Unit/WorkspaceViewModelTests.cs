@@ -28,12 +28,69 @@ public class WorkspaceViewModelTests {
             FakeDaemonClientService daemon, AgentActionService actions, FakeTerminalAttachClientFactory factory,
             FakeTimeProvider time, string agentId = "a1", IPermissionService? permissions = null,
             SessionAccessService? access = null, IPlanArtifactSource? planArtifacts = null, IUrlOpener? opener = null, IPlanSource? plans = null,
-            BackgroundCommandActivity? commands = null) =>
+            BackgroundCommandActivity? commands = null, IPageSource? pages = null) =>
         new(agentId, daemon, actions, factory.Factory, () => new FakeTerminalSurface(), time, opener ?? new RecordingOpener(),
             permissions ?? new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(),
-            new NoAttachmentUploader(), access: access, plans: plans, planArtifacts: planArtifacts, commands: commands);
+            new NoAttachmentUploader(), access: access, plans: plans, planArtifacts: planArtifacts, commands: commands, pages: pages);
+
+    static async Task ArtefactReadsSettledAsync(WorkspaceViewModel vm) {
+        await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+        await (vm.Artefacts.PendingPagesReadForTesting ?? Task.CompletedTask);
+    }
 
     const string Session = "0123456789abcdef0123456789abcdef";
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Page_published_elsewhere_appears_after_an_empty_start() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var source = new FakePlanArtifactSource();
+            var pages = new FakePageSource();
+            var time = new FakeTimeProvider();
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), time, planArtifacts: source, pages: pages);
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: Session));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await ArtefactReadsSettledAsync(vm);
+            await Assert.That(vm.ShowsArtefactsTab).IsFalse();
+            await Assert.That(vm.Artefacts.IsShown).IsFalse();
+            await Assert.That(vm.Artefacts.LastReadFailed).IsFalse();
+            var documentReads = source.Requested.Count;
+
+            pages.Enqueue(PagesReady(Page("elsewhere")));
+            time.Advance(WorkContextViewModel.PollInterval);
+            await WaitUntilAsync(() => pages.Requested.Count == 2, what: "pages read on the tick");
+            await ArtefactReadsSettledAsync(vm);
+
+            await Assert.That(vm.ShowsArtefactsTab).IsTrue();
+            await Assert.That(vm.Artefacts.Pages.Select(p => p.Title).ToArray()).IsEquivalentTo(new[] { "elsewhere" });
+            await Assert.That(source.Requested.Count).IsEqualTo(documentReads);
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Pages_only_session_shows_the_artefacts_tab() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var source = new FakePlanArtifactSource();
+            var pages = new FakePageSource();
+            pages.Enqueue(PagesReady(Page("only")));
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider(), planArtifacts: source, pages: pages);
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: Session));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await ArtefactReadsSettledAsync(vm);
+            await Assert.That(vm.Artefacts.HasAny).IsFalse();
+            await Assert.That(vm.ShowsArtefactsTab).IsTrue();
+
+            pages.Enqueue(PagesReady());
+            vm.Artefacts.RefreshPages();
+            await ArtefactReadsSettledAsync(vm);
+            await Assert.That(vm.ShowsArtefactsTab).IsFalse();
+            await vm.TeardownAsync();
+        });
+    }
 
     /// The tab exists only while the session has a document, like Pull request with its changes.
     [Test]

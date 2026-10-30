@@ -1,7 +1,9 @@
 using System.Reactive.Subjects;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Pages;
 using Capacitor.Cli.Core.Plans;
 
 namespace Capacitor.App.Tests.Unit;
@@ -33,6 +35,11 @@ static class WorkspaceFixtures {
 
     public static PlanArtifactsRead Ready(params PlanArtifactDto[] docs) =>
         new(SessionPlansReadKind.Ready, new PlanArtifactsResponseDto { Artifacts = [.. docs] });
+
+    public static ArtefactDto Page(string title, DateTimeOffset? updatedAt = null) => new(
+        "pg-" + title, title, "u1", "private", 1, updatedAt ?? DateTimeOffset.UnixEpoch, true, "https://a.kcap.ai/pages/" + title);
+
+    public static SessionPagesRead PagesReady(params ArtefactDto[] pages) => new(SessionPlansReadKind.Ready, pages);
 
     /// An AgentActionService over the scripted/recording deps, for suites that never assert on
     /// those deps individually.

@@ -274,7 +274,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             LastReads<PullRequestSnapshot>? pullRequestSnapshots = null, Action<string>? pullRequestLinksChanged = null,
             SubagentEventsReader? readSubagent = null, AccountReadings? readings = null, IMessageSenderSource? senders = null,
             IRemoteAgentsService? remoteAgents = null, IAppNotifier? notifier = null, IObservable<string?>? appSubject = null,
-            IServerSessionsService? serverSessions = null) {
+            IPageSource? pages = null, IServerSessionsService? serverSessions = null) {
         _drafts = drafts;
         _time = time;
         _permissions = permissions;
@@ -289,9 +289,9 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         _session = new BehaviorSubject<ChatSessionInfo>(SessionInfo(row, ended: row.IsEndedSession));
 
         var planActivity = new PlanActivity();
-        Artefacts = new ArtefactsTabViewModel(planArtifacts, planActivity, time, opener: opener);
+        Artefacts = new ArtefactsTabViewModel(planArtifacts, planActivity, time, pages: pages, opener: opener);
         Artefacts.OpenRequested += ShowArtefacts;
-        Artefacts.WhenAnyValue(a => a.HasAny, a => a.IsLoading, (has, loading) => has || (loading && ShowsArtefactsTab))
+        Artefacts.WhenAnyValue(a => a.HasAnyArtefacts, a => a.IsLoading, (has, loading) => has || (loading && ShowsArtefactsTab))
             .Subscribe(show => {
                 ShowsArtefactsTab = show;
                 if (!show && IsArtefactsActive) ActiveTab = RemoteTab.Chat;

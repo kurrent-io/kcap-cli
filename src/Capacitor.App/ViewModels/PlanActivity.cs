@@ -1,18 +1,22 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Pages;
 using Capacitor.Cli.Core.Plans;
 
 namespace Capacitor.App.ViewModels;
 
-/// What the chat tells the pane's plan section: that the session wrote to its plan, so the pane
-/// can re-read the server the moment a write settles instead of waiting out its poll, and whether
-/// the session is over.
+/// What the chat tells the pane: that the session wrote to its plan or published a page, so the
+/// pane can re-read the server the moment the call settles instead of waiting out its poll, and
+/// whether the session is over.
 public sealed class PlanActivity {
     readonly HashSet<string> _writes = new(StringComparer.Ordinal);
+    readonly HashSet<string> _publishes = new(StringComparer.Ordinal);
     bool _sessionOver;
 
     /// Raised once per transcript read that settled a write, however many it settled: a replayed
     /// history is a single server read, not one per task the session ever touched.
     public event Action? PlanWritten;
+    /// Raised once per transcript read that settled a successful `publish_page`.
+    public event Action? PagePublished;
     public event Action? SessionOverChanged;
 
     public bool SessionOver {
@@ -26,21 +30,34 @@ public sealed class PlanActivity {
 
     public void Apply(IEnumerable<ChatProjectionResult> lines) {
         var written = false;
+        var published = false;
         foreach (var line in lines)
             foreach (var envelope in line.Envelopes) {
                 if (envelope.ToolCallId is not { } callId) continue;
-                if (envelope.Kind == AcpEventKind.ToolCall && PlanToolNames.IsWrite(envelope.ToolName)) _writes.Add(callId);
-                else if (envelope.Kind == AcpEventKind.ToolResult && _writes.Remove(callId) && !envelope.ToolIsError) written = true;
+                if (envelope.Kind == AcpEventKind.ToolCall) {
+                    if (PlanToolNames.IsWrite(envelope.ToolName)) _writes.Add(callId);
+                    else if (PageToolNames.IsPublish(envelope.ToolName)) _publishes.Add(callId);
+                } else if (envelope.Kind == AcpEventKind.ToolResult) {
+                    if (_writes.Remove(callId)) written |= !envelope.ToolIsError;
+                    else if (_publishes.Remove(callId)) published |= !envelope.ToolIsError;
+                }
             }
-        if (!written) return;
-        // The chat applies this before it builds its own rows, so a throw from a subscriber would
-        // cost it the batch for good.
+        if (written) Raise(PlanWritten);
+        if (published) Raise(PagePublished);
+    }
+
+    /// The chat applies this before it builds its own rows, so a throw from a subscriber would
+    /// cost it the batch for good.
+    static void Raise(Action? handler) {
         try {
-            PlanWritten?.Invoke();
+            handler?.Invoke();
         } catch (Exception ex) {
             Console.Error.WriteLine($"kcap: plan activity: {ex.Message}");
         }
     }
 
-    public void Clear() => _writes.Clear();
+    public void Clear() {
+        _writes.Clear();
+        _publishes.Clear();
+    }
 }

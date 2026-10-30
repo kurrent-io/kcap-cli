@@ -199,7 +199,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             Func<string, ResumeLedgerEntry?>? resumeLedger = null, LastReads<PullRequestSnapshot>? pullRequestSnapshots = null,
             LocalTranscripts? transcripts = null, Action<string>? pullRequestLinksChanged = null, AccountReadings? readings = null,
             IMessageSenderSource? senders = null,
-            IObservable<string?>? appSubject = null, IAppNotifier? notifier = null) {
+            IObservable<string?>? appSubject = null, IPageSource? pages = null, IAppNotifier? notifier = null) {
         AgentId = agentId;
         _drafts = drafts;
         _opener = opener;
@@ -227,12 +227,12 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         var runs = _runs = new SessionRuns(time);
         commands?.Track($"local:{agentId}", runs, () => Chat?.ReleaseFeed()).DisposeWith(_disposables);
         var planActivity = new PlanActivity();
-        Artefacts = new ArtefactsTabViewModel(planArtifacts, planActivity, time, opener: opener);
+        Artefacts = new ArtefactsTabViewModel(planArtifacts, planActivity, time, pages: pages, opener: opener);
         Artefacts.OpenRequested += ShowArtefacts;
         _disposables.Add(Disposable.Create(() => Artefacts.OpenRequested -= ShowArtefacts));
         // Keep the tab while a visible session's read is in flight; do not force it on for a
-        // session that has never shown documents (that would flash the strip then hide it).
-        Artefacts.WhenAnyValue(a => a.HasAny, a => a.IsLoading, (has, loading) => has || (loading && ShowsArtefactsTab))
+        // session that has never shown an artefact (that would flash the strip then hide it).
+        Artefacts.WhenAnyValue(a => a.HasAnyArtefacts, a => a.IsLoading, (has, loading) => has || (loading && ShowsArtefactsTab))
             .Subscribe(show => {
                 ShowsArtefactsTab = show;
                 if (!show && IsArtefactsActive) ActiveTab = WorkspaceTab.Chat;

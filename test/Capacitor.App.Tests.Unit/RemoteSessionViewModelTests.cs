@@ -60,10 +60,11 @@ public class RemoteSessionViewModelTests {
 
         public RemoteSessionViewModel Build(AgentRow row, IPlanArtifactSource? planArtifacts = null,
                 Capacitor.Cli.Core.PullRequests.IPullRequestSource? pullRequests = null, IPlanSource? plans = null,
-                BackgroundCommandActivity? commands = null, SubagentEventsReader? readSubagent = null, AccountReadings? readings = null) {
+                BackgroundCommandActivity? commands = null, SubagentEventsReader? readSubagent = null, AccountReadings? readings = null,
+                IPageSource? pages = null) {
             Directory.Rows.AddOrUpdate(row);
             return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time, WorkSource, () => new FakeTerminalSurface(), planArtifacts, commands, pullRequests: pullRequests, plans: plans, readSubagent: readSubagent, readings: readings,
-                remoteAgents: Remote, notifier: Notifier, serverSessions: Sessions);
+                remoteAgents: Remote, notifier: Notifier, pages: pages, serverSessions: Sessions);
         }
 
         /// One chat poll: the pane reads its feed on the timer this harness owns.
@@ -1334,6 +1335,60 @@ public class RemoteSessionViewModelTests {
             await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
             await WaitUntilAsync(() => source.Requested.Count == 2, what: "re-read on ready");
             await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+            await vm.TeardownAsync();
+        });
+    }
+
+    static async Task ArtefactReadsSettledAsync(RemoteSessionViewModel vm) {
+        await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+        await (vm.Artefacts.PendingPagesReadForTesting ?? Task.CompletedTask);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Page_published_elsewhere_appears_after_an_empty_start() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var source = new FakePlanArtifactSource();
+            var pages = new FakePageSource();
+            var vm = h.Build(Harness.Row(sessionId: "0123456789abcdef0123456789abcdef"), source, pages: pages);
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            await ArtefactReadsSettledAsync(vm);
+            await Assert.That(vm.ShowsArtefactsTab).IsFalse();
+            await Assert.That(vm.Artefacts.IsShown).IsFalse();
+            await Assert.That(vm.Artefacts.LastReadFailed).IsFalse();
+            var documentReads = source.Requested.Count;
+            var pageReads = pages.Requested.Count;
+
+            pages.Default = PagesReady(Page("elsewhere"));
+            h.Time.Advance(WorkContextViewModel.PollInterval);
+            await WaitUntilAsync(() => pages.Requested.Count > pageReads, what: "pages read on the tick");
+            await ArtefactReadsSettledAsync(vm);
+
+            await Assert.That(vm.ShowsArtefactsTab).IsTrue();
+            await Assert.That(vm.Artefacts.Pages.Select(p => p.Title).ToArray()).IsEquivalentTo(new[] { "elsewhere" });
+            await Assert.That(source.Requested.Count).IsEqualTo(documentReads);
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Pages_only_session_shows_the_artefacts_tab() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var source = new FakePlanArtifactSource();
+            var pages = new FakePageSource { Default = PagesReady(Page("only")) };
+            var vm = h.Build(Harness.Row(sessionId: "0123456789abcdef0123456789abcdef"), source, pages: pages);
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            await ArtefactReadsSettledAsync(vm);
+            await Assert.That(vm.Artefacts.HasAny).IsFalse();
+            await Assert.That(vm.ShowsArtefactsTab).IsTrue();
+
+            pages.Default = PagesReady();
+            vm.Artefacts.RefreshPages();
+            await ArtefactReadsSettledAsync(vm);
+            await Assert.That(vm.ShowsArtefactsTab).IsFalse();
             await vm.TeardownAsync();
         });
     }

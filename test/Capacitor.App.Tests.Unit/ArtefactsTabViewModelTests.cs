@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Pages;
 using Capacitor.Cli.Core.Plans;
 using Microsoft.Extensions.Time.Testing;
 using TUnit.Assertions.Enums;
@@ -21,23 +22,31 @@ public class ArtefactsTabViewModelTests {
 
     sealed class Harness {
         public FakePlanArtifactSource Source { get; } = new();
+        public FakePageSource Pages { get; } = new();
+        public RecordingOpener Opener { get; } = new();
         public FakeTimeProvider Time { get; } = new();
         public PlanActivity Activity { get; } = new();
         public Dictionary<string, byte[]> Disk { get; } = new(StringComparer.Ordinal);
         public ArtefactsTabViewModel Vm { get; }
 
         public Harness(bool realFiles = false) => Vm = new ArtefactsTabViewModel(Source, Activity, Time,
-            realFiles ? null : path => Disk.TryGetValue(path.Replace('\\', '/'), out var bytes) ? new MemoryStream(bytes) : null);
+            realFiles ? null : path => Disk.TryGetValue(path.Replace('\\', '/'), out var bytes) ? new MemoryStream(bytes) : null,
+            Pages, Opener);
 
         public async Task SwitchAsync(string? sessionId, string? root = "/repo") {
             Vm.SwitchSession(sessionId, root);
             await SettledAsync();
         }
 
-        public Task SettledAsync() => Vm.PendingReadForTesting ?? Task.CompletedTask;
+        public Task SettledAsync() => Task.WhenAll(Vm.PendingReadForTesting ?? Task.CompletedTask, Vm.PendingPagesReadForTesting ?? Task.CompletedTask);
 
         public void WritePlan(string callId = "c1") => Activity.Apply([new ChatProjectionResult([
             new AcpEventEnvelope(Kind: AcpEventKind.ToolCall, ToolCallId: callId, ToolName: PlanToolNames.DeclareDocument),
+            new AcpEventEnvelope(Kind: AcpEventKind.ToolResult, ToolCallId: callId),
+        ], [], [])]);
+
+        public void PublishPage(string callId = "p1") => Activity.Apply([new ChatProjectionResult([
+            new AcpEventEnvelope(Kind: AcpEventKind.ToolCall, ToolCallId: callId, ToolName: "mcp__kcap-pages__publish_page"),
             new AcpEventEnvelope(Kind: AcpEventKind.ToolResult, ToolCallId: callId),
         ], [], [])]);
     }
@@ -574,6 +583,149 @@ public class ArtefactsTabViewModelTests {
 
             await h.Vm.PendingDriftForTesting!;
             await Assert.That(h.Vm.Reader!.HasNotice).IsFalse();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Pages_listed_for_the_session_newest_first() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var t1 = DateTimeOffset.UnixEpoch.AddHours(1);
+            var t2 = t1.AddHours(1);
+            h.Pages.Enqueue(PagesReady(Page("t1-page", t1), Page("t2-page", t2)));
+            await h.SwitchAsync(SessionA);
+
+            await Assert.That(h.Pages.Requested).IsEquivalentTo(new[] { SessionA });
+            await Assert.That(h.Vm.Pages.Select(p => p.Title)).IsEquivalentTo(new[] { "t2-page", "t1-page" }, CollectionOrdering.Matching);
+            await Assert.That(h.Vm.HasPages).IsTrue();
+            await Assert.That(h.Vm.HasAnyArtefacts).IsTrue();
+            await Assert.That(h.Vm.PagesNote).IsNull();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Empty_pages_read_says_no_pages_yet() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var gate = h.Pages.Gate();
+            h.Vm.SwitchSession(SessionA, "/repo");
+            await Assert.That(h.Vm.PagesNote).IsEqualTo("Loading pages…");
+            await Assert.That(h.Vm.IsLoading).IsTrue();
+
+            gate.SetResult(PagesReady());
+            await h.SettledAsync();
+
+            await Assert.That(h.Vm.PagesNote).IsEqualTo("No pages yet.");
+            await Assert.That(h.Vm.IsLoading).IsFalse();
+            await Assert.That(h.Vm.HasAnyArtefacts).IsFalse();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Unavailable_pages_read_is_not_an_empty_list() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Pages.Enqueue(SessionPagesRead.Of(SessionPlansReadKind.Unavailable));
+            await h.SwitchAsync(SessionA);
+
+            await Assert.That(h.Vm.PagesNote).IsEqualTo("Pages unavailable on this server.");
+            await Assert.That(h.Vm.Pages).IsEmpty();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Signed_out_clears_pages() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Pages.Enqueue(PagesReady(Page("a")), SessionPagesRead.Of(SessionPlansReadKind.SignedOut));
+            await h.SwitchAsync(SessionA);
+            await Assert.That(h.Vm.Pages.Count).IsEqualTo(1);
+
+            h.Vm.RefreshPages();
+            await h.SettledAsync();
+
+            await Assert.That(h.Vm.Pages).IsEmpty();
+            await Assert.That(h.Vm.HasPages).IsFalse();
+            await Assert.That(h.Vm.PagesNote).IsEqualTo("Sign in to see pages.");
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Unreachable_keeps_the_last_pages() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Pages.Enqueue(PagesReady(Page("a"), Page("b")), SessionPagesRead.Of(SessionPlansReadKind.Unreachable));
+            await h.SwitchAsync(SessionA);
+            await Assert.That(h.Vm.LastReadFailed).IsFalse();
+
+            h.Vm.RefreshPages();
+            await h.SettledAsync();
+
+            await Assert.That(h.Vm.Pages.Count).IsEqualTo(2);
+            await Assert.That(h.Vm.PagesNote).IsNull();
+            await Assert.That(h.Vm.LastReadFailed).IsTrue();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Switching_session_drops_a_late_pages_result() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var gate = h.Pages.Gate(ignoreCancellation: true);
+            h.Vm.SwitchSession(SessionA, "/repo");
+            var stale = h.Vm.PendingPagesReadForTesting!;
+
+            h.Pages.Enqueue(PagesReady(Page("b-page")));
+            await h.SwitchAsync(SessionB);
+            gate.SetResult(PagesReady(Page("a-page")));
+            await stale;
+
+            await Assert.That(h.Vm.Pages.Select(p => p.Title).ToArray()).IsEquivalentTo(new[] { "b-page" });
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Publish_page_result_refreshes_pages() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            await h.SwitchAsync(SessionA);
+            await Assert.That(h.Pages.Requested.Count).IsEqualTo(1);
+
+            h.PublishPage();
+            await h.SettledAsync();
+
+            await Assert.That(h.Pages.Requested.Count).IsEqualTo(2);
+            await Assert.That(h.Source.Requested.Count).IsEqualTo(1);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Open_page_without_viewer_opens_the_browser() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Pages.Enqueue(PagesReady(Page("a")));
+            await h.SwitchAsync(SessionA);
+            var row = h.Vm.Pages[0];
+
+            await h.Vm.OpenPageCommand.Execute(row);
+
+            await Assert.That(h.Opener.Opened).IsEquivalentTo(new[] { row.Url });
             await h.Vm.TeardownAsync();
         });
     }

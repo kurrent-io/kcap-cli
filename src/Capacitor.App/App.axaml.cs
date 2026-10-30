@@ -1193,7 +1193,7 @@ public partial class App : Application {
             resumeLedger: id => ResumeLedgerStore.For(_daemonStore, service.DaemonName).TryRead(id),
             pullRequestSnapshots: pullRequestSnapshots, transcripts: transcripts,
             pullRequestLinksChanged: pullRequestTones.Refresh, readings: readings, senders: senders,
-            appSubject: appSubject, notifier: notifier);
+            appSubject: appSubject, pages: pages, notifier: notifier);
         // The origin lookup below and this call are two reads of a cache the directory's own
         // background recompute mutates, so the row can be gone by the time this runs: no row, no
         // host, and the click opens nothing.
@@ -1205,7 +1205,7 @@ public partial class App : Application {
                     signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts, inputSending: attention.ReplySending,
                     pullRequestSnapshots: pullRequestSnapshots, pullRequestLinksChanged: pullRequestTones.Refresh, readSubagent: readSubagent,
                     readings: readings, senders: senders, remoteAgents: remoteAgents, notifier: notifier, appSubject: appSubject,
-                    serverSessions: sessions)
+                    pages: pages, serverSessions: sessions)
                 : null;
         // A session the server lists with no daemon behind it: read-only, so no terminal surface.
         RemoteSessionViewModel? BuildServer(string sessionId) =>
@@ -1215,7 +1215,7 @@ public partial class App : Application {
                     pullRequests: readers, requestSignIn: requestSignIn, linkGitHub: linkGitHub,
                     signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts, inputSending: attention.ReplySending,
                     pullRequestSnapshots: pullRequestSnapshots, pullRequestLinksChanged: pullRequestTones.Refresh, readSubagent: readSubagent,
-                    readings: readings, remoteAgents: remoteAgents, notifier: notifier, appSubject: appSubject, serverSessions: sessions)
+                    readings: readings, remoteAgents: remoteAgents, notifier: notifier, appSubject: appSubject, pages: pages, serverSessions: sessions)
                 : null;
 
         _coordinator = new MainWindowCoordinator(
