@@ -107,13 +107,13 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     void ShowArtefacts() { if (ShowsArtefactsTab) ActiveTab = RemoteTab.Artefacts; }
 
-    /// A chat card's Open: a declared document selects in the tab, a page goes to the browser.
+    /// A chat card's Open: a declared document selects in the tab, a page link goes where the tab sends it.
     internal void OpenCard(ToolCard card) {
         if (card.DocumentPath is { } path) {
             if (Artefacts.OpenDocument(path)) return;
-            if (Artefacts.HasAny) { Artefacts.RequestOpen(); return; }
+            if (Artefacts.HasAnyArtefacts) { Artefacts.RequestOpen(); return; }
         }
-        if (card.Url is { } url) LinkPolicy.Open(_opener, url);
+        if (card.Url is { } url) Artefacts.OpenLink(url);
     }
 
     string _title = "";
@@ -274,7 +274,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             LastReads<PullRequestSnapshot>? pullRequestSnapshots = null, Action<string>? pullRequestLinksChanged = null,
             SubagentEventsReader? readSubagent = null, AccountReadings? readings = null, IMessageSenderSource? senders = null,
             IRemoteAgentsService? remoteAgents = null, IAppNotifier? notifier = null, IObservable<string?>? appSubject = null,
-            IPageSource? pages = null, IServerSessionsService? serverSessions = null) {
+            IPageSource? pages = null, IServerSessionsService? serverSessions = null,
+            PageLinkRouter? pageLinks = null, IWebViewAvailability? webView = null) {
         _drafts = drafts;
         _time = time;
         _permissions = permissions;
@@ -289,7 +290,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         _session = new BehaviorSubject<ChatSessionInfo>(SessionInfo(row, ended: row.IsEndedSession));
 
         var planActivity = new PlanActivity();
-        Artefacts = new ArtefactsTabViewModel(planArtifacts, planActivity, time, pages: pages, opener: opener);
+        Artefacts = new ArtefactsTabViewModel(planArtifacts, planActivity, time, pages: pages, opener: opener, pageLinks: pageLinks, webView: webView);
         Artefacts.OpenRequested += ShowArtefacts;
         Artefacts.WhenAnyValue(a => a.HasAnyArtefacts, a => a.IsLoading, (has, loading) => has || (loading && ShowsArtefactsTab))
             .Subscribe(show => {
@@ -341,7 +342,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
                     : lane.PendingInputChanged.Where(u => u.SessionId == sid).Select(u => u.Items))),
             planActivity: planActivity, openCard: OpenCard, drafts: drafts, senders: senders,
             accountReadings: row.MachineBadge is { } daemon ? readings?.Remote(daemon) : null, usageClock: readings?.Clock,
-            signInCompleted: signInCompleted) { InputSending = inputSending };
+            signInCompleted: signInCompleted, openLink: Artefacts.OpenLink) { InputSending = inputSending };
         lane.Status.Select(s => s.Subject).DistinctUntilChanged()
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(subject => {

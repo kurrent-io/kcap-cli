@@ -102,6 +102,7 @@ public sealed class PageViewerViewModel : ReactiveObject {
 
     /// Reads the page and applies the result only if no later load has started meanwhile.
     public async Task LoadAsync(CancellationToken ct) {
+        if (IsClosed) return;
         if (!_webViewAvailable) {
             State = PageViewerState.NoWebView;
             return;
@@ -164,6 +165,20 @@ public sealed class PageViewerViewModel : ReactiveObject {
             Console.Error.WriteLine($"kcap: page results access read failed: {ex.Message}");
             return PageResultsAccess.Unknown;
         }
+    }
+
+    public bool IsClosed { get; private set; }
+
+    /// Drops the loaded page so a view still holding this model releases its bridge and WebView,
+    /// and no later load applies.
+    public void Close() {
+        if (IsClosed) return;
+        IsClosed = true;
+        _generation++;
+        PendingExternalUrl = null;
+        Page = null;
+        Nonce = null;
+        Html = null;
     }
 
     /// The WebView cannot be made safe for a page here, so the page is offered in the browser.

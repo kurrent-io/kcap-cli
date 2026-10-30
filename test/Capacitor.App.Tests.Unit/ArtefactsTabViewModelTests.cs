@@ -1,8 +1,10 @@
 using System.Reactive.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Pages;
 using Capacitor.Cli.Core.Plans;
 using Microsoft.Extensions.Time.Testing;
@@ -29,9 +31,11 @@ public class ArtefactsTabViewModelTests {
         public Dictionary<string, byte[]> Disk { get; } = new(StringComparer.Ordinal);
         public ArtefactsTabViewModel Vm { get; }
 
-        public Harness(bool realFiles = false) => Vm = new ArtefactsTabViewModel(Source, Activity, Time,
+        public Harness(bool realFiles = false, bool webView = false) => Vm = new ArtefactsTabViewModel(Source, Activity, Time,
             realFiles ? null : path => Disk.TryGetValue(path.Replace('\\', '/'), out var bytes) ? new MemoryStream(bytes) : null,
-            Pages, Opener);
+            Pages, Opener, new PageLinkRouter(() => "https://a.kcap.ai"), new FixedWebViewAvailability(webView));
+
+        public Task PageLoadedAsync() => Vm.PendingPageLoadForTesting ?? Task.CompletedTask;
 
         public async Task SwitchAsync(string? sessionId, string? root = "/repo") {
             Vm.SwitchSession(sessionId, root);
@@ -777,6 +781,181 @@ public class ArtefactsTabViewModelTests {
 
             await Assert.That(h.Opener.Opened).IsEquivalentTo(new[] { row.Url });
             await h.Vm.TeardownAsync();
+        });
+    }
+
+    static PageContentRead.Found Content(ArtefactDto page) => new(page, page.LatestVersion, "<p>x</p>");
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Selecting_a_page_shows_the_viewer_in_place_of_the_reader_and_a_document_brings_it_back() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(webView: true);
+            h.Source.Enqueue(Ready(Doc("1", "plan", "docs/p.md")));
+            h.Pages.Enqueue(PagesReady(Page("a")));
+            await h.SwitchAsync(SessionA);
+            h.Vm.OpenDocument("docs/p.md");
+            var row = h.Vm.Pages[0];
+
+            await h.Vm.OpenPageCommand.Execute(row);
+            await h.PageLoadedAsync();
+
+            await Assert.That(h.Vm.Reader).IsNull();
+            await Assert.That(h.Vm.Selected).IsNull();
+            await Assert.That(h.Vm.PageViewer!.ArtefactId).IsEqualTo(row.ArtefactId);
+            await Assert.That(row.IsSelected).IsTrue();
+            await Assert.That(h.Vm.Documents[0].IsSelected).IsFalse();
+            await Assert.That(h.Vm.ShowsReaderNote).IsFalse();
+            await Assert.That(h.Pages.ContentRequested).IsEquivalentTo(new[] { (row.ArtefactId, (int?)null) });
+            await Assert.That(h.Opener.Opened).IsEmpty();
+
+            var viewer = h.Vm.PageViewer;
+            await h.Vm.SelectCommand.Execute(h.Vm.Documents[0]);
+
+            await Assert.That(h.Vm.PageViewer).IsNull();
+            await Assert.That(viewer.IsClosed).IsTrue();
+            await Assert.That(row.IsSelected).IsFalse();
+            await Assert.That(h.Vm.Reader).IsNotNull();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_newer_version_of_the_open_page_reloads_it_once_and_an_unchanged_list_never() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(webView: true);
+            var v1 = Page("a");
+            var v2 = v1 with { LatestVersion = 2, UpdatedAt = v1.UpdatedAt.AddMinutes(1) };
+            h.Pages.Enqueue(PagesReady(v1), PagesReady(v1), PagesReady(v2), PagesReady(v2));
+            h.Pages.EnqueueContent(Content(v1), Content(v2));
+            await h.SwitchAsync(SessionA);
+            await h.Vm.OpenPageCommand.Execute(h.Vm.Pages[0]);
+            await h.PageLoadedAsync();
+            var viewer = h.Vm.PageViewer!;
+
+            h.Vm.RefreshPages();
+            await h.SettledAsync();
+            await h.PageLoadedAsync();
+            await Assert.That(h.Pages.ContentRequested.Count).IsEqualTo(1);
+
+            h.Vm.RefreshPages();
+            await h.SettledAsync();
+            await h.PageLoadedAsync();
+            await Assert.That(h.Pages.ContentRequested.Count).IsEqualTo(2);
+            await Assert.That(h.Vm.PageViewer).IsSameReferenceAs(viewer);
+            await Assert.That(viewer.Version).IsEqualTo(2);
+            await Assert.That(h.Vm.Pages[0].IsSelected).IsTrue();
+
+            h.Vm.RefreshPages();
+            await h.SettledAsync();
+            await h.PageLoadedAsync();
+            await Assert.That(h.Pages.ContentRequested.Count).IsEqualTo(2);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_page_published_while_one_is_open_reloads_it_when_its_version_grew() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(webView: true);
+            var v1 = Page("a");
+            var v2 = v1 with { LatestVersion = 2, UpdatedAt = v1.UpdatedAt.AddMinutes(1) };
+            h.Pages.Enqueue(PagesReady(v1), PagesReady(v2));
+            h.Pages.EnqueueContent(Content(v1), Content(v2));
+            await h.SwitchAsync(SessionA);
+            await h.Vm.OpenPageCommand.Execute(h.Vm.Pages[0]);
+            await h.PageLoadedAsync();
+
+            h.PublishPage();
+            await h.SettledAsync();
+            await h.PageLoadedAsync();
+
+            await Assert.That(h.Pages.ContentRequested.Count).IsEqualTo(2);
+            await Assert.That(h.Vm.PageViewer!.Version).IsEqualTo(2);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Opening_an_unlisted_page_shows_the_viewer_and_asks_for_the_tab() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(webView: true);
+            await h.SwitchAsync(SessionA);
+            var asked = 0;
+            h.Vm.OpenRequested += () => asked++;
+
+            h.Vm.OpenPage("elsewhere", "https://a.kcap.ai/pages/elsewhere");
+            await h.PageLoadedAsync();
+
+            await Assert.That(h.Vm.PageViewer!.ArtefactId).IsEqualTo("elsewhere");
+            await Assert.That(h.Vm.PageViewer.BrowserUrl).IsEqualTo("https://a.kcap.ai/pages/elsewhere");
+            await Assert.That(h.Vm.HasAnyArtefacts).IsTrue();
+            await Assert.That(asked).IsEqualTo(1);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_link_on_the_profile_server_opens_in_the_viewer_and_any_other_in_the_browser() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(webView: true);
+            await h.SwitchAsync(SessionA);
+
+            h.Vm.OpenLink("https://evil.test/pages/x");
+            await Assert.That(h.Vm.PageViewer).IsNull();
+            await Assert.That(h.Opener.Opened).IsEquivalentTo(new[] { "https://evil.test/pages/x" });
+
+            h.Vm.OpenLink("https://a.kcap.ai/pages/x");
+            await h.PageLoadedAsync();
+            await Assert.That(h.Vm.PageViewer!.ArtefactId).IsEqualTo("x");
+            await Assert.That(h.Opener.Opened.Count).IsEqualTo(1);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Without_a_webview_a_row_and_a_link_open_the_browser_and_read_nothing() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(webView: false);
+            h.Pages.Enqueue(PagesReady(Page("a")));
+            await h.SwitchAsync(SessionA);
+            var row = h.Vm.Pages[0];
+
+            await h.Vm.OpenPageCommand.Execute(row);
+            h.Vm.OpenLink("https://a.kcap.ai/pages/x");
+
+            await Assert.That(h.Opener.Opened).IsEquivalentTo(new[] { row.Url, "https://a.kcap.ai/pages/x" });
+            await Assert.That(h.Vm.PageViewer).IsNull();
+            await Assert.That(h.Pages.ContentRequested).IsEmpty();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Switching_session_and_teardown_close_the_open_page() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(webView: true);
+            await h.SwitchAsync(SessionA);
+            h.Vm.OpenPage("x", "https://a.kcap.ai/pages/x");
+            await h.PageLoadedAsync();
+            var first = h.Vm.PageViewer!;
+
+            await h.SwitchAsync(SessionB);
+            await Assert.That(h.Vm.PageViewer).IsNull();
+            await Assert.That(first.IsClosed).IsTrue();
+            await Assert.That(h.Vm.HasAnyArtefacts).IsFalse();
+
+            h.Vm.OpenPage("y", "https://a.kcap.ai/pages/y");
+            var second = h.Vm.PageViewer!;
+            await h.Vm.TeardownAsync();
+            await Assert.That(h.Vm.PageViewer).IsNull();
+            await Assert.That(second.IsClosed).IsTrue();
         });
     }
 }

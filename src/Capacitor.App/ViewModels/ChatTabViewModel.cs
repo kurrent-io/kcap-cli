@@ -711,12 +711,12 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             IObservable<bool>? localDaemonOnAppServer = null, PlanActivity? planActivity = null,
             Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null, LocalTranscripts? transcripts = null,
             IMessageSenderSource? senders = null, IObservable<AccountsSnapshotDto?>? accountReadings = null,
-            IObservable<DateTimeOffset>? usageClock = null, IObservable<Unit>? signInCompleted = null)
+            IObservable<DateTimeOffset>? usageClock = null, IObservable<Unit>? signInCompleted = null, Action<string>? openLink = null)
         : this(agentId, AgentOrigin.Local, LocalSession(agentId, daemon), daemon.Snapshots.Select(s => s.Daemon.SupportedVendors),
                input, uploader, projection is null ? null : LocalFeed(agentId, projection, time, transcripts), opener, time, permissions,
                runs, unavailableNote, null, sessionId, localDaemonOnAppServer, planActivity: planActivity, openCard: openCard,
                drafts: drafts, senders: senders, accountReadings: accountReadings, usageClock: usageClock,
-               signInCompleted: signInCompleted) { }
+               signInCompleted: signInCompleted, openLink: openLink) { }
 
     public ChatTabViewModel(
             string agentId, AgentOrigin origin, IObservable<ChatSessionInfo> session, IObservable<string[]?> supportedVendors,
@@ -726,7 +726,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             IObservable<IReadOnlyList<QueuedInputItem>>? serverQueue = null, PlanActivity? planActivity = null,
             Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null, IMessageSenderSource? senders = null,
             IObservable<AccountsSnapshotDto?>? accountReadings = null, IObservable<DateTimeOffset>? usageClock = null,
-            IObservable<Unit>? signInCompleted = null) {
+            IObservable<Unit>? signInCompleted = null, Action<string>? openLink = null) {
         _drafts = drafts;
         _origin = origin;
         _agentId = agentId;
@@ -1000,7 +1000,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             () => _input.InterruptAsync(_lifetimeToken), this.WhenAnyValue(x => x.ShowsInterrupt));
         _disposables.Add(InterruptCommand);
 
-        OpenLinkCommand = ReactiveCommand.Create<string>(url => LinkPolicy.Open(_opener, url));
+        OpenLinkCommand = ReactiveCommand.Create<string>(openLink ?? (url => LinkPolicy.Open(_opener, url)));
         _disposables.Add(OpenLinkCommand);
 
         OpenAttachmentCommand = ReactiveCommand.Create<UserAttachment>(OpenAttachment);

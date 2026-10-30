@@ -1180,6 +1180,8 @@ public partial class App : Application {
         // Workspace links only: the explicit "Open in web" actions keep the browser.
         var workspaceOpener = new AgentLinkOpener(opener, profiles?.Resolution.ServerUrl,
             agentId => _coordinator?.Window?.DataContext is MainWindowViewModel vm && vm.OpenSession(agentId));
+        var pageLinks = new PageLinkRouter(() => profiles?.Resolution.ServerUrl);
+        var webView = new WebViewAvailability();
         var drafts = new ComposerDrafts();
         var transcripts = new LocalTranscripts();
         var readings = new AccountReadings(accounts.Snapshot, remoteAgents.DrawableDaemonAccounts, UsageClock.Create(_time));
@@ -1194,7 +1196,7 @@ public partial class App : Application {
             resumeLedger: id => ResumeLedgerStore.For(_daemonStore, service.DaemonName).TryRead(id),
             pullRequestSnapshots: pullRequestSnapshots, transcripts: transcripts,
             pullRequestLinksChanged: pullRequestTones.Refresh, readings: readings, senders: senders,
-            appSubject: appSubject, pages: pages, notifier: notifier);
+            appSubject: appSubject, pages: pages, notifier: notifier, pageLinks: pageLinks, webView: webView);
         // The origin lookup below and this call are two reads of a cache the directory's own
         // background recompute mutates, so the row can be gone by the time this runs: no row, no
         // host, and the click opens nothing.
@@ -1206,7 +1208,7 @@ public partial class App : Application {
                     signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts, inputSending: attention.ReplySending,
                     pullRequestSnapshots: pullRequestSnapshots, pullRequestLinksChanged: pullRequestTones.Refresh, readSubagent: readSubagent,
                     readings: readings, senders: senders, remoteAgents: remoteAgents, notifier: notifier, appSubject: appSubject,
-                    pages: pages, serverSessions: sessions)
+                    pages: pages, serverSessions: sessions, pageLinks: pageLinks, webView: webView)
                 : null;
         // A session the server lists with no daemon behind it: read-only, so no terminal surface.
         RemoteSessionViewModel? BuildServer(string sessionId) =>
@@ -1216,7 +1218,8 @@ public partial class App : Application {
                     pullRequests: readers, requestSignIn: requestSignIn, linkGitHub: linkGitHub,
                     signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts, inputSending: attention.ReplySending,
                     pullRequestSnapshots: pullRequestSnapshots, pullRequestLinksChanged: pullRequestTones.Refresh, readSubagent: readSubagent,
-                    readings: readings, remoteAgents: remoteAgents, notifier: notifier, appSubject: appSubject, pages: pages, serverSessions: sessions)
+                    readings: readings, remoteAgents: remoteAgents, notifier: notifier, appSubject: appSubject, pages: pages, serverSessions: sessions,
+                    pageLinks: pageLinks, webView: webView)
                 : null;
 
         _coordinator = new MainWindowCoordinator(
