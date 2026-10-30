@@ -515,6 +515,21 @@ public class RemoteSessionViewModelTests {
         });
     }
 
+    /// Below full access the chat pane, and the composer in it, is hidden, so the note carries the reason.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_ended_row_below_full_access_says_why_it_cannot_be_handed_off() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            using var handoff = new HandoffComposerFixture();
+            var vm = h.Build(Harness.ServerRow("s1") with { AccessLevel = "overview" }, handoff: handoff.Build);
+
+            await Assert.That(vm.AccessNote).IsEqualTo(
+                "Shared with you at overview access only · open it in web · You need full access to this session to hand it off");
+            await vm.TeardownAsync();
+        });
+    }
+
     [Test]
     public async Task Open_in_web_on_a_session_only_workspace_opens_the_session_page() {
         await RunOnUiAsync(async () => {

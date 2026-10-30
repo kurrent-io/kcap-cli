@@ -254,8 +254,11 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     public string AccessNote => OriginChangedToLocal ? OriginChangedNote : Access switch {
         RemoteSessionAccess.Connecting => "Connecting to the session…",
+        // The chat pane, and the hand-off composer in it, is hidden here, so the note carries its reason.
         RemoteSessionAccess.Denied when IsSessionOnly && _row.AccessLevel is { Length: > 0 } level && level != "full" =>
-            $"Shared with you at {level} access only · open it in web",
+            SessionEnded && _handoffFactory is not null
+                ? $"Shared with you at {level} access only · open it in web · {HandoffComposerViewModel.NeedsFullAccess}"
+                : $"Shared with you at {level} access only · open it in web",
         RemoteSessionAccess.Denied => "You no longer have access to this session",
         RemoteSessionAccess.Offline => "Not connected to the server",
         RemoteSessionAccess.NoSession => !SessionEnded ? "Waiting for the session to start"
