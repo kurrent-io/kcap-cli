@@ -19,7 +19,7 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
     public const int PlansReadCap = 20;
 
     public async Task<TakeoverResult> RunAsync(
-            HttpClient client, string baseUrl, string previous, string current, bool force, CancellationToken ct = default) {
+            HttpClient client, string baseUrl, string previous, string current, TakeoverAdmission admission, CancellationToken ct = default) {
         if (WorkContextIds.CanonicalSessionId(previous) is not { } previousWire || SessionId.Parse(previousWire) is not { } previousId)
             return new TakeoverResult.Refused($"'{previous}' is not a session id.");
 
@@ -29,6 +29,18 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
         if (previousWire == currentWire)
             return new TakeoverResult.Refused("A session cannot continue itself: name the session whose work this one takes over.");
 
+        var outcome = new JsonObject { ["continued_from"] = previousWire };
+
+        try {
+            return await RunAsync(client, baseUrl, previous, previousWire, previousId, currentWire, admission, outcome, ct);
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            return new TakeoverResult.Interrupted(outcome, TakeoverResult.Interrupted.Cancelled);
+        }
+    }
+
+    async Task<TakeoverResult> RunAsync(
+            HttpClient client, string baseUrl, string previous, string previousWire, SessionId previousId, string currentWire,
+            TakeoverAdmission admission, JsonObject outcome, CancellationToken ct) {
         var escaped = Uri.EscapeDataString(previousWire);
 
         var (summary, summaryError) = await ReadAsync(client, $"{baseUrl}/api/sessions/{escaped}/summary", ct);
@@ -45,8 +57,10 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
 
         local.Reap();
 
-        var (liveness, refusal) = Judge(previous, local.Liveness(previousId), ParseObject(await summary.Content.ReadAsStringAsync(ct)), force);
+        var (liveness, refusal) = Judge(previous, local.Liveness(previousId), ParseObject(await summary.Content.ReadAsStringAsync(ct)), admission);
         if (refusal is not null) return new TakeoverResult.Refused(refusal);
+
+        outcome["liveness"] = liveness;
 
         var itemsRead = ReadAsync(client, $"{baseUrl}/api/work-items/session/{escaped}", ct);
         var plansRead = ReadAsync(client, $"{baseUrl}/api/sessions/{escaped}/plans", ct);
@@ -58,25 +72,50 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
         if (items?.StatusCode == HttpStatusCode.Unauthorized || plans?.StatusCode == HttpStatusCode.Unauthorized)
             return new TakeoverResult.Unauthorized();
 
-        var writes  = new WriteCount();
-        var outcome = new JsonObject {
-            ["continued_from"] = previousWire,
-            ["liveness"]       = liveness,
-            ["work_items"]     = await AttachWorkItemsAsync(client, baseUrl, items, itemsError, currentWire, writes, ct),
-        };
+        // Every entry is listed before the first write, so an interrupted run still names what it never reached.
+        var (workItems, declares) = await ReadWorkItemsAsync(items, itemsError, currentWire, ct);
+        outcome["work_items"] = workItems;
+        var adoptions = await ReadPlansAsync(baseUrl, plans, plansError, currentWire, outcome, ct);
+        outcome["loose_end_claims"] = Unknown();
 
-        await AdoptPlansAsync(client, baseUrl, plans, plansError, currentWire, outcome, writes, ct);
-        outcome["loose_end_claims"] = await AdoptClaimsAsync(client, baseUrl, previousWire, currentWire, writes, ct);
+        var state = new RunState();
+
+        foreach (var (entry, body) in declares) {
+            if (state.Stopped(ct)) break;
+            await WriteAsync(client, $"{baseUrl}/api/work-items/declare", body, entry, state, ct);
+        }
+
+        string? currentPlan = null;
+
+        foreach (var (planId, url, body, entry) in adoptions) {
+            if (state.Stopped(ct)) break;
+            if (await WriteAsync(client, url, body, entry, state, ct)) currentPlan = planId;
+        }
+
+        if (currentPlan is not null) outcome["current_plan_id"] = currentPlan;
+
+        if (!state.Stopped(ct)) outcome["loose_end_claims"] = await AdoptClaimsAsync(client, baseUrl, previousWire, currentWire, state, ct);
+
+        if (state.Unauthorized) outcome["unauthorized"] = true;
+
+        if (state.Interruption is { } code) return new TakeoverResult.Interrupted(outcome, code);
 
         var readFailed = Str(outcome["work_items"]?["status"]) == "failed" || outcome["plans_error"] is not null;
 
-        if (writes.Unauthorized) outcome["unauthorized"] = true;
-
-        return new TakeoverResult.Completed(outcome, Unsuccessful: writes.Failed > 0 || readFailed, writes.Unauthorized);
+        return new TakeoverResult.Completed(outcome, Unsuccessful: state.Failed > 0 || readFailed, state.Unauthorized);
     }
 
-    (string Liveness, string? Refusal) Judge(string previous, SessionLiveness here, JsonObject? summary, bool force) {
-        if (force) return ("forced", null);
+    (string Liveness, string? Refusal) Judge(string previous, SessionLiveness here, JsonObject? summary, TakeoverAdmission admission) {
+        var ended = string.Equals(Str(summary?["status"]), "ended", StringComparison.OrdinalIgnoreCase);
+
+        switch (admission) {
+            case TakeoverAdmission.Forced:
+                return ("forced", null);
+            case TakeoverAdmission.EndedOnly when here == SessionLiveness.Running:
+                return ("running", $"Session {previous} is still running on this machine.");
+            case TakeoverAdmission.EndedOnly:
+                return ended ? ("ended", null) : ("active", $"Session {previous} is no longer ended.");
+        }
 
         switch (here) {
             case SessionLiveness.Running:
@@ -85,7 +124,7 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
                 return ("exited", null);
         }
 
-        if (string.Equals(Str(summary?["status"]), "ended", StringComparison.OrdinalIgnoreCase)) return ("ended", null);
+        if (ended) return ("ended", null);
 
         var lastSeen = Time(summary?["last_event_at"]) ?? Time(summary?["started_at"]);
         if (lastSeen is { } seen && time.GetUtcNow() - seen > StaleAfter) return ("stale", null);
@@ -95,21 +134,23 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
         return ("active", $"Session {previous} still looks active (last event {when}) and did not run on this machine. If its agent is gone, ask the user, then retry with force.");
     }
 
-    static async Task<JsonObject> AttachWorkItemsAsync(
-            HttpClient client, string baseUrl, HttpResponseMessage? read, string? readError, string current, WriteCount writes, CancellationToken ct) {
+    static async Task<(JsonObject Section, List<(JsonObject Entry, JsonObject Body)> Declares)> ReadWorkItemsAsync(
+            HttpResponseMessage? read, string? readError, string current, CancellationToken ct) {
+        var declares = new List<(JsonObject, JsonObject)>();
+
         if (read is null)
-            return new JsonObject { ["status"] = "failed", ["error"] = readError, ["items"] = new JsonArray() };
+            return (new JsonObject { ["status"] = "failed", ["error"] = readError, ["items"] = new JsonArray() }, declares);
 
         var body = await read.Content.ReadAsStringAsync(ct);
 
         if (read.StatusCode == HttpStatusCode.Forbidden && WorkContextReader.IsPlanGate((int)read.StatusCode, ParseWorkItemError(body)))
-            return new JsonObject { ["status"] = "not_in_plan", ["items"] = new JsonArray() };
+            return (new JsonObject { ["status"] = "not_in_plan", ["items"] = new JsonArray() }, declares);
 
         if (!read.IsSuccessStatusCode)
-            return new JsonObject { ["status"] = "failed", ["error"] = $"HTTP {(int)read.StatusCode}", ["items"] = new JsonArray() };
+            return (new JsonObject { ["status"] = "failed", ["error"] = $"HTTP {(int)read.StatusCode}", ["items"] = new JsonArray() }, declares);
 
         if (ParseArray(body) is not { } list)
-            return new JsonObject { ["status"] = "failed", ["error"] = MalformedResponse, ["items"] = new JsonArray() };
+            return (new JsonObject { ["status"] = "failed", ["error"] = MalformedResponse, ["items"] = new JsonArray() }, declares);
 
         var attached = new JsonArray();
 
@@ -117,36 +158,33 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
         foreach (var item in list.OrderBy(i => IsTrue(i?["is_primary"])).ToList()) {
             if (Str(item?["work_item_id"]) is not { } workItemId) continue;
 
-            var entry = new JsonObject { ["work_item_id"] = workItemId, ["label"] = Str(item?["label"]) ?? workItemId };
-            var declare = new JsonObject { ["session_id"] = current, ["work_item_id"] = workItemId };
-
-            await WriteAsync(client, $"{baseUrl}/api/work-items/declare", declare, entry, writes, ct);
+            var entry = new JsonObject { ["work_item_id"] = workItemId, ["label"] = Str(item?["label"]) ?? workItemId, ["attached"] = null };
+            declares.Add((entry, new JsonObject { ["session_id"] = current, ["work_item_id"] = workItemId }));
             attached.Add((JsonNode?)entry);
         }
 
-        return new JsonObject { ["status"] = "ok", ["items"] = attached };
+        return (new JsonObject { ["status"] = "ok", ["items"] = attached }, declares);
     }
 
-    static async Task AdoptPlansAsync(
-            HttpClient client, string baseUrl, HttpResponseMessage? read, string? readError, string current, JsonObject outcome, WriteCount writes, CancellationToken ct) {
-        var adopted = new JsonArray();
-        var skipped = new JsonArray();
+    static async Task<List<(string PlanId, string Url, JsonObject Body, JsonObject Entry)>> ReadPlansAsync(
+            string baseUrl, HttpResponseMessage? read, string? readError, string current, JsonObject outcome, CancellationToken ct) {
+        var adoptions = new List<(string, string, JsonObject, JsonObject)>();
+        var adopted   = new JsonArray();
+        var skipped   = new JsonArray();
         outcome["plans"]         = adopted;
         outcome["skipped_plans"] = skipped;
 
         if (read is null || !read.IsSuccessStatusCode) {
             outcome["plans_error"] = read is null ? readError : $"HTTP {(int)read.StatusCode}";
-            return;
+            return adoptions;
         }
 
         if (ParseArray(await read.Content.ReadAsStringAsync(ct)) is not { } list) {
             outcome["plans_error"] = MalformedResponse;
-            return;
+            return adoptions;
         }
 
         if (list.Count >= PlansReadCap) outcome["plans_truncated"] = true;
-
-        string? currentPlan = null;
 
         // The previous session's current plan goes last, so it ends up current on this one too.
         var plans = list
@@ -177,7 +215,7 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
             var taskId = Str(task["task_id"])!;
             var status = Str(task["status"])!;
             var entry  = new JsonObject {
-                ["plan_id"] = planId, ["task_id"] = taskId, ["title"] = Str(task["title"]), ["status"] = status,
+                ["plan_id"] = planId, ["task_id"] = taskId, ["title"] = Str(task["title"]), ["status"] = status, ["attached"] = null,
             };
 
             // Status and note both go back unchanged: the server compares the two, so anything less
@@ -186,23 +224,23 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
             if (task["note"] is JsonValue noteValue && noteValue.TryGetValue(out string? note) && note is not null) update["note"] = note;
 
             var url = $"{baseUrl}/api/plans/{Uri.EscapeDataString(planId)}/tasks/{Uri.EscapeDataString(taskId)}";
-            if (await WriteAsync(client, url, update, entry, writes, ct)) currentPlan = planId;
-
+            adoptions.Add((planId, url, update, entry));
             adopted.Add((JsonNode?)entry);
         }
 
-        if (currentPlan is not null) outcome["current_plan_id"] = currentPlan;
+        return adoptions;
     }
 
     static async Task<JsonObject> AdoptClaimsAsync(
-            HttpClient client, string baseUrl, string previous, string current, WriteCount writes, CancellationToken ct) {
+            HttpClient client, string baseUrl, string previous, string current, RunState writes, CancellationToken ct) {
         var result = (JsonObject)JsonNode.Parse("""{"status":"failed","results":[]}""")!;
-        writes.Attempted++;
         try {
             var body = $"{{\"previous_session_id\":\"{JsonEncodedText.Encode(previous)}\",\"session_id\":\"{JsonEncodedText.Encode(current)}\"}}";
             using var response = await client.PostAsync($"{baseUrl}/api/loose-ends/adopt", new StringContent(body, Encoding.UTF8, "application/json"), ct);
             var json = ParseObject(await response.Content.ReadAsStringAsync(ct));
             var code = Str(json?["code"]);
+            if (response.StatusCode == HttpStatusCode.Conflict && code == TakeoverResult.Interrupted.ReservationLost)
+                writes.Interruption = TakeoverResult.Interrupted.ReservationLost;
             if (!response.IsSuccessStatusCode) {
                 if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed && code is null) {
                     result["status"] = JsonString("unsupported");
@@ -225,12 +263,17 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
             } else {
                 result["error"] = JsonString(MalformedResponse);
             }
-        } catch (Exception ex) when (ex is HttpRequestException || ex is OperationCanceledException && !ct.IsCancellationRequested) {
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            writes.Interruption = TakeoverResult.Interrupted.Cancelled;
+            return Unknown();
+        } catch (Exception ex) when (ex is HttpRequestException || ex is OperationCanceledException) {
             result["error"] = JsonString("Claim adoption could not be confirmed. Inspect the ledger before retrying.");
         }
         writes.Failed++;
         return result;
     }
+
+    static JsonObject Unknown() => new() { ["status"] = "unknown" };
 
     static JsonNode JsonString(string value) => JsonNode.Parse($"\"{JsonEncodedText.Encode(value)}\"")!;
 
@@ -252,9 +295,8 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
         return mine.FirstOrDefault(t => Str(t["status"]) == "in_progress") ?? mine.FirstOrDefault();
     }
 
-    static async Task<bool> WriteAsync(HttpClient client, string url, JsonObject body, JsonObject entry, WriteCount writes, CancellationToken ct) {
-        writes.Attempted++;
-
+    /// <summary>A write cut off by <paramref name="ct"/> leaves <c>attached</c> null: the server may or may not have applied it.</summary>
+    static async Task<bool> WriteAsync(HttpClient client, string url, JsonObject body, JsonObject entry, RunState writes, CancellationToken ct) {
         try {
             using var response = await client.PostAsync(url, new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"), ct);
 
@@ -265,7 +307,17 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
 
             entry["error"] = $"HTTP {(int)response.StatusCode}";
             if (response.StatusCode == HttpStatusCode.Unauthorized) writes.Unauthorized = true;
-        } catch (Exception ex) when (ex is HttpRequestException || ex is OperationCanceledException && !ct.IsCancellationRequested) {
+
+            if (response.StatusCode == HttpStatusCode.Conflict &&
+                Str(ParseObject(await response.Content.ReadAsStringAsync(ct))?["code"]) == TakeoverResult.Interrupted.ReservationLost) {
+                entry["error"] = $"HTTP 409 — {TakeoverResult.Interrupted.ReservationLost}";
+                writes.Interruption = TakeoverResult.Interrupted.ReservationLost;
+            }
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            entry["attached"] = null;
+            writes.Interruption = TakeoverResult.Interrupted.Cancelled;
+            return false;
+        } catch (Exception ex) when (ex is HttpRequestException || ex is OperationCanceledException) {
             entry["error"] = ex.Message;
         }
 
@@ -304,9 +356,14 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
     static DateTimeOffset? Time(JsonNode? node) =>
         Str(node) is { } s && DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var t) ? t : null;
 
-    sealed class WriteCount {
-        public int Attempted;
+    sealed class RunState {
         public int Failed;
         public bool Unauthorized;
+        public string? Interruption;
+
+        public bool Stopped(CancellationToken ct) {
+            if (Interruption is null && ct.IsCancellationRequested) Interruption = TakeoverResult.Interrupted.Cancelled;
+            return Interruption is not null;
+        }
     }
 }

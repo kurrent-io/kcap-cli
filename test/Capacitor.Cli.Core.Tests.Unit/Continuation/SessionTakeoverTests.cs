@@ -32,9 +32,11 @@ public class SessionTakeoverTests {
         return routes;
     }
 
-    async Task<TakeoverResult> Run(Routes routes, bool force = false, string previous = Previous, string current = Current) {
+    async Task<TakeoverResult> Run(
+            Routes routes, TakeoverAdmission admission = TakeoverAdmission.Judged, string previous = Previous, string current = Current,
+            CancellationToken ct = default) {
         using var client = new HttpClient(routes);
-        return await new SessionTakeover(Local, TimeProvider.System).RunAsync(client, Base, previous, current, force);
+        return await new SessionTakeover(Local, TimeProvider.System).RunAsync(client, Base, previous, current, admission, ct);
     }
 
     static JsonObject Outcome(TakeoverResult r) => ((TakeoverResult.Completed)r).Outcome;
@@ -94,7 +96,7 @@ public class SessionTakeoverTests {
     [Test]
     public async Task Force_overrides_a_live_local_claim() {
         Local.Set(Previous, SessionLiveness.Running);
-        var r = await Run(Server(Active(TimeSpan.FromMinutes(5))), force: true);
+        var r = await Run(Server(Active(TimeSpan.FromMinutes(5))), TakeoverAdmission.Forced);
         await Assert.That(Outcome(r)["liveness"]!.GetValue<string>()).IsEqualTo("forced");
     }
 
@@ -544,6 +546,111 @@ public class SessionTakeoverTests {
         await Assert.That(o["plans_error"]!.GetValue<string>()).Contains("500");
     }
 
+    [Test]
+    public async Task EndedOnly_refuses_a_stale_active_source() {
+        var routes = Server(Active(TimeSpan.FromHours(2)));
+
+        var r = await Run(routes, TakeoverAdmission.EndedOnly);
+
+        await Assert.That(((TakeoverResult.Refused)r).Reason).IsEqualTo($"Session {Previous} is no longer ended.");
+        await Assert.That(routes.Posts.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task EndedOnly_refuses_a_source_running_here() {
+        Local.Set(Previous, SessionLiveness.Running);
+        var routes = Server(Ended());
+
+        var r = await Run(routes, TakeoverAdmission.EndedOnly);
+
+        await Assert.That(((TakeoverResult.Refused)r).Reason).Contains("running on this machine");
+        await Assert.That(routes.Posts.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task EndedOnly_admits_an_ended_source() {
+        var r = await Run(Server(Ended()), TakeoverAdmission.EndedOnly);
+        await Assert.That(Outcome(r)["liveness"]!.GetValue<string>()).IsEqualTo("ended");
+    }
+
+    /// <summary>A local exit record is not enough on its own: only the server's word that the source ended admits it.</summary>
+    [Test]
+    public async Task EndedOnly_refuses_a_local_exit_the_server_still_shows_active() {
+        DeadClaim(Previous);
+        var r = await Run(Server(Active(TimeSpan.FromMinutes(1))), TakeoverAdmission.EndedOnly);
+        await Assert.That(r).IsTypeOf<TakeoverResult.Refused>();
+    }
+
+    [Test]
+    public async Task Cancellation_mid_run_returns_what_was_carried() {
+        using var cts = new CancellationTokenSource();
+        var routes = Server(Ended(),
+            items: """[{"work_item_id":"w1","label":"One"},{"work_item_id":"w2","label":"Two"}]""",
+            plans: $"[{Plan("p1", true, $"[{Task("t1", 1, "pending")}]")}]");
+        routes.Post("/api/work-items/declare", 200, "{}");
+        routes.Post("/api/plans/p1/tasks/t1", 200, "{}");
+        var declares = 0;
+        routes.BeforeSend = path => {
+            if (path == "/api/work-items/declare" && ++declares == 2) cts.Cancel();
+        };
+
+        var r = await Run(routes, ct: cts.Token);
+
+        var interrupted = (TakeoverResult.Interrupted)r;
+        await Assert.That(interrupted.Code).IsEqualTo("cancelled");
+        var items = interrupted.Outcome["work_items"]!["items"]!.AsArray();
+        await Assert.That(items[0]!["attached"]!.GetValue<bool>()).IsTrue();
+        await Assert.That(items[1]!.AsObject().ContainsKey("attached")).IsTrue();
+        await Assert.That(items[1]!["attached"]).IsNull();
+        var plan = interrupted.Outcome["plans"]!.AsArray()[0]!.AsObject();
+        await Assert.That(plan.ContainsKey("attached")).IsTrue();
+        await Assert.That(plan["attached"]).IsNull();
+        await Assert.That(interrupted.Outcome["loose_end_claims"]!["status"]!.GetValue<string>()).IsEqualTo("unknown");
+        await Assert.That(routes.Posts.Count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task A_409_reservation_lost_stops_the_run() {
+        var routes = Server(Ended(),
+            items: """[{"work_item_id":"w1","label":"One"},{"work_item_id":"w2","label":"Two"}]""",
+            plans: $"[{Plan("p1", true, $"[{Task("t1", 1, "pending")}]")}]");
+        routes.Post("/api/work-items/declare", 409, """{"code":"source_reservation_lost"}""");
+        routes.Post("/api/plans/p1/tasks/t1", 200, "{}");
+
+        var r = await Run(routes);
+
+        var interrupted = (TakeoverResult.Interrupted)r;
+        await Assert.That(interrupted.Code).IsEqualTo("source_reservation_lost");
+        await Assert.That(routes.Posts.Count).IsEqualTo(1);
+        await Assert.That(interrupted.Outcome["work_items"]!["items"]!.AsArray()[1]!["attached"]).IsNull();
+        await Assert.That(interrupted.Outcome["loose_end_claims"]!["status"]!.GetValue<string>()).IsEqualTo("unknown");
+    }
+
+    [Test]
+    public async Task A_409_on_claim_adoption_ends_the_run_as_reservation_lost() {
+        var routes = Server(Ended());
+        routes.Post("/api/loose-ends/adopt", 409, """{"code":"source_reservation_lost"}""");
+
+        var r = await Run(routes);
+
+        await Assert.That(((TakeoverResult.Interrupted)r).Code).IsEqualTo("source_reservation_lost");
+    }
+
+    /// <summary>Only the fence's own code ends the run: any other conflict is an ordinary failed write.</summary>
+    [Test]
+    public async Task A_409_with_another_code_is_an_ordinary_failed_write() {
+        var routes = Server(Ended(),
+            items: """[{"work_item_id":"w1","label":"One"}]""",
+            plans: $"[{Plan("p1", true, $"[{Task("t1", 1, "pending")}]")}]");
+        routes.Post("/api/work-items/declare", 409, """{"code":"something_else"}""");
+        routes.Post("/api/plans/p1/tasks/t1", 200, "{}");
+
+        var r = (TakeoverResult.Completed)await Run(routes);
+
+        await Assert.That(r.Unsuccessful).IsTrue();
+        await Assert.That(r.Outcome["current_plan_id"]!.GetValue<string>()).IsEqualTo("p1");
+    }
+
     sealed class LocalLiveness : ISessionLivenessSource {
         readonly Dictionary<SessionId, SessionLiveness> _known = [];
 
@@ -563,6 +670,8 @@ public class SessionTakeoverTests {
 
         public List<string> Requests { get; } = [];
 
+        public Action<string>? BeforeSend { get; set; }
+
         public List<(string Path, JsonObject? Body)> Posts { get; } = [];
 
         public void Get(string path, int status, string body)  => _routes[(HttpMethod.Get, path)]  = (status, body);
@@ -573,12 +682,14 @@ public class SessionTakeoverTests {
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
             var path = request.RequestUri!.AbsolutePath;
             Requests.Add(path);
+            BeforeSend?.Invoke(path);
 
             if (request.Method == HttpMethod.Post) {
                 var text = request.Content is null ? null : await request.Content.ReadAsStringAsync(ct);
                 Posts.Add((path, text is null ? null : JsonNode.Parse(text) as JsonObject));
             }
 
+            ct.ThrowIfCancellationRequested();
             if (_timingOut.Contains(path)) throw new TaskCanceledException("timed out");
             if (_throwing.Contains(path)) throw new HttpRequestException("connection reset");
 

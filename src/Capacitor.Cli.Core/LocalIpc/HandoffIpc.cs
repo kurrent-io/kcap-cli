@@ -40,4 +40,5 @@ public static class HandoffWire {
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
 [JsonSerializable(typeof(HandoffProbeRequestDto))]
 [JsonSerializable(typeof(HandoffProbeReplyDto))]
+[JsonSerializable(typeof(HandoffOutcomeDto))]
 public partial class HandoffIpcJsonContext : JsonSerializerContext;

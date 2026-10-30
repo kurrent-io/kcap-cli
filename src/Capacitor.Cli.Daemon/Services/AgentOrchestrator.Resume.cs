@@ -1498,13 +1498,16 @@ internal partial class AgentOrchestrator {
         try {
             using var client = await _http.ForBackgroundAsync(ct);
             var result = await new SessionTakeover(new ProvenExitedLiveness(), _time)
-                .RunAsync(client, ServerBase, previous, current, force: false, ct);
+                .RunAsync(client, ServerBase, previous, current, TakeoverAdmission.Judged, ct);
+
+            if (result is TakeoverResult.Interrupted && ct.IsCancellationRequested) return;
 
             LogContinueTakeover(agentId, previous, current, result switch {
                 TakeoverResult.Completed { Unsuccessful: false } => "completed",
                 TakeoverResult.Completed                         => "partial",
                 TakeoverResult.Refused r                         => $"refused: {r.Reason}",
                 TakeoverResult.Failed f                          => $"failed: {f.Reason}",
+                TakeoverResult.Interrupted i                     => $"failed: interrupted ({i.Code})",
                 _                                                => "unauthorized"
             });
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
