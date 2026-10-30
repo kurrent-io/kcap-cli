@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Http;
@@ -29,9 +30,9 @@ public class ArtefactsTabViewModelTests {
         public RecordingOpener Opener { get; } = new();
         public ArtefactsTabViewModel Vm { get; }
 
-        public Harness(bool realFiles = false) => Vm = new ArtefactsTabViewModel(Source, Activity, Time,
+        public Harness(bool realFiles = false, IPageViewer? pageViewer = null) => Vm = new ArtefactsTabViewModel(Source, Activity, Time,
             realFiles ? null : path => Disk.TryGetValue(path.Replace('\\', '/'), out var bytes) ? new MemoryStream(bytes) : null,
-            Opener);
+            Opener, pageViewer);
 
         public async Task SwitchAsync(string? sessionId, string? root = "/repo") {
             Vm.SwitchSession(sessionId, root);
@@ -616,6 +617,29 @@ public class ArtefactsTabViewModelTests {
             await Assert.That(h.Vm.Selected).IsNull();
             await h.Vm.TeardownAsync();
         });
+    }
+
+    /// A page row opens through the page viewer it was given, with the page's id and listed URL, and never
+    /// through the browser: an in-app viewer replaces the browser whole.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_given_page_viewer_opens_pages_instead_of_the_browser() {
+        await RunOnUiAsync(async () => {
+            var viewer = new RecordingPageViewer();
+            var h = new Harness(pageViewer: viewer);
+            h.Source.EnqueuePages(Pages(Page("p", "Report", h.Time.GetUtcNow(), url: "https://kcap.test/pages/p")));
+            await h.SwitchAsync(SessionA);
+
+            await h.Vm.OpenPageCommand.Execute(h.Vm.Pages[0]);
+            await Assert.That(viewer.Opened).IsEquivalentTo(new[] { ("p", "https://kcap.test/pages/p") });
+            await Assert.That(h.Opener.Opened).IsEmpty();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    sealed class RecordingPageViewer : IPageViewer {
+        public List<(string PageId, string Url)> Opened { get; } = [];
+        public void Open(string pageId, string url) => Opened.Add((pageId, url));
     }
 
     /// The tab shows for a session whose only artefact is a page, and the reader says where pages open.

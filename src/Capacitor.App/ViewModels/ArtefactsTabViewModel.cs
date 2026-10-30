@@ -88,7 +88,7 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
     internal Task? PendingDriftForTesting => _driftReads.PendingReadForTesting;
 
     public ArtefactsTabViewModel(IPlanArtifactSource? source, PlanActivity activity, TimeProvider time, Func<string, Stream?>? openWorkingCopy = null,
-            IUrlOpener? opener = null) {
+            IUrlOpener? opener = null, IPageViewer? pageViewer = null) {
         _source = source;
         _reads = new SingleFlightReader<(string SessionId, string? Root), PlanArtifactsRead>(
             (state, ct) => _source!.ReadAsync(state.SessionId, ct),
@@ -120,7 +120,8 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
             "document drift");
         SelectCommand = ReactiveCommand.Create<DocumentRow>(Select);
         OpenLinkCommand = ReactiveCommand.Create<string>(url => { if (opener is not null) LinkPolicy.Open(opener, url); });
-        OpenPageCommand = ReactiveCommand.Create<PageRow>(row => { if (opener is not null) LinkPolicy.Open(opener, row.Url); });
+        pageViewer ??= opener is null ? null : new BrowserPageViewer(opener);
+        OpenPageCommand = ReactiveCommand.Create<PageRow>(row => pageViewer?.Open(row.Id, row.Url));
         _settle = time.CreateTimer(_ => RxSchedulers.MainThreadScheduler.Schedule(Refresh), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         _activity.PlanWritten += OnArtefactWritten;
         _activity.PagePublished += OnArtefactWritten;
