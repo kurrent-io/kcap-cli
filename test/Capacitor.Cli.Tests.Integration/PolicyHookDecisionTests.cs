@@ -77,7 +77,7 @@ public class PolicyHookDecisionTests : IDisposable {
         for (var stop = 0; stop < 5 && (events.Count == 0 || snapshots.Count == 0); stop++) {
             // Force the drain: delete the cross-process throttle stamp so a second spawn's
             // pre-dispatch drain pass (Program.cs's centralized one) does not skip as "too recent".
-            File.Delete(Config.Root.Path("spool", ".last-drain"));
+            foreach (var stamp in Directory.EnumerateFiles(Config.Root.Path("spool"), ".last-drain", SearchOption.AllDirectories)) File.Delete(stamp);
             var (stopExit, _) = await RunHookAsync(stopPayload);
             await Assert.That(stopExit).IsEqualTo(0);
 

@@ -8,10 +8,10 @@ namespace Capacitor.Cli.Core;
 /// outage. Unlike <see cref="HookSpool"/> (1 MB drop-oldest — acceptable for small lifecycle POSTs)
 /// this is bounded with NO SILENT DROP: on cap exhaustion it stops appending and writes a
 /// <c>needs-import</c> marker so the session is surfaced as requiring `kcap import` rather than
-/// truncated. Per-session JSONL of transcript batch JSON, one per line, arrival order. Stamped by
-/// server like <see cref="HookSpool"/>.
+/// truncated. Per-session JSONL of transcript batch JSON, one per line, arrival order. Partitioned
+/// by server like <see cref="HookSpool"/>.
 /// </summary>
-public sealed partial class TranscriptSpool(string spoolDir, TimeProvider time, long capBytes = TranscriptSpool.DefaultCapBytes, string? server = null) {
+public sealed partial class TranscriptSpool(string spoolDir, TimeProvider time, long capBytes = TranscriptSpool.DefaultCapBytes, string? root = null) {
     public const long DefaultCapBytes = 8_388_608; // 8 MB per session
 
     // Named here rather than on ConfigRoot, for the same reason as HookSpool's.
@@ -20,7 +20,7 @@ public sealed partial class TranscriptSpool(string spoolDir, TimeProvider time, 
     /// <summary>The spool under a config root. The directory overload is for a spool that is not
     /// under one — a test's own throwaway directory.</summary>
     public TranscriptSpool(ConfigRoot config, TimeProvider time, string? server, long capBytes = DefaultCapBytes)
-        : this(config.Path(DirName), time, capBytes, server) { }
+        : this(SpoolPartition.DirFor(config.Path(DirName), server), time, capBytes, config.Path(DirName)) { }
 
     /// <summary>Outcome of an <see cref="Append"/> call.</summary>
     public enum AppendResult {
@@ -48,7 +48,6 @@ public sealed partial class TranscriptSpool(string spoolDir, TimeProvider time, 
         if (path is null) return AppendResult.Ignored; // malformed id — nothing we can key on
         try {
             Directory.CreateDirectory(spoolDir);
-            SpoolServerStamp.Write(spoolDir, EncodeKey(sessionId), server);
             var line = batchJson.Replace("\n", "").Replace("\r", "");
             var incoming = Encoding.UTF8.GetByteCount(line) + 1 + (reserving is null ? 0 : Encoding.UTF8.GetByteCount(reserving) + 1);
             var existing = File.Exists(path) ? new FileInfo(path).Length : 0;
@@ -78,7 +77,6 @@ public sealed partial class TranscriptSpool(string spoolDir, TimeProvider time, 
         if (p is null) return false;
         try {
             Directory.CreateDirectory(spoolDir);
-            SpoolServerStamp.Write(spoolDir, EncodeKey(sessionId), server);
             File.WriteAllText(p, $"{time.GetUtcNow():O} {reason}\n");
             return true;
         } catch (Exception ex) {
@@ -133,8 +131,13 @@ public sealed partial class TranscriptSpool(string spoolDir, TimeProvider time, 
         return sb.ToString();
     }
 
-    internal bool BelongsElsewhere(string sessionId) =>
-        SpoolServerStamp.BelongsElsewhere(spoolDir, EncodeKey(sessionId), server);
+    /// <summary>A live file that collides becomes a draining temp, which drains before the live file.</summary>
+    internal void AdoptUnpartitioned() {
+        if (root is null) return;
+        SpoolPartition.AdoptUnpartitioned(root, spoolDir, name => name.EndsWith(".transcript.jsonl", StringComparison.Ordinal)
+            ? $"{name[..^".transcript.jsonl".Length]}.legacy-{Environment.ProcessId}-{Interlocked.Increment(ref seqCounter)}.transcript.draining"
+            : null);
+    }
 
     /// <summary>True if this session still has undelivered spool entries (live .jsonl or .draining temp).</summary>
     public bool HasBacklog(string sessionId) =>
@@ -207,15 +210,7 @@ public sealed partial class TranscriptSpool(string spoolDir, TimeProvider time, 
         return true;
     }
 
-    public void ReapOlderThan(TimeSpan age) {
-        try {
-            if (!Directory.Exists(spoolDir)) return;
-            var cutoff = (time.GetUtcNow() - age).UtcDateTime;
-            foreach (var file in Directory.EnumerateFiles(spoolDir)) {
-                try { if (File.GetLastWriteTimeUtc(file) < cutoff) File.Delete(file); } catch { }
-            }
-        } catch { }
-    }
+    public void ReapOlderThan(TimeSpan age) => SpoolPartition.Reap(root ?? spoolDir, (time.GetUtcNow() - age).UtcDateTime);
 
     // Filename-safe superset of the old dashless-GUID form. The filename IS the session id --
     // LifecycleSpoolDrain posts it verbatim as session_id for session-needs-import -- so the key may
