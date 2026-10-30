@@ -68,6 +68,25 @@ public class CaptureScopeTests {
     }
 
     [Test]
+    public async Task A_session_whose_probe_failed_is_stamped() {
+        // Otherwise an ignored session counts as a failure while the server is down and as
+        // excluded once it is back.
+        var result = await Scope(excludedPaths: ["/tmp/capturescope/secret"])
+            .ApplyAsync([Session("s1", "/tmp/capturescope/secret/x", ImportCommand.ClassificationStatus.ProbeError)], NoResolved);
+
+        await Assert.That(result[0].ExcludedPathKey)
+            .IsEqualTo(PathExclusion.Normalize("/tmp/capturescope/secret", Home));
+    }
+
+    [Test]
+    public async Task A_too_short_session_is_not_stamped() {
+        var result = await Scope(excludedPaths: ["/tmp/capturescope/secret"])
+            .ApplyAsync([Session("s1", "/tmp/capturescope/secret/x", ImportCommand.ClassificationStatus.TooShort)], NoResolved);
+
+        await Assert.That(result[0].ExcludedPathKey).IsNull();
+    }
+
+    [Test]
     public async Task A_cwd_decoded_from_the_project_dir_name_is_placed() {
         // The Claude and Codex branch: no cwd on Meta, only the encoded project directory.
         // Hyphen-free segments deliberately — DecodeCwdFromDirName maps every '-' back to '/', so a
