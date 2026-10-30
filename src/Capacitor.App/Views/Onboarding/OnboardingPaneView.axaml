@@ -154,7 +154,7 @@
                 <StackPanel x:Name="PreflightChecking" Orientation="Horizontal" Spacing="14" IsVisible="{Binding PreflightChecking}">
                     <Border Width="40" Height="40" CornerRadius="20" Background="{StaticResource OnboardingAccentWashBrush}">
                         <Panel Classes="onboardingSpinner">
-                            <app:AppIcon Kind="LoaderCircle" Size="20" Classes.kcapSpinning="{Binding PreflightChecking}"
+                            <app:AppIcon Kind="LoaderCircle" Size="16" Classes.kcapSpinning="{Binding PreflightChecking}"
                                          Foreground="{StaticResource OnboardingAccentBrush}" />
                         </Panel>
                     </Border>
