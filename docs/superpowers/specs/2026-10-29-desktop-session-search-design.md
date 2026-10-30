@@ -37,7 +37,7 @@ From the top: the 44 px chrome strip, **New session ⌘N** (unchanged), then one
 - A filter icon button (`kcapGhost kcapIcon`) to its right. It toggles a panel under the row holding today's two control rows unchanged: Mine/Team with All/Live/Ended, then Group, Sort and the direction arrow
 - While any of scope, state, grouping, sort or direction differs from the defaults (Mine · All · Repository · Last updated · descending, as the past-sessions design fixes them), the filter icon carries a small dot, so hidden filters are never silently narrowing the rail. The dot uses `KcapInfo*` (selection / state, not status)
 
-The panel starts collapsed on each launch (my call: persisting it is cheap, but the point of the change is a quieter rail). The magnifier and filter glyphs are new `AppIcon` kinds; the launcher model picker's magnifier path is the reference shape
+The panel starts collapsed on each launch (my call: persisting it is cheap, but the point of the change is a quieter rail). The magnifier and filter glyphs are the existing Lucide kinds `LucideIconKind.Search` and `LucideIconKind.ListFilter`, drawn through `AppIcon`; no new geometry
 
 ## The search page
 
