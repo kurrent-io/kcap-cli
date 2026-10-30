@@ -10,6 +10,9 @@ using Avalonia.Input;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.Services;
+using Capacitor.App.Services.LocalSetup;
+using Capacitor.Cli.Core;
+using Lucide.Avalonia;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core.Accounts;
@@ -24,6 +27,55 @@ namespace Capacitor.App.Tests.Unit;
 /// MainWindowSmokeTests exactly (see that file's own header comment).
 public class LauncherPaneViewSmokeTests {
     [TempDir] public required TempDir Tmp { get; init; }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Retrying_a_failed_upgrade_replaces_the_failure_icon_with_progress() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var cli = new FakeKcapCli {
+                LocalUpgradeBehavior = UpgradeScript.Prints(2, UpgradeScript.Planned("1.2.0", "1.3.0"),
+                    UpgradeScript.Switched("1.3.0"), UpgradeScript.Failed("start_failed", "did not start", true)),
+            };
+            var upgrade = new LocalUpgradeController(() => cli, action => action());
+            using var status = new BehaviorSubject<ServerLaneStatus>(new(ServerLaneState.Retrying));
+            var start = new TaskCompletionSource<ProcessResult>();
+            using var stack = new LocalStackViewModel(() => "1.3.0", status, upgrade, _ => start.Task,
+                () => Task.CompletedTask, CancellationToken.None, System.Reactive.Concurrency.ImmediateScheduler.Instance);
+            var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            using var cleanup = tmp;
+            using var home = new HomeViewModel(new FakeDaemonClientService(), new AppStateStore(path),
+                new RecordingLaunchClient(), () => Task.FromResult(Array.Empty<string>()), TimeProvider.System) { LocalStack = stack };
+            await upgrade.StartAsync(CancellationToken.None);
+            await upgrade.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            var window = new Window { Content = new LauncherPaneView { DataContext = home } };
+            try {
+                window.Show();
+                Dispatcher.UIThread.RunJobs();
+                var failed = Find<AppIcon>(window, "LocalUpgradeFailedIcon")!;
+                var busy = Find<Panel>(window, "LocalUpgradeIcon")!.Children.OfType<AppIcon>()
+                    .Single(icon => icon.Kind == LucideIconKind.LoaderCircle);
+                await Assert.That(failed.IsEffectivelyVisible).IsTrue();
+                await Assert.That(busy.IsEffectivelyVisible).IsFalse();
+
+                var run = stack.StartCommand.Execute().ToTask();
+                Dispatcher.UIThread.RunJobs();
+                try {
+                    await Assert.That(failed.IsEffectivelyVisible).IsFalse();
+                    await Assert.That(busy.IsEffectivelyVisible).IsTrue();
+                    await Assert.That(Find<TextBlock>(window, "LocalUpgradeHeadline")!.Text).IsEqualTo("Starting the local server…");
+                } finally {
+                    start.TrySetResult(new ProcessResult(1, "", "still unavailable", false));
+                    await run;
+                }
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(failed.IsEffectivelyVisible).IsTrue();
+                await Assert.That(busy.IsEffectivelyVisible).IsFalse();
+            } finally {
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+            }
+        });
+    }
 
     [Test]
     public async Task Picker_search_matches_label_and_slug() {
@@ -166,7 +218,7 @@ public class LauncherPaneViewSmokeTests {
             }
         });
 
-        await Assert.That(text).IsEqualTo(NoticeText.Headline(HomeViewModel.FinishingSignInNotice).Title);
+        await Assert.That(text).IsEqualTo("Finishing sign-in…");
         await Assert.That(signIn).IsFalse();
         await Assert.That(busy).IsTrue();
     }

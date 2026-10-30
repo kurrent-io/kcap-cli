@@ -105,6 +105,7 @@ public partial class App : Application {
     readonly AppStateStore _appState;
 
     readonly UiScaleSetting _uiScale;
+    readonly BetaUpdatesSetting _betaUpdates;
 
     // Set only in a copy started to uninstall; nothing of the normal app is built in it.
     readonly UninstallMode? _uninstallMode = Program.Uninstall;
@@ -119,6 +120,7 @@ public partial class App : Application {
         _appState = new AppStateStore(_config.Path("app-state.json"));
 #pragma warning restore RS0030
         _uiScale = UiScaleSetting.LoadAsync(_appState).GetAwaiter().GetResult();
+        _betaUpdates = BetaUpdatesSetting.LoadAsync(_appState).GetAwaiter().GetResult();
     }
 
     internal static TelemetryStartup DesktopTelemetry(UninstallMode? uninstall, string signupUrl) =>
@@ -176,6 +178,10 @@ public partial class App : Application {
     // No disposal needed — its schedule loop exits on _shutdown; ApplyPendingOnExit is called
     // explicitly at shutdown rather than through Dispose.
     UpdateCoordinator? _updates;
+    IDisposable? _updateCheckSubscription;
+    UpdateCheckWindow? _updateCheckWindow;
+    bool _updateCheckHidden;
+    UpdateCheckProgress? _updateCheckProgress;
     // Assigned by StartAsync's success path only; every one is still null on a startup failure
     // (and cleared again by the catch, which disposes whatever had been built). Teardown —
     // shutdown and startup-failure alike — disposes them in reverse creation order, tray icon
@@ -236,6 +242,7 @@ public partial class App : Application {
     TrayIconManager? _tray;
     DaemonRestartPendingWatcher? _restartPending;
     ExpectedDaemonRestart? _expectedRestart;
+    StaleDaemonNudge? _staleDaemonNudge;
     // Wizard-first mode only: the sign-in driver shutdown cancels and awaits before anything is
     // disposed, and the window that owns dialogs while no main window exists. Both are cleared again
     // by the handoff at the end of RunWizardModeAsync.
@@ -276,11 +283,11 @@ public partial class App : Application {
     // Outside a packed bundle Velopack reports not-installed and the coordinator stays inert; a
     // constructor failure degrades the same way rather than taking startup down. In a snap, snapd
     // owns updates and the install is a read-only mount, so Velopack is never consulted.
-    static IAppUpdater CreateUpdater() {
+    static IAppUpdater CreateUpdater(BetaUpdatesSetting betaUpdates) {
         if (SnapLayout.OfRunningBinary() is not null) return InertAppUpdater.Instance;
 
         try {
-            return new VelopackAppUpdater(Environment.GetEnvironmentVariable);
+            return new VelopackAppUpdater(Environment.GetEnvironmentVariable, () => betaUpdates.Choice);
         } catch (Exception ex) {
             Console.Error.WriteLine($"kcap app: updater unavailable: {ex.Message}");
             return InertAppUpdater.Instance;
@@ -353,7 +360,7 @@ public partial class App : Application {
                     ("installed_handoff", desktop.Args?.Contains("--kcap-installed", StringComparer.Ordinal) == true ? "true" : null));
                 if (RunInstallLocationGuard(desktop)) return; // the guard window owns the rest of this run
             }
-            _updater = CreateUpdater();
+            _updater = CreateUpdater(_betaUpdates);
             if (UpdateCoordinator.TryApplyPendingAtStartup(_updater, Program.Host.UpdateRelaunch,
                     HandOver(AppUpdateTransition.PendingAtStartup), LifecycleLog)) return; // the process is being replaced
             TakeUpdateTransition();
@@ -415,7 +422,7 @@ public partial class App : Application {
                 desktop, ex, _service, _shutdown,
                 [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
                     _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _accounts, _sessionAccess,
-                    _pullRequestTones, _launchApprovals, _webWorkspace, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending, _expectedRestart],
+                    _pullRequestTones, _launchApprovals, _webWorkspace, _activity, _home, _localServer, _localStack, _rail, _pause, _staleDaemonNudge, _restartPending, _expectedRestart],
                 _lifecycle, _lane, _localUpgrade, _localSearch, _menuBar, _coordinator);
             await DisposeServerClientsAsync(); // after _home above
             // all already disposed above — never let a later OnShutdownRequested (e.g. Cmd+Q
@@ -481,38 +488,118 @@ public partial class App : Application {
         }
     }
 
+    /// A launch that owes its local server an upgrade finishes an update whatever route installed it. The disk image
+    /// and a copy dragged over the old app leave no record, and the upgrade would otherwise stop and start the server
+    /// under the main window.
+    AppUpdateTransition? InferUpdate(bool localUpgradeOwed) {
+        if (!localUpgradeOwed) return null;
+        var running = CapacitorVersion.CurrentDisplay();
+        if (LocalEndpoints.Read(_localRoot).Active?.Version is not { } local || !PrereleaseSemver.IsNewer(running, local)) return null;
+        LifecycleLog.Write("update_inferred", ("local_server", local), ("to", running));
+        return new AppUpdateTransition("components", AppUpdateTransition.Installer, null, running, _startedAt);
+    }
+
     AppUpdateTransition? _updateNotApplied;
     Action? _closeUpdateFinishWindow;
+    // Completes once no update is being finished: at once on an ordinary launch, else when its steps settle.
+    // The command-line tool offer waits for it, since its prompt would otherwise land in the middle of the update.
+    readonly TaskCompletionSource _updateHandedOver = new(TaskCreationOptions.RunContinuationsAsynchronously);
     bool _holdingMainWindow;
 
-    void ShowUpdateFinishWindow(AppUpdateTransition transition, IObservable<AttachStatus> status, IObservable<string?> daemonVersion,
-            IObservable<bool> restartPending, IObservable<LocalStepInput?> local) {
-        var vm = new UpdateFinishViewModel(transition, status, daemonVersion, restartPending, local, _time);
+    void ShowUpdateCheckProgress(UpdateCheckProgress? progress) {
+        _updateCheckProgress = progress;
+        if (progress is null) {
+            _updateCheckWindow?.Close();
+            _updateCheckHidden = false;
+        } else if (!_shutdownStarted && !_updateCheckHidden) {
+            if (_updateCheckWindow is null) {
+                var window = new UpdateCheckWindow { DataContext = progress };
+                window.Closed += (_, _) => {
+                    _updateCheckWindow = null;
+                    _updateCheckHidden = true;
+                };
+                _updateCheckWindow = window;
+                window.Show();
+                window.Activate();
+            } else {
+                _updateCheckWindow.DataContext = progress;
+            }
+        }
+    }
+
+    Task CheckForAppUpdatesAsync() {
+        _updateCheckHidden = false;
+        ShowUpdateCheckProgress(_updateCheckProgress);
+        return _updates?.CheckForUpdatesAsync() ?? Task.CompletedTask;
+    }
+
+    Task RunUpdateMenuActionAsync() {
+        _updateCheckHidden = false;
+        ShowUpdateCheckProgress(_updateCheckProgress);
+        return _updates?.RunMenuActionAsync() ?? Task.CompletedTask;
+    }
+
+    void ShowUpdateFinishWindow(AppUpdateTransition transition, IObservable<AttachStatus> status,
+            IObservable<(string? Version, string? Connection)> daemon, IObservable<bool> restartPending, IObservable<LocalStepInput?> local) {
+        var vm = new UpdateFinishViewModel(transition, status, daemon, restartPending, local, _time);
         var window = new UpdateFinishWindow { DataContext = vm };
+        _home?.AttachUpdateProgress(vm.Progress);
         var opened = false;
+        void BringForward() {
+            if (opened) return;
+            if (window.WindowState == WindowState.Minimized) window.WindowState = WindowState.Normal;
+            window.Show();
+            window.Activate();
+        }
         void Open() {
             if (opened) return;
             opened = true;
             _closeUpdateFinishWindow = null;
             _holdingMainWindow = false;
+            if (_coordinator is { } coordinator) coordinator.ShowInstead = null;
             LifecycleLog.Write("update_finished", ("operation", transition.Id), ("settled", vm.IsSettled ? "true" : "false"),
-                ("steps", string.Join("; ", vm.Steps.Select(step => $"{step.Title}: {step.State}"))),
+                ("steps", string.Join("; ", vm.Steps.Select(row => $"{row.Step.Title}: {row.Step.State}"))),
                 ("seconds", (_time.GetUtcNow() - _startedAt).TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture)));
             if (!_shutdownStarted) _coordinator?.ShowMainWindow();
             window.Close();
-            vm.Dispose();
+            // Opened early, it keeps following the steps for the launcher until they settle.
+            if (vm.IsSettled) Settled();
+            else vm.Progress.Where(p => !p.Finishing).Take(1).Subscribe(_ => Dispatcher.UIThread.Post(Settled));
         }
-        vm.Completed += () => Dispatcher.UIThread.Post(Open);
+        void Settled() {
+            vm.Dispose();
+            _updateHandedOver.TrySetResult();
+        }
+        var earlierInstances = OperatingSystem.IsMacOS() ? QuitEarlierInstancesAsync(BringForward) : Task.CompletedTask;
+        vm.Completed += () => _ = CompleteUpdateAsync(earlierInstances, () => Dispatcher.UIThread.Post(Open));
+        vm.OpenRequested += Open;
         window.Closed += (_, _) => Open();
         _closeUpdateFinishWindow = Open;
-        window.Show();
-        window.Activate();
+        if (_coordinator is { } holder) holder.ShowInstead = BringForward;
+        BringForward();
+    }
+
+    /// Automatic handover waits for predecessor shutdown; an explicit early handover calls Open directly.
+    internal static async Task CompleteUpdateAsync(Task earlierInstances, Action open) {
+        await earlierInstances.ConfigureAwait(false);
+        open();
+    }
+
+    async Task QuitEarlierInstancesAsync(Action afterwards) {
+        try {
+            using var self = Process.GetCurrentProcess();
+            var startedAt = self.StartTime;
+            var (count, exited) = await Task.Run(() => InstalledAppProcesses.QuitEarlierAsync(startedAt, _time, _shutdown.Token));
+            if (count == 0) return;
+            LifecycleLog.Write("earlier_instances_quit", ("count", count.ToString(CultureInfo.InvariantCulture)), ("exited", exited ? "true" : "false"));
+            Dispatcher.UIThread.Post(afterwards);
+        } catch (OperationCanceledException) { }
     }
 
     /// From the moment an update is accepted until this process exits, which quiescing can stretch.
     void ShowUpdateClosingWindow() {
         if (_updates?.ReadyVersion is not { } to) return;
-        var window = new UpdateFinishWindow { DataContext = UpdateFinishViewModel.Closing(_updater.InstalledVersion, to, _time) };
+        var window = new UpdateFinishWindow { DataContext = UpdateFinishViewModel.Closing(to, _time) };
         foreach (var other in (ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Windows.ToArray() ?? []) other.Hide();
         window.Show();
         window.Activate();
@@ -609,6 +696,7 @@ public partial class App : Application {
         if (_coordinator is not null) _coordinator.QuitInProgress = true;
         LatchNavigation();
         _appMenu.SetSettingsAction(null);
+        _appMenu.SetCheckForUpdatesAction(null);
         _appMenu.SetSetupAction(null);
         _appMenu.SetUninstallAction(null);
         _shutdown.Cancel();
@@ -868,7 +956,10 @@ public partial class App : Application {
                 desktop.TryShutdown();
             }), _shutdown.Token,
             handingOver: HandOver(AppUpdateTransition.InApp), log: LifecycleLog);
+        _updateCheckSubscription = _updates.CheckProgress.Subscribe(progress =>
+            Dispatcher.UIThread.Post(() => ShowUpdateCheckProgress(progress)));
         _updates.Start();
+        if (_updater.IsAvailable) _appMenu.SetCheckForUpdatesAction(CheckForAppUpdatesAsync);
 
         // Said once, here, because nothing else in the app would: the graph is up but deliberately degraded.
         AnnounceUnquiescedLane(lifecycleSurface, laneQuiesced);
@@ -933,6 +1024,8 @@ public partial class App : Application {
         var sessionHttp = ServerHttp(profiles);
         var remoteAgents = new RemoteAgentsService(
             serverLane, RemoteAgentsService.HttpFetch(sessionHttp, profiles),
+            postRename: RemoteAgentsService.HttpRename(sessionHttp, profiles),
+            time: _time,
             onUnauthorized: serverLane.ParkSignedOut);
         var sessions = new ServerSessionsService(
             serverLane, ServerSessionsService.HttpFetch(sessionHttp, profiles), ServerSessionsService.HttpOwners(sessionHttp, profiles),
@@ -1048,7 +1141,7 @@ public partial class App : Application {
             () => serverLane.RestartAsync(), _shutdown.Token, searchChange: localSearch) {
             Search = localSearch is null ? null : new LocalSearchViewModel(
                 () => LocalEmbeddingFile.Read(_localRoot), ct => LocalBuiltinOffer.LookupAsync(_localRoot, ct), serverLane.Status, localSearch, localUpgrade, () => serverLane.RestartAsync(),
-                _shutdown.Token, openSettings: _openSearchSettings),
+                _shutdown.Token, openSettings: _openSearchSettings, builtinModelReady: () => LocalBuiltinOffer.InstalledModelReady(_localRoot)),
         };
         _localStack = localStack;
         IObservable<bool>? stackOwnsStart = null;
@@ -1074,6 +1167,7 @@ public partial class App : Application {
             : category => OpenFeedback(feedbackApi, feedbackTrailer, requestSignIn, category, feedbackMail);
         _menuBar?.SetFeedbackAction(openFeedback);
 
+        var appSubject = SignedInSubject.From(serverLane.Status);
         var commands = new BackgroundCommandActivity((key, report, ended, handoff) =>
             new BackgroundCommandMonitor(key, report, ended, service, directory, sessionAccess, readDetail, serverLane, _time, handoff));
         _commands = commands;
@@ -1097,7 +1191,8 @@ public partial class App : Application {
             commands: commands, drafts: drafts, inputSending: attention.ReplySending,
             resumeLedger: id => ResumeLedgerStore.For(_daemonStore, service.DaemonName).TryRead(id),
             pullRequestSnapshots: pullRequestSnapshots, transcripts: transcripts,
-            pullRequestLinksChanged: pullRequestTones.Refresh, readings: readings, senders: senders);
+            pullRequestLinksChanged: pullRequestTones.Refresh, readings: readings, senders: senders,
+            appSubject: appSubject, notifier: notifier);
         // The origin lookup below and this call are two reads of a cache the directory's own
         // background recompute mutates, so the row can be gone by the time this runs: no row, no
         // host, and the click opens nothing.
@@ -1108,7 +1203,8 @@ public partial class App : Application {
                     pullRequests: readers, requestSignIn: requestSignIn, linkGitHub: linkGitHub,
                     signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts, inputSending: attention.ReplySending,
                     pullRequestSnapshots: pullRequestSnapshots, pullRequestLinksChanged: pullRequestTones.Refresh, readSubagent: readSubagent,
-                    readings: readings, senders: senders)
+                    readings: readings, senders: senders, remoteAgents: remoteAgents, notifier: notifier, appSubject: appSubject,
+                    serverSessions: sessions)
                 : null;
         // A session the server lists with no daemon behind it: read-only, so no terminal surface.
         RemoteSessionViewModel? BuildServer(string sessionId) =>
@@ -1118,7 +1214,7 @@ public partial class App : Application {
                     pullRequests: readers, requestSignIn: requestSignIn, linkGitHub: linkGitHub,
                     signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts, inputSending: attention.ReplySending,
                     pullRequestSnapshots: pullRequestSnapshots, pullRequestLinksChanged: pullRequestTones.Refresh, readSubagent: readSubagent,
-                    readings: readings)
+                    readings: readings, remoteAgents: remoteAgents, notifier: notifier, appSubject: appSubject, serverSessions: sessions)
                 : null;
 
         _coordinator = new MainWindowCoordinator(
@@ -1143,7 +1239,8 @@ public partial class App : Application {
                 remoteWorkspaceFactory: BuildRemote, serverWorkspaceFactory: BuildServer,
                 sessions: sessions, railPreferences: railPreferences, profileName: profiles?.Name,
                 modelCatalog: modelCatalog.Catalog, uploader: uploader, appServerUrl: profiles?.Resolution.ServerUrl,
-                openFeedback: openFeedback, settingsAction: _appMenu.SettingsAction, uninstallAction: _appMenu.UninstallAction,
+                openFeedback: openFeedback, settingsAction: _appMenu.SettingsAction, checkForUpdatesAction: _appMenu.CheckForUpdatesAction,
+                uninstallAction: _appMenu.UninstallAction,
                 adopt: TakeAdoptableWindow(), show: !_holdingMainWindow,
                 requestSetup: () => _ = RestartForSetupAsync(desktop),
                 historyImport: _historyImport?.Run,
@@ -1162,21 +1259,32 @@ public partial class App : Application {
         // close-protected (BeginShutdownPass's rule 1 is the general defense; this is the
         // by-construction one, and it is why the window below cannot even briefly intercept).
         _coordinator.QuitInProgress = _shutdownStarted;
-        // A relaunch that finishes an update opens on its progress; the main window follows once that settles.
+        var componentsOwed = AppComponentStamp.Owed(_config, CapacitorVersion.CurrentDisplay());
+        _postUpdate ??= InferUpdate(isLocalServer && localUpgrade is not null && componentsOwed);
+        // A launch that finishes an update opens on its progress; the main window follows once that settles.
         _holdingMainWindow = _postUpdate is not null && !_shutdownStarted;
-        if (_holdingMainWindow) _coordinator.Prepare();
-        else _coordinator.ShowMainWindow();
+        if (_holdingMainWindow) {
+            _coordinator.Prepare();
+            // A setup window adopted as the main window is already on screen; it waits for the hand-over too.
+            _coordinator.Window?.Hide();
+        } else {
+            _coordinator.ShowMainWindow();
+            _updateHandedOver.TrySetResult();
+        }
         desktop.MainWindow = _coordinator.Window;
         // BuildAndShowMainWindow constructs Home and the rail itself (over the same `service`), so
         // they are read back off the window's DataContext for disposal.
         _home = (_coordinator.Window?.DataContext as MainWindowViewModel)?.Home;
         _rail = (_coordinator.Window?.DataContext as MainWindowViewModel)?.Rail;
 
-        var componentsOwed = AppComponentStamp.Owed(_config, CapacitorVersion.CurrentDisplay());
         var localSkipped = new BehaviorSubject<bool>(false);
         if (!_shutdownStarted) _ = SettleComponentsAsync(localUpgrade, isLocalServer, () => localSkipped.OnNext(true));
-        if (_holdingMainWindow && _postUpdate is { } finishing)
-            ShowUpdateFinishWindow(finishing, expectedRestart.Status, service.Snapshots.Select(snap => (string?)snap.Daemon.Version),
+        if (_holdingMainWindow && _postUpdate is { } finishing) {
+            _staleDaemonNudge = new StaleDaemonNudge(finishing.To, service.Status, service.Snapshots.Select(snap => (string?)snap.Daemon.Version),
+                restartPending.Pending, ct => ops.RequestRestartAsync(StaleDaemonNudge.Mode, ct),
+                result => LifecycleLog.Write("daemon_restart_requested", ("mode", StaleDaemonNudge.Mode), ("result", result)), _time, _shutdown.Token);
+            ShowUpdateFinishWindow(finishing, expectedRestart.Status,
+                service.Snapshots.Select(snap => ((string?)snap.Daemon.Version, (string?)snap.Daemon.Connection)),
                 restartPending.Pending,
                 localUpgrade is null || localStack is null || !isLocalServer || !componentsOwed
                     ? Observable.Return<LocalStepInput?>(null)
@@ -1185,6 +1293,7 @@ public partial class App : Application {
                             Observable.Switch(localUpgrade.WhenAnyValue(x => x.Progress).Select(p => p.Changed.Select(_ => p).StartWith(p))),
                             (banner, outcome, skipped, p) => (LocalStepInput?)new LocalStepInput(banner.upgrading, outcome, banner.headline,
                                 banner.detail, skipped, p.Phase, p.From, p.To, p.DownloadFraction)));
+        }
 
         if (!_shutdownStarted) {
             var notificationSettings = new NotificationSettingsService(_config.Path("notifications.json"));
@@ -1238,10 +1347,15 @@ public partial class App : Application {
             lifecycleAttention: lifecycleAttention, shimOfferable: shimOffer.Offerable,
             installShim: shimOffer.RunManualInstallAsync, permissions: permissions,
             remote: TrayViewModel.SummaryFrom(directory, attention.SessionsWithAttention),
-            updateMenu: _updates.MenuItem, updateAction: _updates.RunMenuActionAsync,
+            updateMenu: _updates.MenuItem, updateAction: RunUpdateMenuActionAsync,
             restartPending: restartPending.Pending, openSettings: openSettings, openLaunchApprovals: launchApprovals.Show);
         _tray = new TrayIconManager(this, _trayVm);
         LifecycleLog.Write("tray_created", ("executable", Environment.ProcessPath));
+    }
+
+    async Task SetBetaUpdatesAsync(bool enabled) {
+        await _betaUpdates.SetAsync(enabled);
+        if (_updates is { } updates) await updates.RecheckAsync();
     }
 
     internal void ConfigureSettingsMenu(Action? openSettings) => _appMenu.SetSettingsAction(openSettings);
@@ -1322,10 +1436,10 @@ public partial class App : Application {
     HarnessesSettingsViewModel CreateHarnessesSettings(SettingsProfileStore settings, string daemonName) {
         var (cli, probe, runner) = SettingsCli(settings, daemonName);
         var harnesses = HarnessRegistry.FromEnvironment(_userHome);
-        var shimInstaller = CliPathInstallers.Create(runner, probe, _userHome);
+        var shimInstaller = CliPathInstallers.Create(probe, _userHome);
         var shimTarget = ShimTargetFor(cli.CliPath, Program.Host.CliOutlivesApp);
         return new HarnessesSettingsViewModel(settings, cli,
-            HarnessesStepViewModel.BuildDetectionFeed(probe, _userHome), _shutdown.Token,
+            HarnessesStepViewModel.BuildDetectionFeed(probe, harnesses), _shutdown.Token,
             id => harnesses[id].Signals.IsWired,
             toolsMemory: _appState,
             ensureTerminalCommand: shimInstaller is null ? null : async ct => {
@@ -1409,7 +1523,8 @@ public partial class App : Application {
                 Search     = _localStack?.Search,
                 Experimental = new ExperimentalSettingsViewModel(new ExperimentalSettingsStore(_config), settings.ProfileName, service),
                 About = new AboutSettingsViewModel(service, SettingsCli(settings, service.DaemonName).Cli.VersionAsync, _localStack,
-                    _updates?.MenuItem, _updates is { } updates ? updates.RunMenuActionAsync : null, appLifetime: _shutdown.Token),
+                    _updates?.MenuItem, _updates is not null ? RunUpdateMenuActionAsync : null,
+                    followsBetas: () => _updater.AllowsPrerelease, setBetaUpdates: SetBetaUpdatesAsync, appLifetime: _shutdown.Token),
             };
         } catch (Exception ex) {
             notifier.Notify($"Could not open settings: {ex.Message}");
@@ -1575,7 +1690,7 @@ public partial class App : Application {
         var cliPath = CliResolver.ResolvePath(Environment.GetEnvironmentVariable, File.Exists, Program.Host.CliDirectory);
         // Same rule as the shim coordinator's: only a resolved ABSOLUTE path is linkable.
         var shimTarget = ShimTargetFor(cliPath, Program.Host.CliOutlivesApp);
-        var shimInstaller = CliPathInstallers.Create(runner, probe, _userHome);
+        var shimInstaller = CliPathInstallers.Create(probe, _userHome);
         var shimApplicable = await ResolveShimApplicableAsync(
             shimInstaller is not null, shimTarget, ct => probe.KcapOnPathAsync(ct), _shutdown.Token);
         var bridges = WizardComposition.BuildBridges(action => Dispatcher.UIThread.Post(action), _telemetry, _endpoints);
@@ -1605,7 +1720,7 @@ public partial class App : Application {
             ShimInstaller: shimInstaller,
             UrlOpener: new ShellUrlOpener(),
             Probe: probe,
-            DetectionFeed: probe => HarnessesStepViewModel.BuildDetectionFeed(probe, _userHome),
+            DetectionFeed: probe => HarnessesStepViewModel.BuildDetectionFeed(probe, HarnessRegistry.FromEnvironment(_userHome)),
             BuiltinOffer: ct => LocalBuiltinOffer.LookupAsync(_localRoot, ct),
             CliPath: cliPath,
             ShimApplicable: shimApplicable,
@@ -1947,6 +2062,7 @@ public partial class App : Application {
             IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null,
             IAttachmentUploader? uploader = null, string? appServerUrl = null,
             Action<FeedbackCategory>? openFeedback = null, IObservable<Action?>? settingsAction = null,
+            IObservable<Func<Task>?>? checkForUpdatesAction = null,
             IObservable<Action?>? uninstallAction = null, (MainWindow Window, AppState State)? adopt = null, bool show = true,
             Action? requestSetup = null, HistoryImportRun? historyImport = null,
             IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
@@ -2043,7 +2159,8 @@ public partial class App : Application {
             serverWorkspaceFactory: serverWorkspaceFactory, sessions: sessions,
             searchFactory: searchFactory,
             openFeedback: openFeedback, opener: new ShellUrlOpener(), requestSignIn: requestSignIn,
-            settingsAction: settingsAction, uninstallAction: uninstallAction, requestSetup: requestSetup, historyImport: historyImport,
+            settingsAction: settingsAction, checkForUpdatesAction: checkForUpdatesAction,
+            uninstallAction: uninstallAction, requestSetup: requestSetup, historyImport: historyImport,
             backgroundPriority: backgroundPriority, reloadState: reloadState, isReloading: isReloading, reloadDaemon: reloadDaemon, openLaunchApprovals: openLaunchApprovals,
             movingToWindowsService: movingToWindowsService) {
             LocalStack = localStack,
@@ -2055,9 +2172,11 @@ public partial class App : Application {
         window.Notifier = notifier;
         window.ContentScale = uiScale;
         window.Onboarding = null;
-        if (adopt is { } handover) WindowSizeMemory.Apply(window, handover.State);
-        else WindowSizeMemory.Restore(window, appState);
+        var savedState = adopt?.State ?? appState.LoadAsync().GetAwaiter().GetResult();
+        WindowSizeMemory.Apply(window, savedState);
         WindowSizeMemory.Attach(window, appState);
+        PaneLayoutMemory.Apply(window.Panes, savedState);
+        PaneLayoutMemory.Attach(window.Panes, appState);
         if (show) window.Show();
         return window;
     }
@@ -2107,7 +2226,7 @@ public partial class App : Application {
         var shimTarget = ShimTargetFor(cliPath, Program.Host.CliOutlivesApp);
         // autoOfferSuppressed: Start() always runs — Offerable/manual install must keep working in Incomplete mode; only the once-ever auto-offer dialog is skipped.
         var shimOffer = new ShimOfferCoordinator(
-            lifecycle.PhaseClosed, probe, CliPathInstallers.Create(runner, probe, _userHome), _appState, surface, shimTarget,
+            Task.WhenAll(lifecycle.PhaseClosed, _updateHandedOver.Task), probe, CliPathInstallers.Create(probe, _userHome), _appState, surface, shimTarget,
             _shutdown.Token, autoActionsPermanentlyClosed, _wizardPathLink);
 
         // The delegate below and the claims store must share one root: TryConsume takes the config
@@ -2388,8 +2507,8 @@ public partial class App : Application {
                 var declined = declinedTakeoverPairs ?? [];
                 var pairKey = (envelope.Request, named);
                 if (declined.Contains(pairKey)) {
-                    // A pair already declined this run downgrades to a one-line attention presentation — still exactly-once, just never a re-dialog for the SAME pair.
-                    surface.Attention($"kcap needs to replace the daemon service to continue ({named}).");
+                    Console.Error.WriteLine($"kcap: daemon replacement still needed ({named}); already declined this run");
+                    surface.Attention("Daemon service replacement is still needed. Restart kcap to review it again.");
                     markPresented?.Invoke();
                     break;
                 }
@@ -2404,8 +2523,9 @@ public partial class App : Application {
                     // No app-side evidence revalidation on accept: a stale Accept only fails coded (28/29, under the CLI's transaction lock) and re-arrives as a fresh outcome.
                     _ = await runMutation(envelope.Request with { Verb = MutationVerb.Replace }, ct).ConfigureAwait(false);
                 } else {
-                    declined.Add(pairKey); // Accept never records here — an accepting user wants the retry loop
-                    surface.Status($"kcap needs to replace the daemon service to continue ({named}) — declined.");
+                    declined.Add(pairKey);
+                    Console.Error.WriteLine($"kcap: daemon replacement declined ({named})");
+                    surface.Status("Daemon service replacement was skipped. Restart kcap to review it again.");
                 }
                 break;
             }
@@ -2722,6 +2842,8 @@ public partial class App : Application {
         // _reauthSettle synchronously, so reading it after Close observes this close's task.
         if (_signInWindow is { } reauthDialog) reauthDialog.Close();
         if (_settingsWindow is { } settingsDialog) settingsDialog.Close();
+        _updateCheckSubscription?.Dispose();
+        _updateCheckWindow?.Close();
         _launchApprovals?.Dispose();
         _menuBar?.SetLaunchApprovalsAction(null);
         if (_feedbackWindow is { } feedbackDialog) feedbackDialog.Close();
@@ -2742,7 +2864,7 @@ public partial class App : Application {
                 IDisposable?[] ui = [
                     _tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
                     _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _accounts, _sessionAccess,
-                    _pullRequestTones, _launchApprovals, _webWorkspace, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending, _expectedRestart,
+                    _pullRequestTones, _launchApprovals, _webWorkspace, _activity, _home, _localServer, _localStack, _rail, _pause, _staleDaemonNudge, _restartPending, _expectedRestart,
                 ];
                 if (shutdown) {
                     await DisposeUiThenConfirmShutdownAsync(ui,

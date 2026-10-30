@@ -51,6 +51,72 @@ internal static partial class InstalledAppProcesses {
         return false;
     }
 
+    /// Kcap app processes other than this one, from any bundle, that started before <paramref name="startedBefore"/>.
+    internal static int[] FindEarlier(DateTime startedBefore) => FindEarlier(startedBefore, Candidates(), RunningBundleIdentifier);
+
+    /// A process counts as kcap by the bundle identifier the system registered when it launched, not by its executable's
+    /// path: an update replaces the bundle under a copy that is still running. One whose identifier cannot be read is left out.
+    internal static int[] FindEarlier(DateTime startedBefore, IEnumerable<(int Pid, DateTime Started)> candidates, Func<int, string?> bundleIdentifier) =>
+        candidates.Where(c => c.Pid != Environment.ProcessId && c.Started < startedBefore
+                && bundleIdentifier(c.Pid) is { } id && KcapBundle.Identifiers.Contains(id, StringComparer.Ordinal))
+            .Select(c => c.Pid).ToArray();
+
+    /// Asked of the system by bundle identifier rather than found by process name: macOS keeps only the first 16
+    /// characters of a process name, which cuts off the legacy "Kurrent Capacitor".
+    static List<(int Pid, DateTime Started)> Candidates() {
+        var candidates = new List<(int, DateTime)>();
+        if (!OperatingSystem.IsMacOS()) return candidates;
+        var pool = Send(GetClass("NSAutoreleasePool"), Selector("new"));
+        try {
+            foreach (var identifier in KcapBundle.Identifiers) {
+                var name = StringWithUtf8(GetClass("NSString"), Selector("stringWithUTF8String:"), identifier);
+                var apps = SendPointer(GetClass("NSRunningApplication"), Selector("runningApplicationsWithBundleIdentifier:"), name);
+                if (apps == 0) continue;
+                var count = (long)Send(apps, Selector("count"));
+                for (var i = 0L; i < count; i++) {
+                    var pid = ProcessIdentifier(ObjectAtIndex(apps, Selector("objectAtIndex:"), (nuint)i), Selector("processIdentifier"));
+                    try {
+                        using var process = Process.GetProcessById(pid);
+                        if (!process.HasExited) candidates.Add((pid, process.StartTime));
+                    } catch (Exception ex) when (ex is ArgumentException or System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException) { }
+                }
+            }
+        } finally { Send(pool, Selector("drain")); }
+        return candidates;
+    }
+
+    static string? RunningBundleIdentifier(int pid) {
+        if (!OperatingSystem.IsMacOS() || pid <= 0) return null;
+        var pool = Send(GetClass("NSAutoreleasePool"), Selector("new"));
+        try {
+            var app = FindApplication(GetClass("NSRunningApplication"), Selector("runningApplicationWithProcessIdentifier:"), pid);
+            if (app == 0) return null;
+            var identifier = Send(app, Selector("bundleIdentifier"));
+            return identifier == 0 ? null : Marshal.PtrToStringUTF8(Send(identifier, Selector("UTF8String")));
+        } finally { Send(pool, Selector("drain")); }
+    }
+
+    /// <summary>
+    /// Asks every kcap app process that started before this one to quit, and waits up to 30 s for those that accepted.
+    /// After an update relaunch none of them should still run: this process holds the single-instance lock, so another
+    /// copy is a predecessor that let go of it without exiting, or one that predates the lock. An older version can
+    /// stay up that way with its main window over this one's. A process that refuses, another user's included, is
+    /// left alone.
+    /// </summary>
+    /// <returns>How many were asked, and whether every one that accepted has exited.</returns>
+    internal static async Task<(int Asked, bool Exited)> QuitEarlierAsync(DateTime startedBefore, TimeProvider time, CancellationToken ct,
+            Func<DateTime, int[]>? find = null, Func<int, bool>? quit = null) {
+        find ??= FindEarlier;
+        quit ??= RequestQuit;
+        var asked = find(startedBefore).Where(pid => pid != Environment.ProcessId && quit(pid)).ToArray();
+        var started = time.GetTimestamp();
+        while (asked.Intersect(find(startedBefore)).Any()) {
+            if (time.GetElapsedTime(started) >= TimeSpan.FromSeconds(30)) return (asked.Length, false);
+            await Task.Delay(TimeSpan.FromMilliseconds(100), time, ct);
+        }
+        return (asked.Length, true);
+    }
+
     static bool RequestQuit(int pid) {
         if (!OperatingSystem.IsMacOS() || pid <= 0 || pid == Environment.ProcessId) return false;
         var pool = Send(GetClass("NSAutoreleasePool"), Selector("new"));
@@ -70,4 +136,12 @@ internal static partial class InstalledAppProcesses {
     private static partial nint FindApplication(nint receiver, nint selector, int pid);
     [LibraryImport(ObjC, EntryPoint = "objc_msgSend")]
     private static partial byte Terminate(nint receiver, nint selector);
+    [LibraryImport(ObjC, EntryPoint = "objc_msgSend", StringMarshalling = StringMarshalling.Utf8)]
+    private static partial nint StringWithUtf8(nint receiver, nint selector, string value);
+    [LibraryImport(ObjC, EntryPoint = "objc_msgSend")]
+    private static partial nint SendPointer(nint receiver, nint selector, nint argument);
+    [LibraryImport(ObjC, EntryPoint = "objc_msgSend")]
+    private static partial nint ObjectAtIndex(nint receiver, nint selector, nuint index);
+    [LibraryImport(ObjC, EntryPoint = "objc_msgSend")]
+    private static partial int ProcessIdentifier(nint receiver, nint selector);
 }

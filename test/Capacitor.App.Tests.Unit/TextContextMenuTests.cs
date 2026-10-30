@@ -22,8 +22,9 @@ public class TextContextMenuTests {
         return window;
     }
 
-    static FlyoutPresenter RightClick(Window window, Control target, Control owner) {
-        var point = target.TranslatePoint(new Point(4, target.Bounds.Height / 2), window)!.Value;
+    static FlyoutPresenter RightClick(Window window, Control target, Control owner, Point? at = null) {
+        var point = at is { } inOwner ? owner.TranslatePoint(inOwner, window)!.Value
+            : target.TranslatePoint(new Point(4, target.Bounds.Height / 2), window)!.Value;
         window.MouseMove(point);
         window.MouseDown(point, MouseButton.Right);
         window.MouseUp(point, MouseButton.Right);
@@ -64,6 +65,40 @@ public class TextContextMenuTests {
                 copy.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
                 Dispatcher.UIThread.RunJobs();
                 await Assert.That(await TopLevel.GetTopLevel(view)!.Clipboard!.TryGetTextAsync()).IsEqualTo("Some chat text.");
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins the right button to the menu: it never opens the link, and the menu offers to copy it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Right_clicking_a_link_offers_to_copy_it_without_opening_it() {
+        await RunOnUiAsync(async () => {
+            var (window, view, opened) = Show("See [docs](https://example.com/docs) now.");
+            try {
+                var paragraph = Paragraphs(view).Single();
+                var glyph = paragraph.TextLayout.HitTestTextPosition("See ".Length);
+                var link = paragraph.TranslatePoint(new Point(glyph.X + paragraph.Padding.Left + 2, glyph.Height / 2 + paragraph.Padding.Top), view)!.Value;
+                var presenter = RightClick(window, paragraph, view, at: link);
+                await Assert.That(opened).IsEmpty();
+
+                var copy = Row(presenter, "Copy link");
+                await Assert.That(copy.IsVisible).IsTrue();
+                copy.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(await TopLevel.GetTopLevel(view)!.Clipboard!.TryGetTextAsync()).IsEqualTo("https://example.com/docs");
+            } finally { window.Close(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Copy_link_is_left_out_off_a_link() {
+        await RunOnUiAsync(async () => {
+            var (window, view, _) = Show("Plain words before [docs](https://example.com/docs).");
+            try {
+                var presenter = RightClick(window, Paragraphs(view).Single(), view);
+                await Assert.That(Row(presenter, "Copy link").IsVisible).IsFalse();
             } finally { window.Close(); }
         });
     }

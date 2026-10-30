@@ -12,18 +12,38 @@ public class LauncherNoticesTests {
         public readonly BehaviorSubject<(bool, LauncherNotices.Kind)> Stack = new(Off);
         public readonly BehaviorSubject<(bool, LauncherNotices.Kind)> Server = new(Off);
         public readonly BehaviorSubject<(bool, LauncherNotices.Kind)> Connection = new(Off);
+        public readonly BehaviorSubject<bool> Update = new(false);
         public readonly LauncherNotices Notices = new();
 
         public Rig() {
             Notices.TrackStack(Stack);
             Notices.TrackServer(Server);
             Notices.TrackConnection(Connection);
+            Notices.TrackUpdate(Update);
         }
 
         public (bool Stack, bool Server, bool Connection) Shown =>
             (Notices.ShowStack, Notices.ShowServer, Notices.ShowConnection);
 
         public void Dispose() => Notices.Dispose();
+    }
+
+    /// While an update is finishing its card is the only one, even over a problem: the others describe what the update is doing.
+    [Test]
+    public async Task A_finishing_update_stands_in_for_every_other_card() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var rig = new Rig();
+            rig.Server.OnNext((true, Problem));
+            rig.Connection.OnNext((true, Progress));
+
+            rig.Update.OnNext(true);
+            await Assert.That(rig.Notices.ShowUpdate).IsTrue();
+            await Assert.That(rig.Shown).IsEqualTo((false, false, false));
+
+            rig.Update.OnNext(false);
+            await Assert.That(rig.Notices.ShowUpdate).IsFalse();
+            await Assert.That(rig.Shown).IsEqualTo((false, true, false));
+        });
     }
 
     /// Only one card shows, and the next takes its place once it clears.

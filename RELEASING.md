@@ -47,6 +47,10 @@ Internal-tenant users opt into the beta CLI with `kcap update --beta`.
 
    `kcap update --stable` switches back to the stable channel.
 
+   The desktop app follows its own choice: a stable install takes betas only after
+   **Settings → About → Get beta updates** is on, and **Check for Updates…** (app menu,
+   tray, or that page) checks the feed right away.
+
 ## Promoting a beta to stable
 
 Once the matching server version is live for the `stable`/`micro` cohorts (see the

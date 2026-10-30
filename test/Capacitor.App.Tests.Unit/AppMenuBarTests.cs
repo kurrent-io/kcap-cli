@@ -22,7 +22,7 @@ public class AppMenuBarTests {
         string.Join("|", menu.Items.Select(i => i is NativeMenuItem item ? item.Header : "-"));
 
     static readonly string AppMenuLayout =
-        "About kcap|-|Settings…|Set up kcap…" + (OperatingSystem.IsMacOS() ? "|-|Uninstall kcap…" : "");
+        "About kcap|Check for Updates…|-|Settings…|Set up kcap…" + (OperatingSystem.IsMacOS() ? "|-|Uninstall kcap…" : "");
 
     static void Click(NativeMenuItem item) => ((INativeMenuItemExporterEventsImplBridge)item).RaiseClicked();
 
@@ -277,6 +277,24 @@ public class AppMenuBarTests {
         await Assert.That(before).IsFalse();
         await Assert.That(after).IsTrue();
         await Assert.That(uninstalls).IsEqualTo(1);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Check_for_updates_is_disabled_until_an_action_is_set() {
+        var checks = 0;
+        var (before, after) = await AvaloniaSession.DispatchAsync(() => {
+            var appMenu = new AppMenu(() => { });
+            var item = Item(appMenu.Menu, "Check for Updates…");
+            var before = item.IsEnabled;
+            appMenu.SetCheckForUpdatesAction(() => { checks++; return Task.CompletedTask; });
+            Click(item);
+            return (before, item.IsEnabled);
+        });
+
+        await Assert.That(before).IsFalse();
+        await Assert.That(after).IsTrue();
+        await Assert.That(checks).IsEqualTo(1);
     }
 
     [Test]

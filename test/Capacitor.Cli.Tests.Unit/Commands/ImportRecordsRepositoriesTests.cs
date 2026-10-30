@@ -63,7 +63,8 @@ public class ImportRecordsRepositoriesTests : IDisposable {
 
     Task<int> RunImport(TempDirHandle projects) =>
         new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home),
-                          new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System)
+                          new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System,
+                          console: new TestImportTerminal().Console)
             .HandleImport(
                 filterCwd:        null,
                 minLines:         1,

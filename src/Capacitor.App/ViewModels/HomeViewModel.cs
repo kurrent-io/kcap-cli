@@ -72,7 +72,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     internal const string SignInToAttach = "sign in to attach files";
 
-    internal const string ConnectingNotice     = "Connecting to the server. This usually takes a few seconds.";
+    internal const string ConnectingNotice     = "Connecting to the server. Session activity appears when the connection is ready.";
     /// Longer than the daemon's 30s connect backoff so one redial still reads as connecting.
     internal static readonly TimeSpan CatchUpLimit = TimeSpan.FromSeconds(60);
     internal const string FinishingSignInNotice =
@@ -102,6 +102,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// hub is down; never on the wire.
     internal const string DaemonSignedOutWord = "signed out";
     internal const string LocalServerRefusedNotice = "The local server refused the connection. Restart kcap.";
+    internal const string FinishingUpdateNotice    = "Finishing the update…";
     internal const string LocalServerLostNotice    = "Lost the connection to the local server. kcap keeps retrying.";
 
     /// A service-run daemon restarts itself for a harness installed on its PATH; setup fixes a PATH that
@@ -293,6 +294,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     // A local server takes no sign-in: its recovery is the Start banner.
     readonly BehaviorSubject<bool> _localServer = new(false);
     readonly BehaviorSubject<bool> _localServerDown = new(false);
+    readonly BehaviorSubject<bool> _updateFinishing = new(false);
+    string? _updateDetail;
     readonly Action? _requestSignIn;
 
     readonly ObservableAsPropertyHelper<string?> _connectionNotice;
@@ -328,6 +331,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     readonly ObservableAsPropertyHelper<bool> _bannerBusy;
     /// True while the banner is an in-flight connect/finish line — a loader, not Sign in.
     public bool BannerBusy => _bannerBusy.Value;
+
+    readonly ObservableAsPropertyHelper<bool> _bannerFailed;
+    /// True when the banner reports a failure rather than something that needs the user.
+    public bool BannerFailed => _bannerFailed.Value;
 
     readonly ObservableAsPropertyHelper<bool> _signInVisible;
     public bool SignInVisible => _signInVisible.Value;
@@ -815,13 +822,17 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .StartWith(0);
         // Staged chips the target cannot take block Start rather than launching without them, and
         // an upload in flight owns the composer until it settles.
+        // An update still bringing this machine's local server and daemon back holds local launches until it settles.
+        var updateHolds = _updateFinishing.CombineLatest(_machineSelectionChanges, (finishing, sel) => finishing && !sel.Remote)
+            .DistinctUntilChanged();
         var canLaunch = selectedAvailability.Select(a => a == LaunchAvailability.Ready)
             .CombineLatest(
                 stagedCount.CombineLatest(canAttach, (count, attach) => count == 0 || attach),
                 _uploadingChanges,
                 noHarnesses,
                 _accountPending.DistinctUntilChanged(),
-                (ready, attachable, uploading, none, pending) => ready && attachable && !uploading && !none && !pending);
+                updateHolds,
+                (ready, attachable, uploading, none, pending, held) => ready && attachable && !uploading && !none && !pending && !held);
 
         // Explicit ObserveOn: ReactiveCommand does NOT reschedule the supplied canExecute, and a
         // Status event arrives on the daemon client's pump thread (MainWindowViewModel's canStart
@@ -860,19 +871,25 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         rawNotices.Subscribe(ArmOrResetCatchUp).DisposeWith(_disposables);
         // A stopped local server's Start banner is the whole story, so the no-harness fallback stays
         // out of it whether or not the daemon has noticed the server is gone.
-        var notices = rawNotices.CombineLatest(_catchUpTimedOut, NoticeAfterCatchUp)
-            .CombineLatest(noHarnesses.ObserveOn(RxSchedulers.MainThreadScheduler), _localServer, _localServerDown, _machineSelectionChanges,
-                (notice, none, local, down, sel) => NoticeForLocalServer(
-                    notice ?? (none && !(local && down && !sel.Remote) ? NoHarnessesNotice(sel.Remote ? sel.Name : null) : null),
-                    local, down, sel.Remote ? sel.Name : null));
+        var connectionNotices = rawNotices.CombineLatest(_catchUpTimedOut, NoticeAfterCatchUp)
+            .CombineLatest(_localServer, _localServerDown, _machineSelectionChanges,
+                (notice, local, down, sel) => NoticeForLocalServer(notice, local, down, sel.Remote ? sel.Name : null));
+        var harnessNotice = noHarnesses.ObserveOn(RxSchedulers.MainThreadScheduler)
+            .CombineLatest(_localServer, _localServerDown, _machineSelectionChanges,
+                (none, local, down, sel) => none && !(local && down && !sel.Remote)
+                    ? NoHarnessesNotice(sel.Remote ? sel.Name : null) : null);
+        var notices = connectionNotices.CombineLatest(harnessNotice, (connection, harness) => connection ?? harness);
         _connectionNotice = notices
             .ToProperty(this, x => x.ConnectionNotice, ConnectingNotice)
             .DisposeWith(_disposables);
         // The lifecycle feed speaks for the LOCAL daemon (start attempts, version mismatch), so it
         // is shown only while the local machine is selected. Remote notices must stay independent.
-        var bannerContent = notices.CombineLatest(
-            _daemonStartMessageFeed, _machineSelectionChanges,
-            (notice, startMessage, sel) => BannerContentFor(notice, sel.Remote ? null : startMessage));
+        var bannerContent = connectionNotices.CombineLatest(
+            _daemonStartMessageFeed, _machineSelectionChanges, harnessNotice,
+            (notice, startMessage, sel, harness) => {
+                var content = BannerContentFor(notice, sel.Remote ? null : startMessage);
+                return content.Message is null ? (Message: harness, Detail: (string?)null) : content;
+            });
         _bannerMessage = bannerContent.Select(content => content.Message)
             .ToProperty(this, x => x.BannerMessage, ConnectingNotice)
             .DisposeWith(_disposables);
@@ -881,6 +898,11 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             var detail  = NoticeText.Commands(content.Detail);
             var (title, body) = NoticeText.Headline(message.Prose);
             if (body is null && detail.Prose is null && title is not null) (title, body) = (DaemonStatusTitle, message.Prose);
+            if (BannerInFlight(content)) {
+                title = title?.TrimEnd('…') + "…";
+                body = body?.Replace("…", "", StringComparison.Ordinal);
+                detail.Prose = detail.Prose?.Replace("…", "", StringComparison.Ordinal);
+            }
             return (Title: title, Body: body, Detail: detail.Prose, Command: detail.Command ?? message.Command);
         });
         _bannerTitle = bannerCard.Select(card => card.Title)
@@ -904,6 +926,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         _bannerBusy = bannerContent
             .Select(BannerInFlight)
             .ToProperty(this, x => x.BannerBusy, initialValue: true)
+            .DisposeWith(_disposables);
+        _bannerFailed = bannerContent
+            .Select(BannerFailedFor)
+            .ToProperty(this, x => x.BannerFailed, initialValue: false)
             .DisposeWith(_disposables);
         var signInVisible = signInState
             .CombineLatest(_catchUpTimedOut, _localServer, (t, timedOut, local) => !local && !t.Awaiting && (t.Expired || (timedOut && !t.Foreign) || (
@@ -933,7 +959,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .DisposeWith(_disposables);
 
         _startButtonTip = _selectedRepoPathChanges
-            .CombineLatest(notices, _accountTip, TipFor)
+            .CombineLatest(notices, _accountTip, updateHolds,
+                (repo, notice, account, held) => TipFor(repo, held ? FinishingUpdateNotice : notice, account))
             .ToProperty(this, x => x.StartButtonTip, TipFor(SelectedRepoPath, ConnectingNotice, null))
             .DisposeWith(_disposables);
 
@@ -1020,6 +1047,27 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     /// Which of the launcher's problem notices show.
     public LauncherNotices Notices { get; } = new();
+
+    /// True while an update the user went on from early is still finishing on this machine.
+    public IObservable<bool> UpdateFinishing => _updateFinishing.DistinctUntilChanged();
+
+    /// The update's remaining step, while one still runs after the main window opened early.
+    public string? UpdateDetail {
+        get => _updateDetail;
+        private set => this.RaiseAndSetIfChanged(ref _updateDetail, value);
+    }
+
+    /// Follows an update the user went on from before it finished: with this machine selected, one card stands in
+    /// for the others and launches wait, until every step has settled.
+    public void AttachUpdateProgress(IObservable<(bool Finishing, string? Detail)> progress) {
+        progress.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(p => {
+            UpdateDetail = p.Detail?.TrimEnd('…');
+            _updateFinishing.OnNext(p.Finishing);
+        }).DisposeWith(_disposables);
+        // A remote machine's own notices still show: the update is changing only this one.
+        Notices.TrackUpdate(_updateFinishing.CombineLatest(_machineSelectionChanges, (finishing, sel) => finishing && !sel.Remote)
+            .DistinctUntilChanged());
+    }
 
     public void AttachLocalServerRecovery(LocalServerRecoveryViewModel recovery) {
         LocalServer = recovery;
@@ -1145,6 +1193,13 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal static bool LaneIsCatchingUp(ServerLaneState lane) =>
         lane is ServerLaneState.Connecting or ServerLaneState.Retrying or ServerLaneState.Connected;
 
+    /// A failure is something that broke: versions that cannot work together, a server that refused
+    /// the app, or a daemon still down after the lifecycle settled on a report, which only follows a
+    /// start or setup that did not work.
+    internal static bool BannerFailedFor((string? Message, string? Detail) content) =>
+        content.Message is DaemonIncompatibleNotice or LocalServerRefusedNotice
+        || (content.Message == DaemonDownNotice && content.Detail is { } detail && !InFlight(detail));
+
     static bool BannerInFlight((string? Message, string? Detail) content) =>
         content.Detail is { } detail ? InFlight(detail)
             : BusyNotice(content.Message) || InFlight(content.Message) || content.Message == DaemonRestartingNotice;
@@ -1191,6 +1246,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         _daemonRetryVisibleFeed.Dispose();
         _daemonRepairVisibleFeed.Dispose();
         _uploadingChanges.Dispose();
+        _updateFinishing.Dispose();
         _retentionTimer.Dispose();
         _catchUpTimer.Dispose();
         _catchUpTimedOut.Dispose();
@@ -1525,7 +1581,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             return;
         }
 
+        var selected = SelectedRepoPath;
         var saved = await _state.LoadAsync();
+        // A machine switch or another pick made while the store loaded owns the vendor now.
+        if (RemoteMachineSelected || !string.Equals(SelectedRepoPath, selected, StringComparison.Ordinal)) return;
         SetVendor(Lookup(saved.HarnessByRepo, SelectedRepoPath) ?? DefaultVendor);
         RevalidateVendor(Harnesses);
     }

@@ -241,10 +241,10 @@ static class ClaudeCliRunner {
         ) {
         // Resolve rather than pass "claude" verbatim: CreateProcess appends only .exe, so the
         // npm-installed claude.cmd shim on Windows would never be found.
-        var exePath = harnesses.ResolveExecutable(HarnessId.Claude);
+        var exePath = harnesses.ResolveLaunchable(HarnessId.Claude);
 
         if (exePath is null) {
-            log("claude not found on PATH");
+            log("claude not found on PATH or in the desktop app");
 
             return new(null, ClaudeCliFailure.ProcessFailure);
         }

@@ -65,4 +65,19 @@ public class DesktopAppProbeTests {
         await Assert.That(probe.Finds("missing")).IsFalse();
         await Assert.That(DesktopAppProbe.None.Finds("App.app")).IsFalse();
     }
+
+    [Test]
+    public async Task Directories_lists_the_entry_under_each_root_that_has_it_in_root_order() {
+        using var a = new TempDir();
+        using var b = new TempDir();
+        using var c = new TempDir();
+        a.CreateDir("Data");
+        b.CreateFile("Data", "a file, not a directory");
+        var hit = c.CreateDir("Data");
+
+        var dirs = DesktopAppProbe.Searching(c.Path, b.Path, a.Path).Directories("Data").ToList();
+
+        await Assert.That(dirs).IsEquivalentTo([(string)hit, a.PathTo("Data")]);
+        await Assert.That(dirs[0]).IsEqualTo((string)hit);
+    }
 }

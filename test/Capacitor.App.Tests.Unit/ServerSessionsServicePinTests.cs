@@ -134,6 +134,17 @@ public class ServerSessionsServicePinTests {
     }
 
     [Test]
+    public async Task A_rename_applies_to_an_unlisted_pinned_row() {
+        using var rig = new Rig();
+        rig.Connect();
+        await rig.PinUnlistedAsync("x", Summary("x", title: "Teammate work"));
+
+        rig.Service.ApplyRename("x", "Renamed");
+
+        await Assert.That(rig.Latest.Pinned!.Title).IsEqualTo("Renamed");
+    }
+
+    [Test]
     public async Task Pin_survives_a_scope_change() {
         using var rig = new Rig();
         rig.Connect();

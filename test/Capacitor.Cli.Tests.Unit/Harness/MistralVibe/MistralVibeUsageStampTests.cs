@@ -17,6 +17,17 @@ public class MistralVibeUsageStampTests {
         await Assert.That(MistralVibeUsageStamp.LastStamped(lines)).IsEqualTo(new MistralVibeTokenUsage(400, 30, 250));
     }
 
+    /// <summary>The server prices usage by its model id, so a blank one would sit unpriced under "".</summary>
+    [Test]
+    [Arguments(null)]
+    [Arguments("")]
+    public async Task Without_a_model_the_stamp_names_none(string? model) {
+        var lines = MistralVibeUsageStamp.Apply([User, Assistant], MistralVibeTokenUsage.Zero, new(10, 1, 0), model);
+
+        await Assert.That(lines[1]).Contains("\"kcapUsage\":{\"inputTokens\":10");
+        await Assert.That(lines[1]).DoesNotContain("\"model\"");
+    }
+
     [Test]
     public async Task Nothing_is_stamped_without_new_tokens_or_an_assistant_message() {
         IReadOnlyList<string> lines = [User, Assistant];

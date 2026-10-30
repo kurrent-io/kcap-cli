@@ -102,7 +102,7 @@ public class CursorPrivatizeLifecycleFailureTests : IDisposable {
 
         var source = new CursorImportSource(Config.Root, WriteOneCursorSession(), WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: TestImportConsole.Over()).HandleImport(
             filterCwd: null,
             minLines: 0,
             sources: [source],
@@ -141,7 +141,7 @@ public class CursorPrivatizeLifecycleFailureTests : IDisposable {
 
         var source = new CursorImportSource(Config.Root, WriteOneCursorSession(), WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: TestImportConsole.Over()).HandleImport(
             filterCwd: null,
             minLines: 0,
             sources: [source],
@@ -177,7 +177,7 @@ public class CursorPrivatizeLifecycleFailureTests : IDisposable {
 
         var source = new CursorImportSource(Config.Root, WriteOneCursorSession(), WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: TestImportConsole.Over()).HandleImport(
             filterCwd: null,
             minLines: 0,
             sources: [source],
@@ -268,7 +268,7 @@ public class CursorPrivatizeLifecycleFailureTests : IDisposable {
 
         var source = new CursorImportSource(Config.Root, WriteParentWithCorrelatedChild(), WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: TestImportConsole.Over()).HandleImport(
             filterCwd: null,
             minLines: 0,
             sources: [source],

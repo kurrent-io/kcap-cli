@@ -186,7 +186,7 @@ public class ApplicationsMoverPredecessorTests {
 
         await Assert.That(plan.Title).IsEqualTo("Upgrade to kcap");
         await Assert.That(plan.ButtonLabel).IsEqualTo("Quit and update");
-        await Assert.That(plan.Detail).StartsWith("Kurrent Capacitor will be replaced with kcap, and the updated app will open.");
+        await Assert.That(plan.Detail).StartsWith("kcap will replace Kurrent Capacitor and open.");
         await Assert.That(outcome.Moved).IsTrue();
         await Assert.That(quit.SequenceEqual([legacy])).IsTrue();
         await Assert.That(references.OldRoots).Contains(legacy);
@@ -271,7 +271,7 @@ public class ApplicationsMoverPredecessorTests {
         await Assert.That(plan.Action).IsEqualTo(ApplicationsInstallAction.OpenInstalled);
         await Assert.That(plan.Title).IsEqualTo("Upgrade to kcap");
         await Assert.That(plan.ButtonLabel).IsEqualTo("Replace and open");
-        await Assert.That(plan.Detail).StartsWith($"Kurrent Capacitor will be replaced with the kcap already installed at {Path.Combine(apps, "kcap.app")}, which will open.");
+        await Assert.That(plan.Detail).StartsWith($"kcap at {Path.Combine(apps, "kcap.app")} will replace Kurrent Capacitor and open.");
         await Assert.That(outcome.Moved).IsTrue();
         await Assert.That(ditto.Calls).IsEqualTo(0);
         await Assert.That(references.OldRoots).Contains(source);

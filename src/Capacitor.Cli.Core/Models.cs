@@ -1750,7 +1750,10 @@ public readonly record struct LaunchAgentCommand(
         string?           AccountId = null,
         // The transport the server will validate this launch's registration against: "app-server" or
         // "pty". Null from an older server, which leaves the daemon's own routing to decide.
-        string?           ExpectedRuntimeTransport = null
+        string?           ExpectedRuntimeTransport = null,
+        // A review-flow reviewer with no repository: it runs in an empty daemon-owned directory and
+        // RepoPath is empty. Sent only to a daemon advertising DaemonConnect.SupportsScratchWorkspace.
+        bool              ScratchWorkspace = false
     );
 
 /// <summary>Caller-selected Codex launch posture. Valid ONLY for interactive, daemon-owned-worktree
@@ -2296,7 +2299,10 @@ public readonly record struct DaemonConnect(
         bool                                        SupportsAccountLaunches = false,
         Capacitor.Cli.Core.Accounts.AccountsSnapshotDto? Accounts = null,
         // Per-account launchable models, keyed by registry id.
-        Dictionary<string, VendorModelOption[]>?    VendorModelsByAccount = null
+        Dictionary<string, VendorModelOption[]>?    VendorModelsByAccount = null,
+        // Accepts a LaunchAgentCommand.ScratchWorkspace launch. False from a daemon predating it, which
+        // would try to create a worktree from an empty repository path.
+        bool                                        SupportsScratchWorkspace = false
     );
 
 public sealed record UnattendedVendorCapability(

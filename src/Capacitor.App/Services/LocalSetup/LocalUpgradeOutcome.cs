@@ -8,7 +8,7 @@ public abstract record LocalUpgradeOutcome {
     const int NothingToDoExit       = 3;
     const int NotPublishedExit      = 4;
 
-    public sealed record Upgraded(string? From, string? To) : LocalUpgradeOutcome;
+    public sealed record Upgraded(string? From, string? To, string? SearchWarning = null) : LocalUpgradeOutcome;
 
     /// The stack is already at the bundled CLI's version or newer, or there is no installation.
     public sealed record NothingToDo(string? Reason) : LocalUpgradeOutcome;
@@ -24,7 +24,7 @@ public abstract record LocalUpgradeOutcome {
     /// killed past it exits with the signal's code, and the new version is still selected.
     public static LocalUpgradeOutcome Settle(LocalUpgradeProgress progress, int exitCode, string? stderr) =>
         exitCode switch {
-            UpgradedExit     => new Upgraded(progress.From, progress.To),
+            UpgradedExit     => new Upgraded(progress.From, progress.To, progress.Embeddings.Skipped ? progress.Embeddings.Summary : null),
             NothingToDoExit  => new NothingToDo(progress.SkipReason),
             NotPublishedExit => new NotPublished(progress.FailedMessage),
             _ => new Failed(

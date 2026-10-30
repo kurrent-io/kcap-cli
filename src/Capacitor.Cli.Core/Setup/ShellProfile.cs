@@ -3,7 +3,7 @@ using System.Text;
 namespace Capacitor.Cli.Core.Setup;
 
 /// Puts `~/.local/bin` on a new terminal's PATH through the login shell's profile, for a user who
-/// can neither write a folder already on PATH nor authorize an admin link. The line kcap adds sits
+/// cannot write any folder already on PATH. The line kcap adds sits
 /// between markers, so a re-run finds it and uninstall removes exactly it; the rest of the file is
 /// never rewritten.
 public sealed class ShellProfile(UserHome home, string? shell) {

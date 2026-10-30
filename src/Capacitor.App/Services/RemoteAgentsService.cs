@@ -1,9 +1,15 @@
+using System.Net;
 using System.Net.Http.Json;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.WorkItems;
 using Capacitor.Remote.Models;
 using DynamicData;
 
@@ -29,6 +35,8 @@ public interface IRemoteAgentsService {
     /// Fetches the daemon listing and every daemon's accounts now, ahead of any retry the backoff is
     /// waiting on.
     Task RefreshDaemonsAsync();
+    /// Renames the session as the signed-in user; an applied rename shows in Agents at once.
+    Task<SessionRenameResult> RenameAsync(string agentId, string sessionId, string title, CancellationToken ct);
 }
 
 /// An agents fetch's outcome: Rows is null on any failure (including Unauthorized), so a caller
@@ -93,13 +101,20 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
     readonly IServerLane _lane;
     readonly Action<int>? _onUnauthorized;
     readonly TimeProvider _time;
+    readonly Func<string, string, CancellationToken, Task<SessionRenameResult>>? _postRename;
+    readonly SessionTitleOverlay _overlay;
+    // Advances only when the signed-in subject changes, unlike _generation, which a dropped connection also advances.
+    long _identity;
 
     public RemoteAgentsService(
             IServerLane lane, Func<CancellationToken, Task<RemoteFetch>> fetchAgents,
-            TimeSpan? debounce = null, Action<int>? onUnauthorized = null, TimeProvider? time = null) {
+            TimeSpan? debounce = null, Action<int>? onUnauthorized = null, TimeProvider? time = null,
+            Func<string, string, CancellationToken, Task<SessionRenameResult>>? postRename = null) {
         _lane = lane;
         _onUnauthorized = onUnauthorized;
+        _postRename = postRename;
         _time = time ?? TimeProvider.System;
+        _overlay = new(_time);
         _listingRetry = new(_time, RetryDelays);
         _accountsRetry = new(_time, RetryDelays);
         var wait = debounce ?? TimeSpan.FromMilliseconds(250);
@@ -137,6 +152,8 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
                 if (s.Subject is not null) {
                     if (_lastSubject is not null && _lastSubject != s.Subject) {
                         _agents.Clear();
+                        _overlay.Clear();
+                        _identity++;
                         _daemons.OnNext([]);
                         _daemonAccounts.OnNext([]);
                     }
@@ -185,7 +202,8 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
         }
         while (true) {
             int generation, laneEpoch;
-            lock (_lock) { generation = _generation; laneEpoch = _lastLaneEpoch; }
+            long seq;
+            lock (_lock) { generation = _generation; laneEpoch = _lastLaneEpoch; seq = _overlay.BeginRead(); }
             RemoteFetch? result = null;
             try {
                 result = await fetch(CancellationToken.None).ConfigureAwait(false);
@@ -208,7 +226,8 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
                 // A refresh admitted after the lane dropped is as stale as one that outlived it.
                 if (generation == _generation && _connected) {
                     if (result?.Rows is { } rows)
-                        _agents.EditDiff(rows, EqualityComparer<AgentInstanceDto>.Default);
+                        _agents.EditDiff(_overlay.Resolve(rows, r => r.SessionId, r => r.Title, (r, title) => r with { Title = title }, seq),
+                            EqualityComparer<AgentInstanceDto>.Default);
                     if (result is { Unauthorized: true }) notifyUnauthorized = true;
                     _current.OnNext(result?.Rows is not null);
                 }
@@ -223,6 +242,25 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
             if (notifyUnauthorized) _onUnauthorized?.Invoke(laneEpoch);
             if (!rerun) return;
         }
+    }
+
+    public async Task<SessionRenameResult> RenameAsync(string agentId, string sessionId, string title, CancellationToken ct) {
+        if (_postRename is null) return new SessionRenameResult(false, null, SessionRenameReasons.Unauthenticated);
+        long identity;
+        lock (_lock) identity = _identity;
+        var result = await _postRename(sessionId, title, ct).ConfigureAwait(false);
+        if (!result.Applied) return result;
+        lock (_lock) {
+            if (identity != _identity)
+                return new SessionRenameResult(false, null, SessionRenameReasons.IdentityMismatch);
+            if (SessionTitleOverlay.Key(sessionId) is not { } key) return result;
+            var shown = result.Title is { Length: > 0 } ? result.Title : RenameWire.NormalizeTitle(title) ?? title;
+            var cached = _agents.Items.Where(a => SessionTitleOverlay.Key(a.SessionId) == key).ToList();
+            _overlay.Record(sessionId, shown, cached.FirstOrDefault()?.Title);
+            var affected = cached.Select(a => a with { Title = shown }).ToList();
+            if (affected.Count > 0) _agents.AddOrUpdate(affected);
+        }
+        return result;
     }
 
     public Task RefreshDaemonsAsync() => Task.WhenAll(RefreshListingAsync(), RefreshDaemonAccountsAsync());
@@ -381,6 +419,51 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
             }
         } catch (Exception) {
             return new RemoteFetch(null);
+        }
+    };
+
+    /// Production rename: authenticated POST {server}/hooks/agent-title with rename=true. Every
+    /// failure is a reason; only the caller's own cancellation throws.
+    public static Func<string, string, CancellationToken, Task<SessionRenameResult>> HttpRename(
+            ICapacitorHttpClient? http, ProfileContext? profiles) => async (sessionId, title, ct) => {
+        var serverUrl = profiles?.Resolution.ServerUrl;
+        if (http is null || profiles is null || string.IsNullOrEmpty(serverUrl))
+            return new SessionRenameResult(false, null, SessionRenameReasons.Unauthenticated);
+        if (RenameWire.NormalizeTitle(title) is not { } normalized)
+            return new SessionRenameResult(false, null, SessionRenameReasons.Malformed);
+        if (WorkContextIds.CanonicalSessionId(sessionId) is not { } canonical)
+            return new SessionRenameResult(false, null, SessionRenameReasons.NotFound);
+        try {
+            var (client, status, _, _) = await http.ForWaitAsync(ct).ConfigureAwait(false);
+            using (client) {
+                if (status is not (AuthStatus.Ok or AuthStatus.NoAuthRequired))
+                    return new SessionRenameResult(false, null, SessionRenameReasons.Unauthenticated);
+                var payload = new JsonObject {
+                    ["session_id"] = canonical,
+                    ["title"]      = normalized,
+                    ["rename"]     = true,
+                };
+                using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+                using var response = await client.PostAsync($"{serverUrl.TrimEnd('/')}/hooks/agent-title", content, ct).ConfigureAwait(false);
+                switch (response.StatusCode) {
+                    case HttpStatusCode.Forbidden:    return new SessionRenameResult(false, null, SessionRenameReasons.NotOwned);
+                    case HttpStatusCode.NotFound:     return new SessionRenameResult(false, null, SessionRenameReasons.NotFound);
+                    case HttpStatusCode.Unauthorized: return new SessionRenameResult(false, null, SessionRenameReasons.Unauthenticated);
+                }
+                if (!response.IsSuccessStatusCode) return new SessionRenameResult(false, null, SessionRenameReasons.ServerError);
+                var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                using var doc = JsonDocument.Parse(body);
+                var shown = doc.RootElement.Str("title");
+                return doc.RootElement.Bool("applied") switch {
+                    true  => new SessionRenameResult(true, shown, null),
+                    false => new SessionRenameResult(false, shown, SessionRenameReasons.Refused),
+                    null  => new SessionRenameResult(false, null, SessionRenameReasons.ServerError),
+                };
+            }
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            throw;
+        } catch (Exception) {
+            return new SessionRenameResult(false, null, SessionRenameReasons.ServerError);
         }
     };
 

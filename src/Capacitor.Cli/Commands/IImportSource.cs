@@ -11,7 +11,10 @@ internal sealed record DiscoveryFilters(
     string?   FilterCwd,
     string?   FilterSession,
     DateOnly? Since,
-    int       MinLines);
+    int       MinLines) {
+    /// <summary>Where a source reports a diagnostic; null is the process's stderr.</summary>
+    public TextWriter? Stderr { get; init; }
+}
 
 /// <summary>
 /// A session candidate after DiscoverAsync. The orchestrator never inspects
@@ -41,7 +44,10 @@ internal sealed record ClassifyContext(
     string                      BaseUrl,
     int                         MinLines,
     UserHome                    Home,
-    bool                        Reimport = false);
+    bool                        Reimport = false) {
+    /// <inheritdoc cref="DiscoveryFilters.Stderr"/>
+    public TextWriter? Stderr { get; init; }
+}
 
 /// <summary>
 /// Dependencies passed to ImportSessionAsync. ForcePrivate carries the
@@ -58,6 +64,9 @@ internal sealed record ImportContext(
     bool                       ForcePrivate,
     string?                    DefaultVisibility = null,
     IProgress<ImportProgress>? Progress          = null) {
+    /// <inheritdoc cref="DiscoveryFilters.Stderr"/>
+    public TextWriter? Stderr { get; init; }
+
     /// <summary>
     /// The <c>default_visibility</c> to stamp on a session-start, or null to leave the field off.
     /// <b>An omitted stamp is not "no default"</b> — the server coalesces an absent one to

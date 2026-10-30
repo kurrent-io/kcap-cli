@@ -44,4 +44,7 @@ public interface IServerSessionsService {
     /// at once, any other only once its summary reads back. Nothing is pinned on a failure.
     Task<PinOutcome> PinAsync(string sessionId, PinPresentation presentation, CancellationToken ct);
     void Unpin();
+    /// Shows a rename the server applied at once, in every set that lists the session, and holds it
+    /// over reads that still carry a title it replaced.
+    void ApplyRename(string sessionId, string title);
 }

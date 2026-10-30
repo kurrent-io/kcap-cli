@@ -11,14 +11,14 @@ public sealed class UpdateCommand(
         TimeProvider time, KcapReleaseClient? releases = null, ScriptUpdater? scriptUpdater = null, InstallKind? kind = null) {
     /// Printed by every `kcap update` invocation of a CLI that lives inside the desktop app.
     internal const string BundledMessage =
-        "This kcap is bundled with the kcap desktop app; updates arrive through the app (\"Check for Updates…\" in the menu bar).";
+        "This CLI is bundled with the kcap desktop app. Choose \"Check for Updates…\" in the app menu.";
 
     /// <summary>Printed by `kcap update` in the desktop app's snap. snapd refreshes a Store install, but never a
     /// local one (`snap install --dangerous`, revisions x1, x2, …), so that one is pointed at a new .snap file.</summary>
     internal static string SnapMessage(SnapLayout? snap) =>
         snap is { IsLocal: true }
-            ? $"This kcap is a locally installed snap (revision {snap.Revision}); snapd does not update it. Install a newer one with: sudo snap install --dangerous --classic <file>.snap"
-            : $"This kcap is part of the kcap snap; snapd keeps it up to date. To update now: sudo snap refresh{(snap is null ? "" : " " + snap.Name)}";
+            ? $"This kcap is a locally installed snap (revision {snap.Revision}). snapd does not update it. Install a newer one with: sudo snap install --dangerous --classic <file>.snap"
+            : $"This kcap is part of the kcap snap. snapd keeps it up to date. To update now: sudo snap refresh{(snap is null ? "" : " " + snap.Name)}";
 
     readonly InstallKind _kind = kind ?? InstallProvenance.Kind();
 
@@ -43,7 +43,7 @@ public sealed class UpdateCommand(
     /// <summary>A script install checks the installer's channel manifest; anything else checks npm.</summary>
     IReleaseFeed Feed => _kind == InstallKind.Script && releases is not null ? releases : npm;
 
-    /// <summary>Valid npm dist-tags for the update channel (Phase 1).</summary>
+    /// <summary>Valid npm dist-tags for the update channel.</summary>
     static readonly string[] KnownChannels = ["latest", "beta"];
 
     /// <summary>
@@ -54,18 +54,6 @@ public sealed class UpdateCommand(
     /// </summary>
     internal static readonly string Arrow = OperatingSystem.IsWindows() ? "->" : "→";
 
-    /// <summary>
-    /// Resolves the effective update channel (npm dist-tag): an explicit
-    /// <c>--beta</c>/<c>--stable</c> flag wins, otherwise the configured channel
-    /// is used. The result is validated against <see cref="KnownChannels"/> and
-    /// falls back to <c>"latest"</c> for anything unset/blank/unknown. This is the
-    /// single trust boundary for the channel value: it flows into a filesystem
-    /// cache path (<c>update-check-{channel}.json</c>) and the registry URL, so a
-    /// corrupted or hand-edited <c>update_channel</c> (a typo, or one containing
-    /// <c>..</c> or a rooted path) must never reach either unsanitized. STJ
-    /// source-gen also doesn't apply the record default on deserialize, so a real
-    /// profile can carry a null <c>UpdateChannel</c> — also handled here.
-    /// </summary>
     /// <summary>The channel a script install follows is the one its marker records, which the installer
     /// and every channel switch write; the profile's applies to every other install.</summary>
     internal static string? ConfiguredChannel(InstallKind kind, ScriptInstallLayout? layout, string? profileChannel) =>
@@ -75,6 +63,7 @@ public sealed class UpdateCommand(
     internal static string? ConfiguredChannel(string? profileChannel) =>
         ConfiguredChannel(InstallProvenance.Kind(), ScriptInstallLayout.OfRunningBinary(), profileChannel);
 
+    /// <summary>Validates the channel before it reaches a cache path or registry URL; explicit flags win.</summary>
     internal static string ResolveChannel(string[] args, string? configuredChannel) {
         if (args.Contains("--stable")) return "latest";
         if (args.Contains("--beta"))   return "beta";
@@ -156,9 +145,12 @@ public sealed class UpdateCommand(
         }
 
         if (!IsNewer(latest, current)) {
-            await Console.Out.WriteLineAsync($"Already up to date: {current}");
+            await Console.Out.WriteLineAsync($"CLI already up to date: {current}");
 
-            return 0;
+            var exe = _kind == InstallKind.Script && ScriptLayout is { } installed
+                ? installed.CurrentBin(OperatingSystem.IsWindows() ? "kcap.exe" : "kcap")
+                : Environment.ProcessPath;
+            return exe is null ? 1 : await UpgradeLocalAsync(exe);
         }
 
         if (_kind == InstallKind.Script && ScriptLayout is { } layout && scriptUpdater is not null)
@@ -185,15 +177,18 @@ public sealed class UpdateCommand(
         await Console.Out.WriteLineAsync("Refreshing hooks and skills…");
         var exe = layout.CurrentBin(OperatingSystem.IsWindows() ? "kcap.exe" : "kcap");
         if (await RunRefresh(exe) != 0)
-            await Console.Error.WriteLineAsync("Some agent integrations were not refreshed; run `kcap refresh` to retry.");
+            await Console.Error.WriteLineAsync("Some agent integrations were not refreshed. Run `kcap refresh` to retry.");
 
         await Console.Out.WriteLineAsync($"kcap updated to {target}.");
         await Console.Out.WriteLineAsync(OperatingSystem.IsWindows()
             ? "Run `kcap daemon restart` if you run the daemon."
-            : "A running daemon restarts on the new version; its agents are stopped and resumed.");
+            : "The daemon waits for active turns. It restarts when the configured wait ends. Long turns may be interrupted. Eligible agents resume if auto-resume is on. Other sessions may need attention. Daemons started in a terminal need a manual restart.");
 
-        return await RunLocalUpgrade(exe) is LocalUpgradeCommand.Upgraded or LocalUpgradeCommand.NothingToDo or LocalUpgradeCommand.NotPublished ? 0 : 1;
+        return await UpgradeLocalAsync(exe);
     }
+
+    async Task<int> UpgradeLocalAsync(string exe) =>
+        await RunLocalUpgrade(exe) is LocalUpgradeCommand.Upgraded or LocalUpgradeCommand.NothingToDo or LocalUpgradeCommand.NotPublished ? 0 : 1;
 
     /// <summary>Inherits the console, so its progress and any error reach the user as it happens.</summary>
     static async Task<int> RunLocalUpgradeAsync(string exe) {
@@ -207,9 +202,9 @@ public sealed class UpdateCommand(
         await process.WaitForExitAsync();
 
         if (process.ExitCode == LocalUpgradeCommand.NotPublished)
-            await Console.Error.WriteLineAsync("The local server stays on its version until a bundle for this kcap is published; run `kcap local upgrade` then.");
+            await Console.Error.WriteLineAsync("The matching local-server bundle is not published yet. The current version stays installed. Run `kcap local upgrade` when the bundle is available.");
         else if (process.ExitCode is not (LocalUpgradeCommand.Upgraded or LocalUpgradeCommand.NothingToDo))
-            await Console.Error.WriteLineAsync("The local server was not upgraded; run `kcap local upgrade` to retry.");
+            await Console.Error.WriteLineAsync("The local server was not upgraded. Run `kcap local upgrade` to retry.");
 
         return process.ExitCode;
     }
