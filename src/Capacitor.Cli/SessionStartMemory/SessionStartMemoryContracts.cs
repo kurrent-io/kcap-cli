@@ -55,6 +55,8 @@ internal sealed record SessionStartMemoryContextRequest(
     TimeSpan Budget,
     CancellationToken CancellationToken,
     bool GuidelinesDisabled = true,
+    // A hosted agent, which the flows lane tells to wait with schedule_wakeup if the server takes wake-ups.
+    bool WakeUpsWanted = false,
     bool FlowsDisabled = true) {
     public bool AllLanesDisabled => Disabled && GuidelinesDisabled && FlowsDisabled;
 }
