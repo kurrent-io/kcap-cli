@@ -7,7 +7,9 @@ namespace Capacitor.Cli.Core.Accounts;
 /// <c>CODEX_HOME</c>. <see cref="Directory"/> is normalized and is the account's key.
 /// <see cref="WiredAt"/> is the last wiring attempt that succeeded and <see cref="WiringFailure"/> the
 /// summary of the latest one that did not. <see cref="Generation"/> starts at 0 for an entry written without it;
-/// <see cref="GenerationStartedAt"/> is when the probe that detected the current generation's login began.</summary>
+/// <see cref="GenerationStartedAt"/> is when the probe that detected the current generation's login began.
+/// <see cref="RetiredSessions"/> is read only by older builds' status-line writers, which refuse a listed session's
+/// replay; this build records into the current generation regardless.</summary>
 public sealed record VendorAccount(
     [property: JsonPropertyName("id")]                     string            Id,
     [property: JsonPropertyName("vendor")]                 HarnessId         Vendor,
@@ -17,6 +19,7 @@ public sealed record VendorAccount(
     [property: JsonPropertyName("wired_at")]               DateTimeOffset?   WiredAt              = null,
     [property: JsonPropertyName("wiring_failure")]         string?           WiringFailure        = null,
     [property: JsonPropertyName("generation")]             long              Generation           = 0,
+    [property: JsonPropertyName("retired_sessions")]       string[]?         RetiredSessions      = null,
     [property: JsonPropertyName("status_line")]            StatusLineBackup? StatusLine           = null,
     [property: JsonPropertyName("email")]                  string?           Email                = null,
     [property: JsonPropertyName("org_id")]                 string?           OrgId                = null,
@@ -44,4 +47,11 @@ public sealed record VendorAccount(
     /// nonzero generation and no <see cref="GenerationStartedAt"/>.</summary>
     [JsonIgnore]
     public bool HasSwitched => Generation > 0 || GenerationStartedAt is not null;
+
+    /// <summary>Observations produced before this are from an earlier login. Null before the first switch. A
+    /// switch recorded without <see cref="GenerationStartedAt"/> falls back to the last refresh, or registration
+    /// when there was none: no earlier than the switch, so a backlog from before it never passes.</summary>
+    [JsonIgnore]
+    public DateTimeOffset? ObservationsFrom =>
+        GenerationStartedAt ?? (Generation > 0 ? RefreshedAt ?? AddedAt : null);
 }

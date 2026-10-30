@@ -8,6 +8,7 @@ namespace Capacitor.Cli.Core.Accounts;
 /// restore an older login. Its limits belong to the login its own probe saw and commit with it.</summary>
 public static class AccountRefresh {
     const int MaxRefreshOrigins  = 16;
+    const int MaxRetiredSessions = 256;
 
     /// <summary>What the commit decided, carried from the registry change to the reading writes.</summary>
     sealed record Decision(long FromGeneration, long ToGeneration, bool MergeLimits);
@@ -50,7 +51,7 @@ public static class AccountRefresh {
             (r, held) => {
                 if (r.Accounts.FirstOrDefault(a => a.Id == accountId) is not { } current) return (r, false);
 
-                var (next, made) = Commit(current with { RefreshedAt = now }, started, result, probeStartedAt);
+                var (next, made) = Commit(current with { RefreshedAt = now }, started, result, probeStartedAt, held);
                 decision = made;
                 return (Replace(r, next), true);
             },
@@ -74,7 +75,7 @@ public static class AccountRefresh {
         return new(found, found ? Steps(started.Vendor, result, decision, writeFailed) : [], revision);
     }
 
-    static (VendorAccount Next, Decision? Decision) Commit(VendorAccount current, VendorAccount started, ProbeResult result, DateTimeOffset probeStartedAt) {
+    static (VendorAccount Next, Decision? Decision) Commit(VendorAccount current, VendorAccount started, ProbeResult result, DateTimeOffset probeStartedAt, HeldReadings held) {
         if (started.ProbeSeq <= current.CommittedProbeSeq) return (current, null);
 
         var next = current with {
@@ -82,6 +83,8 @@ public static class AccountRefresh {
             RefreshError      = result.IdentityError,
             LimitsError       = current.Vendor is HarnessId.Codex ? result.LimitsError : null,
         };
+
+        if (next.Generation > 0 && next.GenerationStartedAt is null) next = next with { GenerationStartedAt = probeStartedAt };
 
         if (result.HookTrust is { } trust)
             next = next with { HookTrust = trust.Trust, HookTrustFingerprint = trust.Fingerprint };
@@ -107,7 +110,11 @@ public static class AccountRefresh {
 
             if (!current.LabelIsUserSet && committed.Email is { } email) next = next with { Label = email };
 
-            if (differs) next = next with { Generation = current.Generation + 1, GenerationStartedAt = probeStartedAt };
+            if (differs) {
+                var seen    = held.Read(current.Id, current.Generation).Sessions.Select(s => s.SessionId);
+                var retired = (current.RetiredSessions ?? []).Concat(seen).Distinct().TakeLast(MaxRetiredSessions);
+                next = next with { Generation = current.Generation + 1, GenerationStartedAt = probeStartedAt, RetiredSessions = [.. retired] };
+            }
         }
 
         return (next, new(current.Generation, next.Generation, true));

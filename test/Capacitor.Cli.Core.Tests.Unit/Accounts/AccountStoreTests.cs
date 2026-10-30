@@ -282,6 +282,20 @@ public class AccountStoreTests {
     }
 
     [Test]
+    public async Task ObservationsFrom_is_the_generation_start_or_the_latest_recorded_instant_for_a_switch_without_one() {
+        var added     = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var refreshed = added.AddDays(30);
+        var started   = refreshed.AddDays(1);
+        var account   = new VendorAccount("a", HarnessId.Codex, "/h/.codex-a", "a", added);
+
+        await Assert.That(account.ObservationsFrom).IsNull();
+        await Assert.That((account with { GenerationStartedAt = started }).ObservationsFrom).IsEqualTo(started);
+        await Assert.That((account with { Generation = 1 }).ObservationsFrom).IsEqualTo(added);
+        await Assert.That((account with { Generation = 1, RefreshedAt = refreshed }).ObservationsFrom).IsEqualTo(refreshed);
+        await Assert.That((account with { Generation = 1, RefreshedAt = refreshed, GenerationStartedAt = started }).ObservationsFrom).IsEqualTo(started);
+    }
+
+    [Test]
     public async Task HasSwitched_holds_for_a_legacy_nonzero_generation_without_timestamp() {
         Tmp.CreateFile("accounts/accounts.json", """
             { "version": 1, "revision": 2, "accounts": [

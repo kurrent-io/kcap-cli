@@ -59,6 +59,19 @@ public class ReadingStoreTests {
     }
 
     [Test]
+    public async Task TryRecord_ignores_the_retired_sessions_list() {
+        var store = Registered(Store(), Codex("a", generation: 1) with { RetiredSessions = ["s1"] });
+
+        var written = store.Readings.TryRecord("a", (file, _) => file with {
+            Reading  = ReadingMerge.Apply(file.Reading, Obs(0, fresh: true, windows: [W("codex", 300, 10, At(300))])),
+            Sessions = [new ReadingSession("s1", null)],
+        });
+
+        await Assert.That(written).IsTrue();
+        await Assert.That(store.Readings.LoadAll()["a"].Sessions.Single().SessionId).IsEqualTo("s1");
+    }
+
+    [Test]
     public async Task TryRecord_passes_the_registry_entry() {
         var started = At(0);
         var store   = Registered(Store(), Codex("a", generation: 1) with { GenerationStartedAt = started });

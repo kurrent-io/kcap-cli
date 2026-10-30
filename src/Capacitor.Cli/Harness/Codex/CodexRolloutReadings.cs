@@ -30,7 +30,7 @@ public sealed class CodexRolloutReadings(ReadingStore store, VendorAccount accou
             if (observations.Count == 0) return;
 
             store.TryRecord(account.Id, (f, entry) => {
-                var current = observations.Where(o => entry.GenerationStartedAt is not { } start || o.ProducedAt >= start).ToList();
+                var current = observations.Where(o => entry.ObservationsFrom is not { } start || o.ProducedAt >= start).ToList();
 
                 return current.Count == 0 ? null : f with { Reading = current.Aggregate(f.Reading, ReadingMerge.Apply) };
             });

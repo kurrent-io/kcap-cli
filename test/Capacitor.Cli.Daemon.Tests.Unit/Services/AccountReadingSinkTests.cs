@@ -108,6 +108,22 @@ public class AccountReadingSinkTests {
     }
 
     [Test]
+    public async Task Switched_account_without_a_generation_start_drops_observations_from_before_its_last_refresh() {
+        Register(Work, generation: 1);
+        Store.Mutate(r => (r with { Accounts = [r.Accounts.Single() with { RefreshedAt = At }] }, 0));
+        using var sink = Sink();
+        var before = Window(30) with { ProducedAt = At.AddMinutes(-5) };
+        var after  = Window(20) with { ProducedAt = At.AddMinutes(5) };
+
+        sink.Post(Account(Work), before);
+        sink.Post(Account(Work), after);
+
+        await Assert.That(await Processed(before)).IsFalse();
+        await Assert.That(await Processed(after)).IsTrue();
+        await Assert.That(Read(Work)!.Reading.Windows.Single().UsedPercent).IsEqualTo(20.0);
+    }
+
+    [Test]
     public async Task Observation_after_a_re_login_is_recorded_without_relaunch() {
         Register(Work);
         using var sink = Sink();

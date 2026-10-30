@@ -368,10 +368,78 @@ public class AccountRefreshTests {
             """);
 
         await Refresh(Identity("a@example.com", orgId: "org-a"));
-        await Assert.That(Account.GenerationStartedAt).IsNull();
+        await Assert.That(Account.GenerationStartedAt).IsEqualTo(T0);
 
         await Assert.That(RecordStatusLine(1000, 80, session: "A")).IsTrue();
         await Assert.That(Reading!.Reading.Windows).IsEmpty();
+    }
+
+    const string LegacySwitchedRegistry = """
+        { "version": 1, "revision": 2, "accounts": [
+            { "id": "a", "vendor": "Claude", "directory": "/h/.claude-a", "label": "a@example.com",
+              "added_at": "2026-01-01T00:00:00Z", "generation": 1, "retired_sessions": ["A"],
+              "email": "a@example.com", "org_id": "org-a" }
+        ] }
+        """;
+
+    [Test]
+    public async Task Unchanged_refresh_backfills_the_probe_start_of_a_switched_account_without_one() {
+        Tmp.CreateFile("accounts/accounts.json", LegacySwitchedRegistry);
+        var probe = new FakeAccountProbe { BeforeReturn = () => _time.Advance(TimeSpan.FromMinutes(1)) };
+        probe.Complete(Identity("a@example.com", orgId: "org-a"));
+
+        await Refresh(probe);
+
+        var account = Account;
+        await Assert.That(account.Generation).IsEqualTo(1L);
+        await Assert.That(account.GenerationStartedAt).IsEqualTo(T0);
+        await Assert.That(account.RefreshedAt).IsEqualTo(T0.AddMinutes(1));
+    }
+
+    [Test]
+    public async Task Unchanged_refresh_keeps_an_existing_generation_start() {
+        Register(Claude("a@example.com", "org-a") with { Generation = 1, GenerationStartedAt = At(-30) });
+
+        await Refresh(Identity("a@example.com", orgId: "org-a"));
+
+        await Assert.That(Account.GenerationStartedAt).IsEqualTo(At(-30));
+    }
+
+    [Test]
+    public async Task Login_change_retires_the_old_readings_sessions_for_older_builds_and_deletes_it() {
+        Register(Claude("a@example.com", "org-a") with { RetiredSessions = ["old"] });
+        Seed("s1");
+        Seed("s2");
+
+        await Refresh(Identity("b@example.com", orgId: "org-b"));
+
+        await Assert.That(Account.RetiredSessions).IsEquivalentTo(["old", "s1", "s2"]);
+        await Assert.That(Reading).IsNull();
+    }
+
+    [Test]
+    public async Task Retired_sessions_are_distinct_and_capped_at_the_latest_256() {
+        Register(Claude("a@example.com", "org-a") with { RetiredSessions = [.. Enumerable.Range(0, 300).Select(i => $"old{i}")] });
+        Seed("old299");
+        Seed("fresh");
+
+        await Refresh(Identity("b@example.com", orgId: "org-b"));
+
+        var retired = Account.RetiredSessions!;
+        await Assert.That(retired.Length).IsEqualTo(256);
+        await Assert.That(retired.Distinct().Count()).IsEqualTo(256);
+        await Assert.That(retired[^1]).IsEqualTo("fresh");
+        await Assert.That(retired).Contains("old299");
+    }
+
+    [Test]
+    public async Task Retired_sessions_survive_a_write_that_does_not_change_the_login() {
+        Tmp.CreateFile("accounts/accounts.json", LegacySwitchedRegistry);
+
+        await Refresh(Identity("a@example.com", orgId: "org-a"));
+
+        await Assert.That(Account.RetiredSessions).IsEquivalentTo(["A"]);
+        await Assert.That(File.ReadAllText(Store.RegistryPath)).Contains("\"retired_sessions\"");
     }
 
     [Test]

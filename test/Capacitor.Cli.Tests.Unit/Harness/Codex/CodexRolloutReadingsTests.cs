@@ -227,4 +227,19 @@ public class CodexRolloutReadingsTests {
 
         await Assert.That(_accounts.Readings.Stat().Length).IsEqualTo(0);
     }
+
+    [Test]
+    public async Task Switched_account_without_a_generation_start_drops_lines_from_before_its_last_refresh() {
+        _accounts.Mutate(r => (r with { Accounts = [r.Accounts.Single() with { RefreshedAt = DateTimeOffset.Parse("2026-10-24T23:05:00.000Z", System.Globalization.CultureInfo.InvariantCulture) }] }, 0));
+
+        Producer().Observe([
+            Line($$"""{"limit_id":"codex","primary":{{Window(80, 300)}}}""", "2026-10-24T23:00:00.000Z"),
+            Line($$"""{"limit_id":"codex","primary":{{Window(10, 10080)}}}""", "2026-10-24T23:10:00.000Z"),
+        ]);
+
+        var reading = Stored()!;
+
+        await Assert.That(reading.Windows.Single().WindowMinutes).IsEqualTo(10080);
+        await Assert.That(reading.Windows.Single().UsedPercent).IsEqualTo(10.0);
+    }
 }

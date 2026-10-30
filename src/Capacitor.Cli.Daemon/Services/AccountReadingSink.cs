@@ -44,7 +44,7 @@ internal sealed partial class AccountReadingSink : IDisposable {
             bool recorded;
             try {
                 recorded = store.Readings.TryRecord(account.AccountId!, (f, entry) =>
-                    observation.ProducedAt < entry.GenerationStartedAt ? null : f with { Reading = ReadingMerge.Apply(f.Reading, observation) });
+                    observation.ProducedAt < entry.ObservationsFrom ? null : f with { Reading = ReadingMerge.Apply(f.Reading, observation) });
             } catch (Exception ex) {
                 recorded = false;
                 LogRecordFailed(_logger, account.AccountId!, ex);
