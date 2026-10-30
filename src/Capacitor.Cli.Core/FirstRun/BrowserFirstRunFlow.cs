@@ -224,7 +224,7 @@ public sealed class BrowserFirstRunFlow(
         FirstRunFlowResponse? last = null;
 
         // Keyed on the REQUEST, not the capability, so a second press after an outcome runs again. Two
-        // collections because they guard opposite things: an admin prompt must never be raised twice, and
+        // collections because they guard opposite things: a machine change must never be made twice, and
         // a report must keep being retried until it lands.
         var performed = new Dictionary<FirstRunMachineActionRequest, FirstRunMachineActionResult>();
         var reported  = new HashSet<FirstRunMachineActionRequest>();
@@ -280,7 +280,7 @@ public sealed class BrowserFirstRunFlow(
 
                     // Before the finished test, so a request made on the last screen is not abandoned by a
                     // flow that settles in the same tick — and the finished test then runs again below,
-                    // because the budget can pass while the user answers an admin prompt.
+                    // because the budget can pass while a machine action runs.
                     await PerformRequestedAsync(serverUrl, flowId, last!, performed, reported, ct);
 
                     // Both lanes can outlast a poll interval by minutes, so the budget is measured
@@ -621,8 +621,8 @@ public sealed class BrowserFirstRunFlow(
             if (!actions.Capabilities.Contains(request.Capability, StringComparer.Ordinal)) continue;
 
             if (!performed.TryGetValue(request, out var result)) {
-                // Said before the attempt, not after: the shim prompts for an admin password, and a
-                // password dialog nobody was warned about is indistinguishable from malware.
+                // Said before the attempt, not after: a change to this machine nobody was told about
+                // is indistinguishable from malware.
                 progress.PerformingAction(request.Capability);
 
                 try {

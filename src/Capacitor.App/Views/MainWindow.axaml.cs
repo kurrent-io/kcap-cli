@@ -38,6 +38,36 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
         }
     }
 
+    public PaneLayout Panes { get; } = new();
+
+    ColumnDefinition RailColumn => SessionsSurface.ColumnDefinitions[0];
+
+    // Wide enough on macOS to hold the window buttons, which overlay the window's top-left corner.
+    static readonly double RailStripWidth = OperatingSystem.IsMacOS() ? 78 : 44;
+
+    void OnRailSplitterDragDelta(object? sender, VectorEventArgs e) =>
+        SessionRail.Opacity = PaneLayout.HidesAt(RailColumn.ActualWidth, PaneLayout.RailMinWidth) ? PaneLayout.HidingOpacity : 1;
+
+    // A drag resizes the column live; Panes takes the width once, when it ends. Released below the
+    // minimum, the rail hides and reopens at the minimum.
+    void OnRailSplitterDragCompleted(object? sender, VectorEventArgs e) {
+        SessionRail.Opacity = 1;
+        var width = RailColumn.ActualWidth;
+        var hides = PaneLayout.HidesAt(width, PaneLayout.RailMinWidth);
+        Panes.RailWidth = hides ? PaneLayout.RailMinWidth : width;
+        if (hides) Panes.RailCollapsed = true;
+    }
+
+    void OnRailExpandClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => Panes.RailCollapsed = false;
+
+    void ApplyRail() {
+        var collapsed = Panes.RailCollapsed;
+        RailColumn.Width = new GridLength(collapsed ? RailStripWidth : Panes.RailWidth);
+        SessionRail.IsVisible = !collapsed;
+        RailSplitter.IsVisible = !collapsed;
+        RailStrip.IsVisible = collapsed;
+    }
+
     WindowNotificationManager? _notifications;
     IDisposable? _notifierSubscription;
     IAppNotifier? _notifier;
@@ -103,6 +133,10 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
 
     public MainWindow() {
         InitializeComponent();
+        SessionsSurface.SizeChanged += (_, e) => RailColumn.MaxWidth = e.NewSize.Width * PaneLayout.MaxShare;
+        SessionRail.CollapseRequested += (_, _) => Panes.RailCollapsed = true;
+        Panes.Changed += (_, _) => ApplyRail();
+        ApplyRail();
         KeyBindings.AddRange(ZoomShortcut.For(this));
         // A move, a display scaling change and a resized work area each change what the screen offers.
         PositionChanged += (_, _) => RefreshMinimumSize();

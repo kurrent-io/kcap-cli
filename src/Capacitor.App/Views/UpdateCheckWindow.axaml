@@ -1,0 +1,37 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:update="clr-namespace:Capacitor.App.Services.Update"
+        xmlns:views="clr-namespace:Capacitor.App.Views"
+        x:Class="Capacitor.App.Views.UpdateCheckWindow"
+        x:DataType="update:UpdateCheckProgress"
+        Title="kcap Update" Icon="avares://kcap-desktop/Assets/kcap-icon.png"
+        Width="480" SizeToContent="Height" CanResize="False" WindowStartupLocation="CenterScreen"
+        Background="{StaticResource KcapCanvasBrush}" ExtendClientAreaToDecorationsHint="True">
+    <Panel>
+        <Border Height="32" VerticalAlignment="Top" Background="Transparent" PointerPressed="OnChromePointerPressed" />
+        <StackPanel Margin="36,44,36,28">
+            <views:UpdateIcon HorizontalAlignment="Left" />
+            <TextBlock Text="Software update" Margin="0,20,0,0" FontSize="19" FontWeight="SemiBold" LineHeight="26" LetterSpacing="-0.2"
+                       Foreground="{StaticResource KcapTextBrush}" />
+            <TextBlock Margin="0,14,0,0" Width="400" HorizontalAlignment="Left" TextWrapping="Wrap"
+                       Text="Updates download in the background. kcap asks before restarting to install them."
+                       FontSize="13.5" LineHeight="21" Foreground="{StaticResource KcapMutedBrush}" />
+            <Border Margin="0,18,0,0" Padding="14,12" CornerRadius="8" BorderThickness="1"
+                    Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}">
+                <StackPanel Spacing="12">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Text="{Binding Message}" FontSize="13" LineHeight="19" TextWrapping="Wrap"
+                                   Foreground="{StaticResource KcapTextBrush}" />
+                        <TextBlock Grid.Column="1" Text="{Binding PercentText}" IsVisible="{Binding !Indeterminate}" Margin="12,0,0,0"
+                                   FontSize="12.5" LineHeight="19" FontFamily="{StaticResource OnboardingMonoFont}"
+                                   Foreground="{StaticResource KcapMutedBrush}" />
+                    </Grid>
+                    <ProgressBar Height="4" Minimum="0" Maximum="100" Value="{Binding Value}"
+                                 IsIndeterminate="{Binding Indeterminate}" Foreground="{StaticResource KcapPurpleBrush}"
+                                 AutomationProperties.Name="Update download progress" />
+                </StackPanel>
+            </Border>
+            <Button Content="Dismiss" Margin="0,22,0,0" Classes="kcapChip" HorizontalAlignment="Right" IsCancel="True" Click="OnDismiss" />
+        </StackPanel>
+    </Panel>
+</Window>

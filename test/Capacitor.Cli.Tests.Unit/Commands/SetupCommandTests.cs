@@ -789,16 +789,16 @@ public class SetupCommandTests {
     }
 
     [Test]
-    public async Task PathShimNotice_mentions_a_password_only_on_macOS() {
-        await Assert.That(SpectreFirstRunFlowProgress.PathShimNotice(macOS: true)).Contains("password");
-        await Assert.That(SpectreFirstRunFlowProgress.PathShimNotice(macOS: false)).DoesNotContain("password");
+    public async Task PathShimNotice_never_mentions_a_password() {
+        await Assert.That(SpectreFirstRunFlowProgress.PathShimNotice("export PATH=\"$PATH:/Users/a/.local/bin\" (in ~/.zprofile)")).DoesNotContain("password");
+        await Assert.That(SpectreFirstRunFlowProgress.PathShimNotice(null)).DoesNotContain("password");
     }
 
     [Test]
-    public async Task PathShimNotice_names_the_profile_line_a_standard_user_gets() {
-        var notice = SpectreFirstRunFlowProgress.PathShimNotice(macOS: true, "export PATH=\"$PATH:/Users/a/.local/bin\" (in ~/.zprofile)");
+    public async Task PathShimNotice_names_the_profile_line_before_it_is_written() {
+        var notice = SpectreFirstRunFlowProgress.PathShimNotice("export PATH=\"$PATH:/Users/a/.local/bin\" (in ~/.zprofile)");
 
-        await Assert.That(notice).Contains("without admin rights, kcap adds export PATH=\"$PATH:/Users/a/.local/bin\" (in ~/.zprofile)");
+        await Assert.That(notice).Contains("kcap adds export PATH=\"$PATH:/Users/a/.local/bin\" (in ~/.zprofile)");
     }
 
     [Test]

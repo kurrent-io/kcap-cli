@@ -46,8 +46,8 @@ internal static class ShimEnsureClassifier {
 /// <c>kcap daemon shim ensure</c> — the flow's named PATH-fix capability. The CLI composes the
 /// whole operation itself: it resolves its own binary path (never a server-supplied path), probes
 /// the terminal PATH, and on a positive absence installs through <see cref="CliPathInstallers"/>:
-/// a <c>/usr/local/bin</c> symlink behind an osascript admin prompt on macOS, a user PATH entry on
-/// Windows, each followed by a re-probe. Machine-readable result
+/// a symlink in a PATH folder the user can write (else <c>~/.local/bin</c>) on macOS and Linux, a
+/// user PATH entry on Windows, each followed by a re-probe; nothing asks for an admin password. Machine-readable result
 /// via <c>--json</c>; human output otherwise. Exit 0 only when the terminal now resolves
 /// <c>kcap</c>; every refusal and every not-on-path outcome exits non-zero with a coded token.
 /// </summary>
@@ -112,7 +112,7 @@ public static class DaemonShimCommands {
 
         var runner = new ProcessRunner(time);
         probe ??= TerminalPathProbe.Create(runner, Environment.GetEnvironmentVariable);
-        var installer = CliPathInstallers.Create(runner, probe, UserHome.FromEnvironment());
+        var installer = CliPathInstallers.Create(probe, UserHome.FromEnvironment());
         var onPath = await probe.KcapOnPathAsync(ct).ConfigureAwait(false);
 
         var decision = ShimEnsureClassifier.Classify(onPath, installable ?? installer is not null);
@@ -176,9 +176,8 @@ public static class DaemonShimCommands {
     static async Task<ShimEnsureJson> Install(string target, ICliPathInstaller? installer,
             Func<string, CancellationToken, Task<ShimResult>>? install, Func<string, ShimPreflight>? preflight,
             Action<string>? disclose, CancellationToken ct) {
-        // The macOS installer tries a writable PATH folder first, so an entry at /usr/local/bin is
-        // not a refusal until that fails. It refuses a conflicting entry without prompting, and a
-        // foreign entry there after a failed install is the coded conflict row the flow was promised.
+        // The installer tries a writable PATH folder first, so a foreign entry at its fallback link is
+        // not a refusal until that fails; after a failed install it is the coded conflict row.
         preflight ??= installer!.Preflight;
         if (installer is not null) disclose?.Invoke(installer.Disclosure);
 
@@ -187,7 +186,7 @@ public static class DaemonShimCommands {
             : await installer!.InstallAsync(target, ct).ConfigureAwait(false);
 
         if (result.Outcome == ShimOutcome.Failed && preflight(target) == ShimPreflight.Conflict)
-            return ConflictRefusal(target);
+            return ConflictRefusal(target, result.Detail);
 
         return result.Outcome switch {
             ShimOutcome.Installed =>
@@ -198,23 +197,17 @@ public static class DaemonShimCommands {
                 new ShimEnsureJson(Capability, target, true, false, "install",
                     FirstRunMachineActionOutcomes.InstalledNotOnPath, Detail: result.Detail),
 
-            ShimOutcome.Cancelled =>
-                new ShimEnsureJson(Capability, target, true, false, "install",
-                    FirstRunMachineActionOutcomes.Cancelled),
-
             _ =>
                 new ShimEnsureJson(Capability, target, true, null, "install",
                     FirstRunMachineActionOutcomes.Failed,
-                    Detail: result.Detail, SudoFallback: result.SudoFallback),
+                    Detail: result.Detail),
         };
     }
 
-    static ShimEnsureJson ConflictRefusal(string target) {
-        var conflict = $"a different filesystem entry already exists at {PathShimInstaller.Destination} and was left untouched";
-
-        return new ShimEnsureJson(Capability, target, true, false, "install",
-            FirstRunMachineActionOutcomes.Refused, FirstRunMachineActionReasons.Conflict, conflict);
-    }
+    static ShimEnsureJson ConflictRefusal(string target, string? detail) =>
+        new(Capability, target, true, false, "install",
+            FirstRunMachineActionOutcomes.Refused, FirstRunMachineActionReasons.Conflict,
+            detail ?? "a different filesystem entry already exists where kcap would be linked and was left untouched");
 
     static async Task<int> Report(ShimEnsureJson dto, bool json) {
         var exit = dto.ExitCode;
@@ -236,12 +229,6 @@ public static class DaemonShimCommands {
             case FirstRunMachineActionOutcomes.InstalledNotOnPath:
                 await Console.Out.WriteLineAsync(Sanitize(dto.Detail));
                 return 1;
-            case FirstRunMachineActionOutcomes.Cancelled:
-                await Console.Out.WriteLineAsync("Installing the command-line tool was canceled.");
-                return 1;
-            case FirstRunMachineActionOutcomes.Failed when dto.SudoFallback is not null:
-                await Console.Error.WriteLineAsync($"{Sanitize(dto.Detail)} Or run: {Sanitize(dto.SudoFallback)}");
-                return 1;
             case FirstRunMachineActionOutcomes.Failed:
                 await Console.Error.WriteLineAsync(Sanitize(dto.Detail) ?? "Installing the command-line tool failed.");
                 return 1;
@@ -251,7 +238,7 @@ public static class DaemonShimCommands {
                     FirstRunMachineActionReasons.ProbeUnknown =>
                         "Could not determine whether kcap is on your terminal PATH.",
                     FirstRunMachineActionReasons.UnsupportedPlatform =>
-                        "The command-line tool install is only available on macOS and Windows.",
+                        "The command-line tool install is only available on macOS, Linux and Windows.",
                     FirstRunMachineActionReasons.Conflict => Sanitize(dto.Detail),
                     _                                    => "Path fix refused.",
                 });
@@ -272,11 +259,10 @@ public static class DaemonShimCommands {
         Console.Error.WriteLine("Usage: kcap daemon shim <ensure> [--json]");
         Console.Error.WriteLine();
         Console.Error.WriteLine("  ensure [--json]   Probe the terminal PATH; if kcap is absent, link kcap");
-        Console.Error.WriteLine("                    to this CLI in a writable PATH folder, else");
-        Console.Error.WriteLine("                    /usr/local/bin (macOS; prompts once for your admin");
-        Console.Error.WriteLine("                    password, or without admin rights links ~/.local/bin/kcap");
-        Console.Error.WriteLine("                    and adds that folder to PATH in your shell profile), or");
-        Console.Error.WriteLine("                    add its folder to your user PATH (Windows).");
+        Console.Error.WriteLine("                    to this CLI in the first PATH folder you can write to,");
+        Console.Error.WriteLine("                    else in ~/.local/bin (macOS also adds that folder to");
+        Console.Error.WriteLine("                    PATH in your shell profile), or add its folder to your");
+        Console.Error.WriteLine("                    user PATH (Windows). No admin password is asked for.");
         return 1;
     }
 }

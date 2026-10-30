@@ -107,7 +107,8 @@ sealed class LocalStackControl(LocalStack stack, Func<int, PortHolder?> findHold
                                + "The port is part of this installation's identity; stop that process and the server starts on its own, or run kcap local stop to stop it trying.");
             }
 
-            if (health is ServerHealth.Answered { Ready: true } && activity is UnitActivity.Running) return;
+            // Serving readiness stays healthy during an online rebuild. Its planned restart still belongs to this update.
+            if (health is ServerHealth.Answered { Ready: true, UpdatePending: false } && activity is UnitActivity.Running) return;
 
             switch (activity) {
                 case UnitActivity.Exited(var code):
@@ -122,11 +123,26 @@ sealed class LocalStackControl(LocalStack stack, Func<int, PortHolder?> findHold
                     lastPid = pid;
                     break;
 
+                // Online rebuilds can need several boots. Their explicit restart is bounded by the overall
+                // start budget, not counted as a crash loop.
+                case UnitActivity.Restarting(10):
+                    exits = 0;
+                    firstStarts = activity.Starts;
+                    lastPid = null;
+                    lastCode = null;
+                    break;
+
                 case UnitActivity.Restarting(var code):
                     lastCode = code;
                     if (lastPid is not null) exits++;
                     lastPid = null;
                     break;
+            }
+
+            // A healthy rebuild boot proves progress even when the supervisor restarted between polls.
+            if (health is ServerHealth.Answered { Ready: true, UpdatePending: true } && activity is UnitActivity.Running) {
+                exits = 0;
+                firstStarts = activity.Starts;
             }
 
             // The manager's own count sees exits between two polls.

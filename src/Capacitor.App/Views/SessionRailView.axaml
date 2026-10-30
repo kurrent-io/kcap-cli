@@ -53,7 +53,7 @@
         <Style Selector="Button.selected TextBlock.rowTitle">
             <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
-        <!-- The rail is 330 wide: two segments share one line only at this size. -->
+        <!-- Two segments share one line only at the rail's default width or wider. -->
         <Style Selector="Button.railSegmentItem">
             <Setter Property="Padding" Value="9,3" />
             <Setter Property="FontSize" Value="12" />
@@ -94,8 +94,8 @@
             <Setter Property="Text" Value="·" />
             <Setter Property="RenderTransform" Value="scale(1.5)" />
         </Style>
-        <Style Selector="TextBlock.footerMeta.attention">
-            <Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" />
+        <Style Selector="TextBlock.footerMeta.failed">
+            <Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" />
         </Style>
         <Style Selector="WrapPanel#RailLocalStackRow > TextBlock">
             <Setter Property="Margin" Value="0,0,5,0" />
@@ -145,7 +145,13 @@
                 <!-- 44px chrome row: the macOS traffic lights overlay its left end (the window
                      extends the client area into the title bar). Empty space here drags the
                      window — wired in code-behind. -->
-                <Grid Height="44" Background="Transparent" PointerPressed="OnChromePointerPressed" />
+                <Grid Height="44" Background="Transparent" PointerPressed="OnChromePointerPressed">
+                    <Button x:Name="CollapseButton" Classes="kcapGhost kcapIcon" HorizontalAlignment="Right"
+                            VerticalAlignment="Center" Margin="0,0,10,0" Click="OnCollapseClick"
+                            ToolTip.Tip="Hide sidebar" AutomationProperties.Name="Hide sidebar">
+                        <views:AppIcon Kind="PanelLeftClose" Size="16" Foreground="{StaticResource KcapMutedBrush}" />
+                    </Button>
+                </Grid>
 
                 <!-- Deselects the workspace: the pane's empty state IS the launcher. -->
                 <Button x:Name="RailNewSessionButton" Classes="kcapChip" HorizontalAlignment="Stretch" Margin="10,0,10,10"
@@ -277,7 +283,7 @@
                     <!-- The chip docks beside the status column. Until a daemon name or version
                          exists the second row is absent, and the chip shares the status line. -->
                     <Grid ColumnDefinitions="*,Auto" ClipToBounds="True">
-                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Spacing="2">
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Spacing="2" IsVisible="{Binding !ShowsUpdateContext}">
                     <StackPanel x:Name="RailConnectionStatus" Orientation="Horizontal" Spacing="7">
                         <!-- Extra info (lighter) then the fragment's name (kcapTipCaption). A
                              diagnostic takes the extra slot; without one the caption stands
@@ -286,10 +292,10 @@
                             <StackPanel Spacing="2">
                                 <TextBlock Text="{Binding ServerLaneTip}" TextWrapping="Wrap"
                                            IsVisible="{Binding ConnectionHasDetail}" />
-                                <TextBlock Text="{x:Static vm:MainWindowViewModel.AttachStatusTip}"
+                                <TextBlock Text="{x:Static vm:MainWindowViewModel.ConnectionStatusTip}"
                                            Classes="kcapTipCaption"
                                            IsVisible="{Binding ConnectionHasDetail}" />
-                                <TextBlock Text="{x:Static vm:MainWindowViewModel.AttachStatusTip}"
+                                <TextBlock Text="{x:Static vm:MainWindowViewModel.ConnectionStatusTip}"
                                            IsVisible="{Binding !ConnectionHasDetail}" />
                             </StackPanel>
                         </ToolTip.Tip>
@@ -323,7 +329,7 @@
                             <TextBlock Classes="footerDot"
                                        IsVisible="{Binding StateText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                             <TextBlock x:Name="RailLocalStackStateText" Text="{Binding StateText}" Classes="footerMeta"
-                                       Classes.attention="{Binding Attention}"
+                                       Classes.failed="{Binding Attention}"
                                        IsVisible="{Binding StateText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                         </WrapPanel>
                     </Panel>
@@ -360,6 +366,19 @@
                             </ToolTip.Tip>
                         </TextBlock>
                     </WrapPanel>
+                    </StackPanel>
+                    <StackPanel x:Name="RailUpdateContext" Grid.Column="0" VerticalAlignment="Center" Spacing="4"
+                                IsVisible="{Binding ShowsUpdateContext}">
+                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="7">
+                            <views:AppIcon Kind="Monitor" Size="14" Foreground="{StaticResource KcapMutedBrush}" />
+                            <TextBlock Grid.Column="1" Text="{Binding UpdateContextName}" Classes="footerValue"
+                                       Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
+                        </Grid>
+                        <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="5">
+                            <TextBlock Text="This machine" Classes="footerMeta" />
+                            <TextBlock Grid.Column="1" Classes="footerDot" IsVisible="{Binding DaemonName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            <TextBlock Grid.Column="2" Text="{Binding DaemonName}" Classes="footerMeta" TextTrimming="CharacterEllipsis" />
+                        </Grid>
                     </StackPanel>
                     <Button x:Name="RailHelpButton" Grid.Column="1" Classes="kcapChip"
                             Classes.withDaemon="{Binding ShowsDaemonLine}"
@@ -432,6 +451,11 @@
                                             <Border Height="1" Margin="8,4" Background="{StaticResource KcapBorderBrush}" />
                                             <Button x:Name="RailHelpAboutButton" Classes="kcapGhost" Content="About kcap"
                                                     Click="OnAboutClick" IsVisible="{Binding ShowsAbout}"
+                                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                    Padding="10,8" FontSize="13.5" />
+                                            <Button x:Name="RailHelpCheckForUpdatesButton" Classes="kcapGhost" Content="Check for Updates…"
+                                                    Command="{Binding CheckForUpdatesCommand}" Click="OnHelpFlyoutItemClick"
+                                                    IsVisible="{Binding ShowsCheckForUpdates}"
                                                     HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
                                                     Padding="10,8" FontSize="13.5" />
                                             <Button x:Name="RailLaunchApprovalsButton" Classes="kcapGhost" Content="Launch approvals…"

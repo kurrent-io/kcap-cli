@@ -1,0 +1,17 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:Capacitor.App.Views"
+             x:Class="Capacitor.App.Views.UpdateIcon" Width="72" Height="72">
+    <Panel>
+        <Image Source="avares://kcap-desktop/Assets/kcap-icon.png" Width="64" Height="64"
+               HorizontalAlignment="Left" VerticalAlignment="Top"
+               RenderOptions.BitmapInterpolationMode="HighQuality" />
+        <Border Width="64" Height="64" HorizontalAlignment="Left" VerticalAlignment="Top"
+                CornerRadius="12" BorderThickness="1" BorderBrush="{StaticResource KcapBorderBrush}" />
+        <Border Width="30" Height="30" CornerRadius="15"
+                HorizontalAlignment="Right" VerticalAlignment="Bottom" BorderThickness="3"
+                BorderBrush="{StaticResource KcapCanvasBrush}" Background="{StaticResource KcapSurfaceBrush}">
+            <views:AppIcon Kind="RefreshCw" Size="16" Foreground="{StaticResource KcapMutedBrush}" />
+        </Border>
+    </Panel>
+</UserControl>

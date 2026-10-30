@@ -843,12 +843,55 @@ public class LocalInstallerTests {
         await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Builtin(Models.ModelSet));
     }
 
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task A_refused_builtin_rewrite_keeps_the_restart_pending_until_the_next_setup(bool changesSet) {
+        await Install();
+        await ReuseOffering(new LocalEmbeddingAnswer.Builtin());
+        var offered = changesSet ? new FakeBundle(Tmp.PathTo("next.tar.gz"), Version) {
+            ModelFiles = new Dictionary<string, byte[]> { ["model.onnx"] = RandomNumberGenerator.GetBytes(2_000) },
+            ModelSet = new('f', 64),
+        } : Models;
+        if (!changesSet) File.WriteAllBytes(ModelFile, [1, 2, 3]);
+        using var absent = new FakeOllama();
+        var manifest = await Installer(offered).FetchEmbeddingManifestAsync(Version, CancellationToken.None);
+        var other = new OwnerReading.Root(Tmp.CreateDir("other"));
+        _log.Clear();
+
+        using (Record(point => {
+                   if (point == $"sync:{Path.Combine(Root.Directory, "models")}" && LocalModelSets.IsPresent(Root, manifest!))
+                       Service.OwnerOverride = new(other, other);
+               })) {
+            var failure = await Assert.ThrowsAsync<LocalInstallFailure>(() =>
+                Install(new(false, false, new LocalEmbeddingAnswer.Builtin(), manifest), bundle: offered, ollama: absent));
+            await Assert.That(failure!.Code).IsEqualTo(LocalInstallFailureCode.NotOurServer);
+        }
+
+        await Assert.That(_log).DoesNotContain("install");
+        await Assert.That(_log).DoesNotContain("start");
+        await Assert.That(LocalModelSets.IsPresent(Root, manifest!)).IsTrue();
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Builtin(Models.ModelSet) with { Pending = true });
+
+        Service.OwnerOverride = null;
+        _log.Clear();
+        await Install(changesSet ? new(false, false, new LocalEmbeddingAnswer.Default(), manifest) : new(false, false),
+            bundle: offered, ollama: absent);
+
+        await Assert.That(_log).Contains("install");
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Builtin(offered.ModelSet));
+    }
+
     /// <summary>Repaired files published without the pending marker would verify on the next setup, which then has no
     /// reason to restart a server still holding its failed load; so the damaged set stays until the marker is written.</summary>
     [Test]
-    public async Task A_repair_whose_marker_cannot_be_written_is_not_published_and_the_next_setup_repairs() {
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task A_repair_whose_marker_cannot_be_written_is_not_published_and_the_next_setup_repairs(bool changesSet) {
         await Install();
         await ReuseOffering(new LocalEmbeddingAnswer.Builtin());
+        var previous = LocalEmbeddingSetting.Builtin(changesSet ? new string('d', 64) : Models.ModelSet);
+        LocalEmbeddingFile.Write(Root, previous);
         File.WriteAllBytes(ModelFile, [1, 2, 3]);
         var record = LocalEmbeddingFile.PathFor(Root);
         _log.Clear();
@@ -863,13 +906,14 @@ public class LocalInstallerTests {
         await Assert.That(_log).DoesNotContain("install");
         await Assert.That(_events.Reports.OfType<LocalInstallEvent.EmbeddingsSkipped>().Single().Code).IsEqualTo(LocalEmbeddingSkipCode.WriteFailed);
         await Assert.That(_events.Reports.OfType<LocalInstallEvent.EmbeddingBuiltinConfigured>()).IsEmpty();
-        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Builtin(Models.ModelSet));
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(previous);
 
         await ReuseOffering(new LocalEmbeddingAnswer.Default());
 
         await Assert.That(File.ReadAllBytes(ModelFile).SequenceEqual(ModelOnnx)).IsTrue();
         await Assert.That(_log).Contains("install");
         await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Builtin(Models.ModelSet));
+        await Assert.That(_events.Reports.OfType<LocalInstallEvent.EmbeddingBuiltinConfigured>()).Count().IsEqualTo(1);
     }
 
     [Test]

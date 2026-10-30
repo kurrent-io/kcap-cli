@@ -516,6 +516,22 @@
                             </StackPanel>
                         </StackPanel>
 
+                        <StackPanel Classes="settingsGroup" IsVisible="{Binding About.BetaUpdatesVisible, FallbackValue=False}">
+                            <TextBlock Classes="settingsGroupTitle" Text="Updates" />
+                            <Border Classes="settingsCard">
+                                <Grid Classes="settingsRow" ColumnDefinitions="*,Auto">
+                                    <StackPanel Classes="settingsRowText">
+                                        <TextBlock Classes="kcapLabel" Text="Get beta updates" />
+                                        <TextBlock Classes="kcapHint" TextWrapping="Wrap"
+                                                   Text="Betas arrive sooner and are less tested. Turning this off keeps the version you have until a newer stable release." />
+                                    </StackPanel>
+                                    <ToggleSwitch x:Name="BetaUpdatesSwitch" Grid.Column="1" Classes="kcapSwitch" VerticalAlignment="Center"
+                                                  AutomationProperties.Name="Get beta updates"
+                                                  IsChecked="{Binding About.BetaUpdates, FallbackValue=False}" />
+                                </Grid>
+                            </Border>
+                        </StackPanel>
+
                         <StackPanel Classes="settingsGroup">
                             <TextBlock Classes="settingsGroupTitle" Text="Help" />
                             <StackPanel Orientation="Horizontal" Spacing="8">

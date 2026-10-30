@@ -20,7 +20,7 @@ public sealed class CodexAccountProbe(HarnessRegistry harnesses, UserHome home, 
     internal TimeSpan Deadline { get; init; } = TimeSpan.FromSeconds(10);
 
     public async Task<ProbeResult> ProbeAsync(VendorAccount account, CancellationToken ct) {
-        if (harnesses.ResolveExecutable(HarnessId.Codex) is not { } exe) return Failed("codex not found on PATH");
+        if (harnesses.ResolveLaunchable(HarnessId.Codex) is not { } exe) return Failed("codex not found on PATH or in the desktop app");
 
         var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
         var psi  = new ProcessStartInfo {

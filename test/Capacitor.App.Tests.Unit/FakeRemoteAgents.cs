@@ -22,5 +22,9 @@ sealed class FakeRemoteAgents : IRemoteAgentsService, IDisposable {
     public IObservable<IReadOnlyList<DaemonAccountsDto>> DrawableDaemonAccounts => DrawableDaemonAccountsSubject;
     public IObservable<bool> Current => CurrentSubject;
     public Task RefreshDaemonsAsync() => Task.CompletedTask;
+    public Func<string, string, string, Task<SessionRenameResult>> Rename { get; set; } =
+        (_, _, _) => Task.FromResult(new SessionRenameResult(false, null, "unauthenticated"));
+    public Task<SessionRenameResult> RenameAsync(string agentId, string sessionId, string title, CancellationToken ct) =>
+        Rename(agentId, sessionId, title);
     public void Dispose() => Cache.Dispose();
 }

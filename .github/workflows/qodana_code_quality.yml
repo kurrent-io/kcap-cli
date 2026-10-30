@@ -1,0 +1,24 @@
+name: Qodana
+# Manual: a full scan takes over two hours, too long to hold up every PR or push
+on:
+  workflow_dispatch:
+
+jobs:
+  qodana:
+    # The kcap-heavy Hetzner runners serve private repositories only
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    permissions:
+      contents: write
+      pull-requests: write
+      checks: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: 'Qodana Scan'
+        uses: JetBrains/qodana-action@v2026.1
+        with:
+          pr-mode: false
+          upload-result: true
+        env:
+          QODANA_TOKEN: ${{ secrets.QODANA_TOKEN_413606919 }}
+          QODANA_ENDPOINT: 'https://qodana.cloud'

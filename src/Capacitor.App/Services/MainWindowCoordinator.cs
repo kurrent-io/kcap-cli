@@ -18,8 +18,16 @@ public sealed class MainWindowCoordinator(Func<MainWindow> windowFactory, Action
     /// The retained window, whether visible or hidden; null after a real close.
     public MainWindow? Window => _window;
 
+    /// While set, every request to show the main window, the Dock, tray, menu and notifications included,
+    /// raises this instead: a launch finishing an update keeps its progress in front until that settles.
+    public Action? ShowInstead { get; set; }
+
     public void ShowMainWindow() {
         if (QuitInProgress) return;
+        if (ShowInstead is { } instead) {
+            instead();
+            return;
+        }
 
         Prepare();
 

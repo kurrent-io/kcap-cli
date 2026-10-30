@@ -37,4 +37,7 @@ public interface IServerSessionsService {
     /// The session whose row is open in the rail: it stays in the snapshot's Ended set when a read
     /// no longer lists it, until another (or none) is kept.
     void Keep(string? sessionId);
+    /// Shows a rename the server applied at once, in every set that lists the session, and holds it
+    /// over reads that still carry a title it replaced.
+    void ApplyRename(string sessionId, string title);
 }

@@ -55,7 +55,8 @@ public static class FirstRunMachineActionOutcomes {
     /// is what the login shell can find.</summary>
     public const string InstalledNotOnPath = "installed_not_on_path";
 
-    /// <summary>The user dismissed the admin prompt. A choice, not a fault.</summary>
+    /// <summary>The user dismissed a prompt the action raised. A choice, not a fault. Only a CLI
+    /// whose shim asked for an admin password sends it, and the browser keeps accepting it from those.</summary>
     public const string Cancelled = "cancelled";
 
     public const string Failed = "failed";
@@ -142,8 +143,8 @@ public interface IFirstRunMachineActions {
     /// invented is never handed to <see cref="PerformAsync"/>.</summary>
     IReadOnlyCollection<string> Capabilities { get; }
 
-    /// <summary>Performs one of <see cref="Capabilities"/>. May take as long as a human takes — the shim
-    /// prompts for an admin password — and the loop is blocked while it does, deliberately: the user
-    /// asked for this and the answer is what the screen is waiting on.</summary>
+    /// <summary>Performs one of <see cref="Capabilities"/>. May take minutes, and the loop is blocked
+    /// while it does, deliberately: the user asked for this and the answer is what the screen is
+    /// waiting on.</summary>
     Task<FirstRunMachineActionResult> PerformAsync(string capability, CancellationToken ct);
 }
