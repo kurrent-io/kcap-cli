@@ -31,18 +31,19 @@ public class FlowsLaneTests {
         """;
 
     /// <summary>Answers the catalogue and the wake-up probe separately, and records which paths were asked.</summary>
-    sealed class Routes(HttpStatusCode catalog, string catalogBody, HttpStatusCode? wakeUps) : HttpMessageHandler {
+    sealed class Routes(HttpStatusCode catalog, string catalogBody, HttpStatusCode? wakeUps, bool stallWakeUps = false) : HttpMessageHandler {
         public List<string> Asked { get; } = [];
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
             var path = request.RequestUri!.AbsolutePath;
             Asked.Add(path);
             if (path == "/api/wakeups") {
+                if (stallWakeUps) await Task.Delay(Timeout.Infinite, ct);
                 if (wakeUps is not { } status) throw new HttpRequestException("unreachable");
-                return Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent("{}") });
+                return new HttpResponseMessage(status) { Content = new StringContent("{}") };
             }
 
-            return Task.FromResult(new HttpResponseMessage(catalog) { Content = new StringContent(catalogBody) });
+            return new HttpResponseMessage(catalog) { Content = new StringContent(catalogBody) };
         }
     }
 
@@ -79,6 +80,46 @@ public class FlowsLaneTests {
         var result = await Lane(new Routes(HttpStatusCode.OK, Catalog, probe)).FetchAsync(Hosted(), CancellationToken.None);
 
         await Assert.That(result.Fragment).IsEqualTo(SessionStartFlowsLane.BuildFragment(JsonNode.Parse(Catalog)));
+    }
+
+    /// <summary>The probe has its own short deadline: a stalled one leaves the catalogue as it was rather than holding
+    /// it for the whole lane's budget.</summary>
+    [Test]
+    public async Task A_stalled_probe_gives_up_and_leaves_the_catalogue() {
+        var started = Stopwatch.StartNew();
+
+        var result = await Lane(new Routes(HttpStatusCode.OK, Catalog, HttpStatusCode.BadRequest, stallWakeUps: true))
+            .FetchAsync(Hosted() with { Budget = TimeSpan.FromSeconds(30) }, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+        await Assert.That(result.Fragment).IsEqualTo(SessionStartFlowsLane.BuildFragment(JsonNode.Parse(Catalog)));
+        await Assert.That(started.Elapsed).IsLessThan(TimeSpan.FromSeconds(10));
+    }
+
+    /// <summary>A catalogue that needs a retry must not take the confirmed nudge down with it.</summary>
+    [Test]
+    public async Task A_catalogue_retry_still_carries_the_wake_up_nudge() {
+        var result = await Lane(new Routes(HttpStatusCode.ServiceUnavailable, "", HttpStatusCode.BadRequest)).FetchAsync(Hosted(), CancellationToken.None);
+
+        await Assert.That(result.Disposition).IsEqualTo(SessionStartMemoryDisposition.RetryableFailure);
+        await Assert.That(result.Fragment).IsEqualTo(SessionStartFlowsLane.WakeUpNudge);
+    }
+
+    /// <summary>The composite delivers a flows retry's own fragment, alongside a committed memory fragment or with the retry.</summary>
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task The_composite_delivers_the_nudge_from_a_flows_retry(bool memory) {
+        var time = new FakeTimeProvider();
+        var composite = new SessionStartCompositeContextProvider(new FixedScope("repo", "machine"),
+            new SessionStartMemoryContextProvider(new FixedScope("repo", "machine"), Lazy(new HttpClient(new Handler(HttpStatusCode.OK, MemoryBody, null))), time),
+            new SessionStartGuidelinesLane(Lazy(new HttpClient(new Handler(HttpStatusCode.NoContent, "", null))), time),
+            new SessionStartFlowsLane(Lazy(new HttpClient(new Routes(HttpStatusCode.ServiceUnavailable, "", HttpStatusCode.BadRequest))), time, Cache),
+            time);
+
+        var result = await composite.GetAsync(Req(memory: memory) with { WakeUpsWanted = true });
+
+        await Assert.That(result.Disposition).IsEqualTo(memory ? SessionStartMemoryDisposition.Ready : SessionStartMemoryDisposition.RetryableFailure);
+        await Assert.That(result.Fragment!).Contains(SessionStartFlowsLane.WakeUpNudge);
     }
 
     [Test]

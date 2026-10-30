@@ -168,7 +168,9 @@ sealed class MuseHookCommand(
             disabled: activeProfile?.DisableMemoryIndex is true || !audience.GetsDriverGuidance,
             guidelinesDisabled: activeProfile?.DisableSessionGuidelines is true,
             flowsDisabled: SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Muse, harnesses, audience: audience),
-            source, budget.Remaining);
+            source,
+            wakeUpsWanted: audience.IsHosted,
+            budget.Remaining);
 
         // Posted with or without a log: Stop starts a missing watcher but never posts the start.
         await PostInOrderAsync("session-start/muse", enriched, sessionId, budget);
@@ -342,6 +344,7 @@ sealed class MuseHookCommand(
             bool     guidelinesDisabled,
             bool     flowsDisabled,
             string?  source,
+            bool     wakeUpsWanted,
             TimeSpan budget) {
         if ((disabled && guidelinesDisabled && flowsDisabled) || string.IsNullOrWhiteSpace(scopeRoot)
          || budget <= TimeSpan.Zero || !HookHttp.IsPostable(Url))
@@ -354,7 +357,7 @@ sealed class MuseHookCommand(
             return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 LifecycleFor(sessionId, source),
                 new SessionStartMemoryContextRequest(Url!, scopeRoot, disabled, budget, CancellationToken.None,
-                    GuidelinesDisabled: guidelinesDisabled, WakeUpsWanted: hosted.IsHosted, FlowsDisabled: flowsDisabled));
+                    GuidelinesDisabled: guidelinesDisabled, WakeUpsWanted: wakeUpsWanted, FlowsDisabled: flowsDisabled));
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
         }

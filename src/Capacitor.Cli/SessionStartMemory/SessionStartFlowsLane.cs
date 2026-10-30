@@ -32,10 +32,10 @@ internal sealed class SessionStartFlowsLane(Func<CancellationToken, Task<HttpCli
 
         if (wakeUps is null || !await wakeUps) return catalog;
 
-        // A catalogue retry delivers nothing now, so the nudge waits for the retry with it.
+        // The nudge is marker-less and safe to deliver again, so it rides on a catalogue retry too.
         return catalog.Disposition switch {
             SessionStartMemoryDisposition.Ready when catalog.Fragment is { } fragment => catalog with { Fragment = fragment + "\n\n" + WakeUpNudge },
-            SessionStartMemoryDisposition.RetryableFailure                          => catalog,
+            SessionStartMemoryDisposition.RetryableFailure                          => catalog with { Fragment = WakeUpNudge },
             _                                                                       => new(SessionStartMemoryDisposition.Ready, WakeUpNudge)
         };
     }
@@ -46,7 +46,11 @@ internal sealed class SessionStartFlowsLane(Func<CancellationToken, Task<HttpCli
     /// leaving it to its harness's own scheduling.</summary>
     async Task<bool> WakeUpsSupportedAsync(string baseUrl, CancellationToken ct) {
         try {
-            using var response = await (await client(ct)).GetAsync(baseUrl.TrimEnd('/') + Commands.WakeUpTools.Route, ct);
+            // Its own deadline, shorter than the lane's, so a stalled probe cannot hold back a catalogue already fetched.
+            using var deadline = new CancellationTokenSource(ProbeTimeout, time);
+            using var linked   = CancellationTokenSource.CreateLinkedTokenSource(ct, deadline.Token);
+            using var response = await (await client(linked.Token)).GetAsync(
+                baseUrl.TrimEnd('/') + Commands.WakeUpTools.Route, HttpCompletionOption.ResponseHeadersRead, linked.Token);
 
             return response.StatusCode == HttpStatusCode.BadRequest;
         } catch (Exception ex) when (ex is HttpRequestException or IOException or OperationCanceledException or InvalidDataException) {
@@ -150,6 +154,8 @@ internal sealed class SessionStartFlowsLane(Func<CancellationToken, Task<HttpCli
 
         static string? Str(JsonObject o, string key) => o[key] is JsonValue v && v.TryGetValue(out string? s) ? s : null;
     }
+
+    static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(1);
 
     const int    OverflowReserve   = 400;
     const int    MoreSuffixReserve = 16;
