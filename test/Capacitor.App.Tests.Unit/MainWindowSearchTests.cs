@@ -17,6 +17,11 @@ public class MainWindowSearchTests {
         public FakeDaemonClientService Service { get; } = new();
         public HistoricalScheduler Scheduler { get; } = new();
         public List<string> Built { get; } = [];
+        public List<SearchRequest> Requests { get; } = [];
+        public System.Reactive.Subjects.Subject<string> AccessChanged { get; } = new();
+        /// When set, a search answers once the test completes it.
+        public TaskCompletionSource? SearchGate { get; set; }
+        public CancellationToken LastSearchToken { get; private set; }
         public int Teardowns { get; private set; }
         public MainWindowViewModel Vm { get; }
 
@@ -29,10 +34,15 @@ public class MainWindowSearchTests {
                 directory: Host.Directory,
                 serverWorkspaceFactory: id => { Built.Add(id); return Host.NewServer(id); },
                 searchFactory: open => new SessionSearchViewModel(
-                    (_, _) => Task.FromResult(new SearchFetch(ServerReadOutcome.Ok, new SearchResponseDto {
-                        Sessions = [new() { SessionId = "T", Slug = "slug-t", Title = "Tee", StartedAt = "2026-10-29T09:00:00Z", MatchedField = "title", Snippet = "Tee" }],
-                    })),
-                    Host.Sessions.Identity, Observable.Never<string>(), new FakeTimeProvider(), Scheduler, open),
+                    async (request, ct) => {
+                        Requests.Add(request);
+                        LastSearchToken = ct;
+                        if (SearchGate is { } gate) await gate.Task;
+                        return new SearchFetch(ServerReadOutcome.Ok, new SearchResponseDto {
+                            Sessions = [new() { SessionId = "T", Slug = "slug-t", Title = "Tee", StartedAt = "2026-10-29T09:00:00Z", MatchedField = "title", Snippet = "Tee" }],
+                        });
+                    },
+                    Host.Sessions.Identity, AccessChanged, new FakeTimeProvider(), Scheduler, open),
                 sessions: Host.Sessions);
         }
 
@@ -394,6 +404,66 @@ public class MainWindowSearchTests {
             await Assert.That(h.Vm.CurrentWorkspace).IsNull();
             await Assert.That(h.Vm.IsSearchOpen).IsTrue();
             await Assert.That(h.Sessions.PinnedSessionId).IsNull();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_closed_page_asks_nothing_on_an_access_change() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            await h.OpenSearch();
+            h.TypeAndSettle("tee");
+            await h.Vm.DismissSearchCommand.Execute().ToTask();
+            var before = h.Requests.Count;
+
+            h.AccessChanged.OnNext("T");
+            h.Scheduler.AdvanceBy(TimeSpan.FromMilliseconds(151));
+
+            await Assert.That(before).IsEqualTo(1);
+            await Assert.That(h.Requests.Count).IsEqualTo(before);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_closed_page_asks_nothing_on_a_reconnect() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            await h.OpenSearch();
+            h.TypeAndSettle("tee");
+            await h.Vm.DismissSearchCommand.Execute().ToTask();
+            var before = h.Requests.Count;
+
+            h.Sessions.IdentitySubject.OnNext(new(0, 2, false));
+            h.Sessions.IdentitySubject.OnNext(new(0, 3, true));
+            h.Scheduler.AdvanceBy(TimeSpan.FromMilliseconds(151));
+
+            await Assert.That(before).IsEqualTo(1);
+            await Assert.That(h.Requests.Count).IsEqualTo(before);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Escape_cancels_a_search_still_in_flight() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            await h.OpenSearch();
+            var gate = new TaskCompletionSource();
+            h.SearchGate = gate;
+            h.Vm.Search!.Query = "tee";
+            h.Scheduler.AdvanceBy(TimeSpan.FromMilliseconds(151));
+            var sent = h.Requests.Count;
+
+            await h.Vm.DismissSearchCommand.Execute().ToTask();
+            gate.SetResult();
+            h.Scheduler.AdvanceBy(TimeSpan.FromMilliseconds(1));
+
+            await Assert.That(sent).IsEqualTo(1);
+            await Assert.That(h.LastSearchToken.IsCancellationRequested).IsTrue();
+            await Assert.That(h.Vm.Search.Hits).IsEmpty();
+            await Assert.That(h.Vm.Search.IsLoading).IsFalse();
         });
     }
 

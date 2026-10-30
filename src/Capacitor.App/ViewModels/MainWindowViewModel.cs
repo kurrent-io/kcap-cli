@@ -736,9 +736,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         _navigation.Bump();
     }
 
+    /// A closed page keeps no query, so a reconnect or an access change has nothing to ask again.
     void CloseSearch() {
         IsSearchOpen = false;
-        Search?.CancelIntent();
+        Search?.Reset();
     }
 
     /// Unpin also supersedes a pin still reading, so it runs when only the request is outstanding.
