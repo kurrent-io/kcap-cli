@@ -1015,10 +1015,11 @@ public partial class App : Application {
         var pullRequests = new ServerPullRequestSource(_config, profiles, _serverEnv, _machineEnv, _time, localRoot: _localRoot);
         var plans = new ServerPlanSource(_config, profiles, _serverEnv, _machineEnv, localRoot: _localRoot);
         var planArtifacts = new ServerPlanArtifactSource(_config, profiles, _serverEnv, _machineEnv, localRoot: _localRoot);
+        var pages = new ServerPageSource(_config, profiles, _serverEnv, _machineEnv, localRoot: _localRoot);
         var senders = new ServerMessageSenderSource(_config, profiles, _serverEnv, _machineEnv, localRoot: _localRoot);
         var ghRunner = new ProcessRunner(_time);
         var gh = new GitHubCliRunner(ghRunner, OperatingSystem.IsWindows() ? null : new LoginShellProbe(ghRunner, Environment.GetEnvironmentVariable), Environment.GetEnvironmentVariable);
-        var serverClients = new ServerClients(serverLane, workContext, pullRequests, plans, planArtifacts, senders);
+        var serverClients = new ServerClients(serverLane, workContext, pullRequests, plans, planArtifacts, pages, senders);
 
         var machineId = new MachineId(_config).ReadPersisted();
         var sessionHttp = ServerHttp(profiles);
