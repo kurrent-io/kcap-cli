@@ -18,9 +18,9 @@ kcap itself stays installed: the installer, npm, the snap or the desktop app
 owns the program, so uninstall leaves it. The plan ends by naming where it
 is and how to remove it.
 
-Codex sandbox network keys kcap set in ~/.codex/config.toml go back to the
-values they replaced, but only while they still hold kcap's value; any it
-keeps are listed with the reason.
+Codex sandbox network keys kcap set in Codex's config.toml (under CODEX_HOME
+when set, otherwise ~/.codex) go back to the values they replaced, but only
+while they still hold kcap's value; any it keeps are listed with the reason.
 
 Also removes Mistral Vibe hooks/MCP, kcap caches, legacy Cursor pending
 recordings and retired vendor-specific skills.

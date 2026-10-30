@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core.Harness.Codex;
+using Capacitor.Cli.Core.LocalEdition;
 using Tomlyn;
 using Tomlyn.Model;
 
@@ -31,6 +32,31 @@ public class CodexConfigTomlNetworkRestoreTests {
         var root = ReadToml();
         await Assert.That(root.Keys.ToArray()).IsEquivalentTo(["model"]);
         await Assert.That((string)root["model"]).IsEqualTo("gpt-5.5");
+    }
+
+    /// <summary>The claim is relinquished before the config is written, so a failed config write must
+    /// hand it back — otherwise the retry finds no claim and restores nothing.</summary>
+    [Test]
+    public async Task A_failed_config_write_keeps_the_claim_for_a_retry() {
+        File.WriteAllText(Config, """model = "gpt-5.5" """);
+        CodexConfigToml.EnableNetworkAccess(["**.kcap.ai"], Config);
+        var installed = File.ReadAllText(Config);
+
+        CodexNetworkRestore failed;
+        using (FaultPoints.Arm(p => {
+                   if (p.StartsWith("rename:", StringComparison.Ordinal) && p.EndsWith("config.toml", StringComparison.Ordinal))
+                       throw new IOException("config.toml is locked");
+               }))
+            failed = CodexConfigToml.RestoreNetworkAccess(Config, []);
+
+        await Assert.That(failed.Change).IsEqualTo(CodexConfigToml.Change.Failed);
+        await Assert.That(File.ReadAllText(Config)).IsEqualTo(installed);
+        await Assert.That(JsonNode.Parse(File.ReadAllText(Ledger))!["sandbox_network"]).IsNotNull();
+
+        var retry = CodexConfigToml.RestoreNetworkAccess(Config, []);
+
+        await Assert.That(retry.Change).IsEqualTo(CodexConfigToml.Change.Updated);
+        await Assert.That(ReadToml().Keys.ToArray()).IsEquivalentTo(["model"]);
     }
 
     [Test]

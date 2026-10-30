@@ -120,21 +120,29 @@ public static partial class CodexConfigToml {
 
                 var restored = new List<string>();
 
-                foreach (var (path, previous) in restores) {
-                    var parent = LookupTable(root, path[..^1])!;
+                try {
+                    foreach (var (path, previous) in restores) {
+                        var parent = LookupTable(root, path[..^1])!;
 
-                    if (previous is null) {
-                        parent.Remove(path[^1]);
-                        restored.Add($"{FormatKey(path)} removed");
-                    } else {
-                        parent[path[^1]] = previous;
-                        restored.Add(Describe(path, previous));
+                        if (previous is null) {
+                            parent.Remove(path[^1]);
+                            restored.Add($"{FormatKey(path)} removed");
+                        } else {
+                            parent[path[^1]] = previous;
+                            restored.Add(Describe(path, previous));
+                        }
                     }
+
+                    var pruned = PruneCreatedTables(root, claim["created_tables"] as JsonArray);
+
+                    if (restored.Count > 0 || pruned) WriteTomlAtomic(configPath, root);
+                } catch {
+                    // The config is untouched, so the claim still describes it; without it a retry restores nothing.
+                    ledger[NetworkClaimKey] = claim;
+                    try { WriteJsonAtomic(ledgerPath, ledger); } catch { /* the original failure is the one to report */ }
+
+                    throw;
                 }
-
-                var pruned = PruneCreatedTables(root, claim["created_tables"] as JsonArray);
-
-                if (restored.Count > 0 || pruned) WriteTomlAtomic(configPath, root);
 
                 var change = restored.Count > 0
                     ? kept.Count > 0 ? Change.UpdatedWithPreservedEntries : Change.Updated

@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
+using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.Mcp;
 using Tomlyn;
 using Tomlyn.Model;
@@ -536,6 +537,7 @@ public static partial class CodexConfigToml {
         var tmp = path + ".tmp-" + Environment.ProcessId + "-" + Guid.NewGuid().ToString("N");
         try {
             WriteOwnerOnlyTemp(tmp, TomlSerializer.Serialize(root, _tomlTypeInfo.TableInfo));
+            FaultPoints.Hit($"rename:{path}");
             File.Move(tmp, path, overwrite: true);
         } catch {
             try { File.Delete(tmp); } catch {
