@@ -472,6 +472,9 @@ public class WorkContextViewSmokeTests {
             await host.ShowAsync(new WorkContextRead(WorkContextReadKind.Ready, [primary, here], primary, item, null,
                 new SessionSummaryDto { SessionId = SessionA }, false, false, false, null));
 
+            await host.Vm.TogglePartsCommand.Execute();
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
             var purple = host.Window.FindResource("KcapPurpleBrush");
             var green = host.Window.FindResource("KcapSuccessBrush");
             var marks = MarksBeside(host.Find<ItemsControl>("PartsList"), "Here");
@@ -481,6 +484,57 @@ public class WorkContextViewSmokeTests {
             marks = MarksBeside(host.Find<ItemsControl>("PartsList"), "Done");
             await Assert.That(marks.Any(e => ReferenceEquals(e.Foreground, green))).IsTrue();
             await Assert.That(marks.Any(e => ReferenceEquals(e.Foreground, purple))).IsFalse();
+        });
+    }
+
+    /// Folded, which is how the section starts, the header carries a marked count for open, this
+    /// session and done, and the list holds this session's parts alone.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_collapsed_parts_section_counts_every_mark_and_lists_this_sessions_parts_only() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            var primary = new SessionWorkItemAssignmentDto { WorkItemId = "w1", Label = "WK-2198", Source = "mcp", Confidence = 1, IsPrimary = true };
+            var here = new SessionWorkItemAssignmentDto { WorkItemId = "p2", Label = "part", Source = "mcp", Confidence = 1, IsPrimary = false };
+            var item = new WorkItemDto {
+                WorkItemId = "w1",
+                Title = "WK-2198",
+                Key = new WorkItemKeyDto { ShortKey = "WK-2198", Provider = "linear", Kind = "issue", Value = "WK-2198" },
+                State = new WorkItemStateDto { Kind = "in_flight" },
+                Parts = [
+                    new WorkItemPartDto { WorkItemId = "p1", Title = "Open one", Ordinal = 0 },
+                    new WorkItemPartDto { WorkItemId = "p2", Title = "Here", Ordinal = 1 },
+                    new WorkItemPartDto { WorkItemId = "p3", Title = "Open two", Ordinal = 2 },
+                    new WorkItemPartDto { WorkItemId = "p4", Title = "Done", Ordinal = 3, IsSettled = true },
+                ],
+            };
+            await host.ShowAsync(new WorkContextRead(WorkContextReadKind.Ready, [primary, here], primary, item, null,
+                new SessionSummaryDto { SessionId = SessionA }, false, false, false, null));
+
+            var counts = host.Find<ItemsControl>("PartCounts");
+            await Assert.That(counts.IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.Find<TextBlock>("PartsHeaderText").IsEffectivelyVisible).IsFalse();
+            await Assert.That(VisibleTexts(counts)).IsEquivalentTo(new[] { "2", "1", "1" }, CollectionOrdering.Matching);
+
+            var border = ((ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapBorderBrush")!).Color;
+            var purple = ((ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapPurpleBrush")!).Color;
+            var success = ((ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapSuccessBrush")!).Color;
+            var marks = counts.GetVisualDescendants().OfType<AppIcon>().Where(e => e.IsEffectivelyVisible).ToList();
+            await Assert.That(marks.Select(e => ((ISolidColorBrush)e.Foreground!).Color))
+                .IsEquivalentTo(new[] { border, purple, success }, CollectionOrdering.Matching);
+
+            await Assert.That(host.Find<ItemsControl>("PartsList").IsEffectivelyVisible).IsFalse();
+            var folded = host.Find<ItemsControl>("ThisSessionPartsList");
+            await Assert.That(folded.IsEffectivelyVisible).IsTrue();
+            await Assert.That(VisibleTexts(folded)).IsEquivalentTo(new[] { "Here" });
+
+            await host.Vm.TogglePartsCommand.Execute();
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+            await Assert.That(folded.IsEffectivelyVisible).IsFalse();
+            await Assert.That(host.Find<TextBlock>("PartsHeaderText").IsEffectivelyVisible).IsTrue();
+            await Assert.That(VisibleTexts(host.Find<ItemsControl>("PartsList")))
+                .IsEquivalentTo(new[] { "Open one", "Here", "Open two", "Done" }, CollectionOrdering.Matching);
         });
     }
 
@@ -534,7 +588,7 @@ public class WorkContextViewSmokeTests {
 
     static AppIcon[] MarksBeside(ItemsControl list, string title) {
         var row = list.GetVisualDescendants().OfType<TextBlock>().First(t => t.Text == title).Parent as StackPanel;
-        return row!.Children.OfType<Panel>().First().Children.OfType<AppIcon>().Where(e => e.IsEffectivelyVisible).ToArray();
+        return row!.Children.OfType<Panel>().First().GetVisualDescendants().OfType<AppIcon>().Where(e => e.IsEffectivelyVisible).ToArray();
     }
 
     static WorkContextRead CrowdedWhoRead() {

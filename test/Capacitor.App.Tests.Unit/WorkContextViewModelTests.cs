@@ -703,6 +703,10 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.Parts[2].Mark).IsEqualTo(WorkContextPartMark.Settled);
             await Assert.That(h.Vm.Parts[2].IsSettled).IsTrue();
             await Assert.That(h.Vm.PartsHeader).IsEqualTo("1 of 3");
+            await Assert.That(h.Vm.PartCounts).IsEquivalentTo(new WorkContextPartCount[] {
+                new(WorkContextPartMark.Unknown, 1), new(WorkContextPartMark.ThisSession, 1), new(WorkContextPartMark.Settled, 1),
+            }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+            await Assert.That(h.Vm.ThisSessionParts.Select(p => p.Title)).IsEquivalentTo(new[] { "First" });
             await Assert.That(h.Vm.BlockedBy[0]).IsEqualTo("Pin the helper");
             await Assert.That(h.Vm.HasBlockers).IsTrue();
             await Assert.That(h.Vm.CycleNote).IsEqualTo("Dependencies could not be fully resolved");
@@ -722,6 +726,8 @@ public class WorkContextViewModelTests {
 
             await Assert.That(h.Vm.Parts[0].Mark).IsEqualTo(WorkContextPartMark.Settled);
             await Assert.That(h.Vm.PartsHeader).IsEqualTo("1 of 1");
+            await Assert.That(h.Vm.PartCounts).IsEquivalentTo(new WorkContextPartCount[] { new(WorkContextPartMark.Settled, 1) });
+            await Assert.That(h.Vm.HasThisSessionParts).IsFalse();
             await h.Vm.TeardownAsync();
         });
     }
@@ -1760,10 +1766,10 @@ public class WorkContextViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Sections_default_open_parts_and_collapsed_session_and_toggle() {
+    public async Task Sections_default_collapsed_and_toggle() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
-            await Assert.That(h.Vm.PartsExpanded).IsTrue();
+            await Assert.That(h.Vm.PartsExpanded).IsFalse();
             await Assert.That(h.Vm.PeopleExpanded).IsFalse();
             await Assert.That(h.Vm.SessionExpanded).IsFalse();
             await Assert.That(h.Vm.SessionToggleText).IsEqualTo("More");
@@ -1771,7 +1777,7 @@ public class WorkContextViewModelTests {
             await h.Vm.TogglePartsCommand.Execute();
             await h.Vm.ToggleSessionCommand.Execute();
 
-            await Assert.That(h.Vm.PartsExpanded).IsFalse();
+            await Assert.That(h.Vm.PartsExpanded).IsTrue();
             await Assert.That(h.Vm.SessionExpanded).IsTrue();
             await Assert.That(h.Vm.SessionToggleText).IsEqualTo("Less");
             await h.Vm.TeardownAsync();
