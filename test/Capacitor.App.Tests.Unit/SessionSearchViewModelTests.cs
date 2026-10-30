@@ -25,17 +25,17 @@ public class SessionSearchViewModelTests {
         public IReadOnlyList<Pending> Calls { get { lock (_calls) return [.. _calls]; } }
 
         Task<SearchFetch> Search(SearchRequest request, CancellationToken token) {
-            var pending = new Pending(request, token, new TaskCompletionSource<SearchFetch>(TaskCreationOptions.RunContinuationsAsynchronously));
+            var pending = new Pending(request, token, new TaskCompletionSource<SearchFetch>());
             lock (_calls) _calls.Add(pending);
             return pending.Completion.Task;
         }
 
         public void Advance(int ms) => Scheduler.AdvanceBy(TimeSpan.FromMilliseconds(ms));
 
-        public async Task Complete(int call, SearchFetch fetch) {
+        public Task Complete(int call, SearchFetch fetch) {
             Calls[call].Completion.SetResult(fetch);
-            await Task.Delay(50);
             Advance(1);
+            return Task.CompletedTask;
         }
 
         public void Dispose() => Vm.Dispose();
@@ -137,6 +137,31 @@ public class SessionSearchViewModelTests {
         await Assert.That(h.Vm.Hits.Select(x => x.SessionId)).IsEquivalentTo(new[] { "new" });
         await Assert.That(h.Vm.ListState).IsEqualTo(SearchListState.Results);
         await Assert.That(h.Vm.IsLoading).IsFalse();
+    }
+
+    [Test]
+    public async Task Response_arriving_during_the_debounce_window_is_dropped() {
+        using var h = new Harness();
+        h.Vm.Query = "local";
+        h.Advance(150);
+
+        h.Vm.Query = "locale";
+        await h.Complete(0, Sessions("old"));
+
+        await Assert.That(h.Vm.Hits).IsEmpty();
+    }
+
+    [Test]
+    public async Task Disconnect_drops_the_in_flight_response() {
+        using var h = new Harness();
+        h.Vm.Query = "local";
+        h.Advance(150);
+
+        h.Identity.OnNext(new SessionIdentity(1, 2, false));
+        await h.Complete(0, Sessions("pre-disconnect"));
+
+        await Assert.That(h.Calls[0].Token.IsCancellationRequested).IsTrue();
+        await Assert.That(h.Vm.Hits).IsEmpty();
     }
 
     [Test]

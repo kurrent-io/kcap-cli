@@ -55,7 +55,9 @@ public sealed class SessionSearchViewModel : ReactiveObject, IDisposable {
         set {
             value ??= "";
             if (_query == value) return;
+            var before = Trimmed;
             this.RaiseAndSetIfChanged(ref _query, value);
+            if (Trimmed != before) CancelInFlight();
             if (Trimmed.Length < MinQueryLength) {
                 CancelInFlight();
                 Clear();
@@ -113,7 +115,10 @@ public sealed class SessionSearchViewModel : ReactiveObject, IDisposable {
         _identity = next;
         if (previous is null) return;
         if (next.Account != previous.Account) Reset();
-        else if (next.Generation != previous.Generation && next.Connected) RunCurrent();
+        else if (next.Generation != previous.Generation) {
+            CancelInFlight();
+            if (next.Connected) RunCurrent();
+        }
     }
 
     void RunCurrent() {
@@ -138,7 +143,8 @@ public sealed class SessionSearchViewModel : ReactiveObject, IDisposable {
             fetch = new SearchFetch(ServerReadOutcome.Failed, null);
         }
         _scheduler.Schedule(() => {
-            if (!ReferenceEquals(_inFlight, cts) || cts.IsCancellationRequested) return;
+            if (!ReferenceEquals(_inFlight, cts) || cts.IsCancellationRequested
+                || request.Query != Trimmed || request.Mode != _tab) return;
             _inFlight = null;
             IsLoading = false;
             Apply(request, fetch);
