@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
@@ -14,11 +15,13 @@ public sealed class SessionSearchViewModel : ReactiveObject, IDisposable {
     static readonly TimeSpan DefaultDebounce = TimeSpan.FromMilliseconds(150);
 
     readonly Func<SearchRequest, CancellationToken, Task<SearchFetch>> _search;
+    readonly Func<string, PinPresentation, CancellationToken, Task<SearchOpenOutcome>> _open;
     readonly TimeProvider _time;
     readonly IScheduler _scheduler;
     readonly ObservableCollection<SearchHitViewModel> _hits = [];
     readonly CompositeDisposable _disposables = new();
     readonly Subject<string> _queryChanges = new();
+    readonly Subject<Unit> _closed = new();
 
     string _query = "";
     SearchMode _tab = SearchMode.Sessions;
@@ -28,6 +31,8 @@ public sealed class SessionSearchViewModel : ReactiveObject, IDisposable {
     bool _isLoading;
     SessionIdentity? _identity;
     CancellationTokenSource? _inFlight;
+    CancellationTokenSource? _intent;
+    SearchHitViewModel? _intentHit;
 
     public SessionSearchViewModel(
         Func<SearchRequest, CancellationToken, Task<SearchFetch>> search,
@@ -35,8 +40,10 @@ public sealed class SessionSearchViewModel : ReactiveObject, IDisposable {
         IObservable<string> accessChanged,
         TimeProvider time,
         IScheduler scheduler,
+        Func<string, PinPresentation, CancellationToken, Task<SearchOpenOutcome>> open,
         TimeSpan? debounce = null) {
         _search = search;
+        _open = open;
         _time = time;
         _scheduler = scheduler;
         Hits = new ReadOnlyObservableCollection<SearchHitViewModel>(_hits);
@@ -49,6 +56,7 @@ public sealed class SessionSearchViewModel : ReactiveObject, IDisposable {
     }
 
     public ReadOnlyObservableCollection<SearchHitViewModel> Hits { get; }
+    public IObservable<Unit> Closed => _closed;
 
     public string Query {
         get => _query;
@@ -102,6 +110,7 @@ public sealed class SessionSearchViewModel : ReactiveObject, IDisposable {
 
     public void Reset() {
         CancelInFlight();
+        CancelIntent();
         _query = "";
         _tab = SearchMode.Sessions;
         this.RaisePropertyChanged(nameof(Query));
@@ -117,7 +126,63 @@ public sealed class SessionSearchViewModel : ReactiveObject, IDisposable {
         if (next.Account != previous.Account) Reset();
         else if (next.Generation != previous.Generation) {
             CancelInFlight();
+            CancelIntent();
             if (next.Connected) RunCurrent();
+        }
+    }
+
+    public Task OpenHighlighted() =>
+        _highlightIndex >= 0 && _highlightIndex < _hits.Count ? OpenAsync(_hits[_highlightIndex]) : Task.CompletedTask;
+
+    public async Task OpenAsync(SearchHitViewModel hit) {
+        CancelIntent();
+        var cts = new CancellationTokenSource();
+        _intent = cts;
+        _intentHit = hit;
+        hit.IsOpening = true;
+
+        SearchOpenOutcome outcome;
+        try {
+            outcome = await _open(hit.SessionId, hit.Presentation, cts.Token).ConfigureAwait(false);
+        } catch (OperationCanceledException) {
+            outcome = SearchOpenOutcome.Superseded;
+        } catch (Exception) {
+            outcome = SearchOpenOutcome.Failed;
+        }
+        _scheduler.Schedule(() => {
+            if (ReferenceEquals(_intent, cts)) {
+                _intent = null;
+                _intentHit = null;
+                hit.IsOpening = false;
+            }
+            if (cts.IsCancellationRequested || outcome == SearchOpenOutcome.Superseded) return;
+            ApplyOpen(outcome);
+        });
+    }
+
+    public void CancelIntent() {
+        var cts = _intent;
+        var hit = _intentHit;
+        _intent = null;
+        _intentHit = null;
+        if (hit is not null) hit.IsOpening = false;
+        cts?.Cancel();
+    }
+
+    void ApplyOpen(SearchOpenOutcome outcome) {
+        switch (outcome) {
+            case SearchOpenOutcome.Opened:
+                _closed.OnNext(Unit.Default);
+                break;
+            case SearchOpenOutcome.SignInRequired:
+                SetState(SearchListState.SignInRequired);
+                break;
+            case SearchOpenOutcome.Unavailable:
+                ListMessage = "This session is no longer available";
+                break;
+            case SearchOpenOutcome.Failed:
+                ListMessage = "Couldn't open this session · try again";
+                break;
         }
     }
 
@@ -197,6 +262,8 @@ public sealed class SessionSearchViewModel : ReactiveObject, IDisposable {
 
     public void Dispose() {
         CancelInFlight();
+        CancelIntent();
+        _closed.Dispose();
         _disposables.Dispose();
     }
 }

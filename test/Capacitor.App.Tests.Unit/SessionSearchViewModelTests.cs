@@ -18,7 +18,7 @@ public class SessionSearchViewModelTests {
         public SessionSearchViewModel Vm { get; }
 
         public Harness() {
-            Vm = new SessionSearchViewModel(Search, Identity, Access, new FakeTimeProvider(), Scheduler);
+            Vm = new SessionSearchViewModel(Search, Identity, Access, new FakeTimeProvider(), Scheduler, (_, _, _) => Task.FromResult(SearchOpenOutcome.Opened));
             Identity.OnNext(new SessionIdentity(1, 1, true));
         }
 
