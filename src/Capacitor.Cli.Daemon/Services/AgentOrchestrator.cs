@@ -78,6 +78,9 @@ internal record AgentInstance(
     /// takeover of that session's work has started.
     public string?              ContinuedFromSessionId { get; set; }
 
+    /// The ended session this agent was launched to hand off from.
+    public Capacitor.Cli.Core.Handoff.HandoffSourceContext? HandoffSource { get; set; }
+
     /// The agent this one continues, announced on every registration so the server can follow its wake-ups here.
     public string?              ContinuesAgentId  { get; init; }
 
@@ -2609,6 +2612,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
         }
 
+        if (HandoffLaunchRefusal(cmd, resume is not null) is { } handoffRefusal) {
+            await LaunchFailedUnlessPrivateAsync(isPrivate, cmd.AgentId, handoffRefusal);
+
+            return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
+        }
+
         // fail an unattended (review-flow) launch fast when the selected vendor's
         // runtime can't run unattended — before creating a worktree, so there's nothing to
         // clean up. This guards every newly registered runtime through the same capability seam.
@@ -2834,6 +2843,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             if (resume is not null) {
                 worktree = resume.Worktree;
+            } else if (cmd.Handoff is not null) {
+                var handoff = await PrepareHandoffAsync(cmd, repoPath, _shutdownCts.Token);
+                if (handoff.Refusal is { } handoffRefused) {
+                    await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, handoffRefused);
+
+                    return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
+                }
+
+                worktree = handoff.Worktree!;
+                prompt   = handoff.Prompt;
             } else if (cmd.Borrowed) {
                 // Defense-in-depth re-authorization: the server already probed this cwd, but the
                 // daemon NEVER borrows a path just because the server said so (TOCTOU-safe). The
@@ -3222,6 +3241,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 StartTitle          = startTitle,
                 IsPrivate           = isPrivate,
                 ContinuesAgentId    = resume?.Entry.InheritedAgentIds is [.., var predecessor] ? predecessor : null,
+                HandoffSource       = cmd.Handoff?.Source,
                 // Keeps the worktree and the entry through any failure until the resume is judged.
                 ResumePending       = resume is not null
             };

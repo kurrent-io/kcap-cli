@@ -95,4 +95,40 @@ internal partial class AgentOrchestrator {
     }
 
     static HandoffProbeReplyDto Refused(string refusal) => new(refusal, null, null, null, null);
+
+    /// <summary>Why a launch cannot carry its hand-off block, or null when it can or carries none. Only an
+    /// interactive launch into a fresh owned worktree can: any other shape would start somewhere the probe
+    /// never looked, so the block is refused rather than ignored.</summary>
+    internal static string? HandoffLaunchRefusal(LaunchAgentCommand cmd, bool resuming) =>
+        cmd.Handoff switch {
+            null => null,
+            _ when resuming || cmd.ResumeSessionId is not null => "invalid_handoff: a resumed launch cannot hand off",
+            _ when cmd.Kind != LaunchKind.Default              => "invalid_handoff: a review launch cannot hand off",
+            _ when cmd.Borrowed                                => "invalid_handoff: a borrowed launch cannot hand off",
+            _ when cmd.ScratchWorkspace                        => "invalid_handoff: a scratch-workspace launch cannot hand off",
+            { Start: null } or { Source: null }                => "invalid_handoff: the block is incomplete",
+            { Start: var start } when start.ToStart() is null  => "invalid_handoff: the start's shape is not one this daemon knows",
+            _                                                  => null
+        };
+
+    /// <summary>Creates the hand-off worktree at the launch's start and builds the prompt that replaces the
+    /// user's text. A start that moved since the probe throws <c>handoff_start_changed</c> and leaves no
+    /// worktree behind.</summary>
+    internal async Task<(WorktreeInfo? Worktree, string? Prompt, string? Refusal)> PrepareHandoffAsync(
+            LaunchAgentCommand cmd, string repoPath, CancellationToken ct) {
+        if (cmd.Handoff is not { } handoff) return (null, null, "invalid_handoff: the launch carries no hand-off");
+        if (HandoffLaunchRefusal(cmd, resuming: false) is { } refusal) return (null, null, refusal);
+
+        var (owner, name) = (handoff.Source.RepoOwner ?? "", handoff.Source.RepoName ?? "");
+        if (!OriginIs(repoPath, owner, name))
+            return (null, null, $"{HandoffRefusals.RepoMismatch}: {repoPath} is not a checkout of {owner}/{name}");
+
+        var start = handoff.Start.ToStart()!;
+        ct.ThrowIfCancellationRequested();
+
+        var work     = await _worktreeManager.CheckHandoffWorkAsync(repoPath, start.Sha, handoff.SessionCommits, mayHaveUnpushedWork: true);
+        var worktree = await _worktreeManager.CreateHandoffAsync(repoPath, start);
+
+        return (worktree, HandoffPrompt.Build(handoff.Source, handoff.Start, start, work, cmd.Prompt), null);
+    }
 }
