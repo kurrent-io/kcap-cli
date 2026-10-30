@@ -670,14 +670,6 @@ class ImportCommand(
         internal int Failed => ProbeError + Errored;
     }
 
-    /// <summary>
-    /// How a run ended, for a caller that has to say so.
-    /// </summary>
-    /// <remarks>
-    /// <b>The exit code cannot answer this.</b> <c>HandleImport</c> returns 0 for a run whose sessions
-    /// failed — import is best-effort and the Done grid is where that is reported — so a caller
-    /// deriving success from the exit code calls a partial or total failure a success.
-    /// </remarks>
     /// <summary>Reports a run that deliberately moved nothing: it reached a decision, and the decision
     /// was that there was nothing to do.</summary>
     static void ReportNothing(Action<ImportRunOutcome>? onFinished, Action<ImportRunSelection>? onSelected, bool capped) {
@@ -690,9 +682,22 @@ class ImportCommand(
             Partition: capped ? ImportRunPartition.Empty : null));
     }
 
+    /// <summary>
+    /// How a run ended, for a caller that has to say so.
+    /// </summary>
+    /// <remarks>
+    /// <c>HandleImport</c> returns 0 for a run whose sessions failed, because its embedded callers report
+    /// the failure themselves; only <c>kcap import</c> itself turns this into its exit code.
+    /// </remarks>
     internal sealed record ImportRunOutcome(FinalCounts Counts, int VisibilityFailures, ImportRunPartition? Partition = null) {
         /// <summary>Anything the user asked for that did not happen.</summary>
         internal bool AnythingFailed => Counts.Failed > 0 || VisibilityFailures > 0;
+
+        /// <summary>
+        /// <c>kcap import</c>'s exit status: 1 when anything failed, whether some sessions or all of them,
+        /// since either leaves work a re-run has to finish. Skipped and excluded sessions are not failures.
+        /// </summary>
+        internal int ExitCode => AnythingFailed ? 1 : 0;
     }
 
     /// <summary>
@@ -1254,10 +1259,11 @@ class ImportCommand(
         // the same one, and answering it per-list would not change what it means.
         var outsideAllowlist = actionable.Where(c => c.OutsideAllowlist).ToList();
 
+        var includedRepoKeys        = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var includedPathKeys        = new HashSet<string>(StringComparer.Ordinal);
+        var includeOutsideAllowlist = false;
+
         if (excludedByRepo.Count > 0 || excludedByPath.Count > 0 || outsideAllowlist.Count > 0) {
-            var includedRepoKeys        = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var includedPathKeys        = new HashSet<string>(StringComparer.Ordinal);
-            var includeOutsideAllowlist = false;
             // Only prompt when both stdin and stdout are interactive. Writing prompts to stderr
             // keeps them visible even when stdout is redirected, but we still can't ReadLine
             // meaningfully without a TTY on stdin. autoSkipExclusions forces the non-interactive
@@ -1294,13 +1300,15 @@ class ImportCommand(
                 await console.Error.WriteLineAsync(
                     $"{display.Indented}Auto-skipping {distinctSessions} session(s) from {totalGroups} excluded source(s) (non-interactive).");
             }
+        }
 
-            for (var i = 0; i < classifications.Count; i++) {
-                var c = classifications[i];
+        // Outside the prompt block: a session whose probe failed is never asked about, and must still
+        // land in Excluded when nothing opted its exclusion in.
+        for (var i = 0; i < classifications.Count; i++) {
+            var c = classifications[i];
 
-                if (ShouldExclude(c, includedRepoKeys, includedPathKeys, includeOutsideAllowlist)) {
-                    classifications[i] = c with { Status = ClassificationStatus.Excluded };
-                }
+            if (ShouldExclude(c, includedRepoKeys, includedPathKeys, includeOutsideAllowlist)) {
+                classifications[i] = c with { Status = ClassificationStatus.Excluded };
             }
         }
 
@@ -1322,6 +1330,13 @@ class ImportCommand(
 
         display.BeginPhase("Plan");
         display.WritePlanGrid(planCounts, planBySource);
+
+        // A probe error alone cannot tell a down server from a bad session, and the Done grid's "re-run
+        // to retry" reads as a transient blip unless the cause is named.
+        if (planCounts.ProbeError > 0 && await ServerReachability.UnreachableReasonAsync(httpClient, baseUrl, time) is { } unreachable)
+            await console.Error.WriteLineAsync(
+                $"{display.Indented}Could not reach the kcap server at {UnusableUrlDiagnostic.Sanitize(baseUrl)} "
+              + $"({HttpClientExtensions.StripControlCharacters(unreachable)}). Nothing can be imported until it is back.");
 
         // --- Build chains + set continuation predecessors ---
         // Chain workers operate on file-based classifications (Claude/Codex);

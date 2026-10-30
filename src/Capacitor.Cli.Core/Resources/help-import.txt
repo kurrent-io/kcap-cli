@@ -88,6 +88,11 @@ Options:
 Re-running the same command is idempotent — a server-side watermark dedupes
 already-imported lines so nothing is double-loaded.
 
+Exit codes: 0 = nothing failed (skipped and excluded sessions are not failures);
+1 = at least one session failed to land, whether some or all of them (including
+an unreachable server, which the run names), or --private could not be applied.
+Ignored paths and excluded repos stay excluded whether or not the server answers.
+
 Transcript records are secret-redacted before upload, with a 4 MiB UTF-8 limit
 per record and batch. Records that cannot be safely processed produce a warning
 and a numbered capture-loss marker; other records continue importing. Install
