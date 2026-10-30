@@ -356,7 +356,8 @@ public class AgentOrchestratorHandoffTakeoverTests : IDisposable {
         await Assert.That(f.Server.HandoffEnds).IsEquivalentTo([Token]);
     }
 
-    /// <summary>A renewal that says no, throws or never answers within its timeout all mean the lease may be gone.</summary>
+    /// <summary>A renewal that says no, throws or never answers within its timeout all mean the lease may be gone,
+    /// which is a lost reservation, not a cancellation.</summary>
     [Test]
     [Arguments("false")]
     [Arguments("throws")]
@@ -386,7 +387,7 @@ public class AgentOrchestratorHandoffTakeoverTests : IDisposable {
             var outcome = await SettledAsync(f, step: TimeSpan.FromSeconds(5));
 
             await Assert.That(outcome.State).IsEqualTo("failed");
-            await Assert.That(outcome.Detail).IsEqualTo(TakeoverResult.Interrupted.Cancelled);
+            await Assert.That(outcome.Detail).IsEqualTo(TakeoverResult.Interrupted.ReservationLost);
             await Assert.That(outcome.Items.Select(i => (i.Label, i.Result))).IsEquivalentTo([
                 ("#1 — Item 1", "carried"), ("#2 — Item 2", "unknown"), ("#3 — Item 3", "unknown"), ("Loose-end claims", "unknown")
             ]);

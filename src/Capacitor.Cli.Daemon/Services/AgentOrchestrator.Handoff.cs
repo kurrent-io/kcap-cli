@@ -247,7 +247,13 @@ internal partial class AgentOrchestrator {
                     .RunAsync(client, ServerBase, sourceWire, successor, TakeoverAdmission.EndedOnly, run.Token));
             if (result is TakeoverResult.Interrupted && ct.IsCancellationRequested) throw new OperationCanceledException(ct);
 
+            // Only the renewal loop cancels the run without the shutdown token.
+            if (result is TakeoverResult.Interrupted { Code: TakeoverResult.Interrupted.Cancelled } cut && run.IsCancellationRequested)
+                result = cut with { Code = TakeoverResult.Interrupted.ReservationLost };
+
             return HandoffOutcomeDto.From(source.SessionId, source.Title, result);
+        } catch (OperationCanceledException) when (run.IsCancellationRequested && !ct.IsCancellationRequested) {
+            return Failed(source, TakeoverResult.Interrupted.ReservationLost);
         } finally {
             await renewing.CancelAsync();
             await renewals;
