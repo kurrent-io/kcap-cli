@@ -45,8 +45,9 @@ public class PiMcpExtensionInstallerTests {
         // Session-scoped lifecycle: register-once guard + holder + respawn on session_start.
         await Assert.That(content).Contains("function startBridge");
         await Assert.That(content).Contains("function stopBridge");
-        await Assert.That(content).Contains("session_start");
         await Assert.That(content).Contains("session_shutdown");
+        // A hosted Pi launch waits on session_start, so the retry there must not hold it.
+        await Assert.That(content).Contains("pi.on(\"session_start\", () => { void startBridge(); });");
         // Parallel, bounded startup (four hung servers ⇒ ~one timeout, not 4×).
         await Assert.That(content).Contains("Promise.all");
         // Teardown ladder EOF → SIGTERM → SIGKILL, plus a globalThis-guarded sync exit backstop.
