@@ -5,6 +5,7 @@ using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.VisualTree;
+using Capacitor.App.Services;
 using Capacitor.App.Views;
 using Capacitor.Remote.Models;
 
@@ -71,5 +72,37 @@ public class SessionSearchViewSmokeTests {
         await Assert.That(listShown).IsFalse();
         await Assert.That(host.Requests).IsEmpty();
         await Assert.That(host.SignIns).IsEqualTo(1);
+    });
+
+    /// A 401 to the page shows the prompt but leaves the query editable; signing back in asks again.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_401_shows_sign_in_then_signing_in_asks_again_and_shows_results() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var host = new SearchWindowHost();
+        host.Response = new SearchResponseDto {
+            Sessions = [new() { SessionId = "S1", Slug = "fix-auth", Title = "Fix auth", StartedAt = "2026-10-29T09:00:00Z", MatchedField = "title", Snippet = "Fix auth" }],
+        };
+        host.Outcome = ServerReadOutcome.Unauthorized;
+        OpenWithShortcut(host);
+        host.Window.KeyTextInput("auth");
+        host.SettleSearch();
+        var promptAfter401 = host.Named<StackPanel>("SearchSignInPrompt").IsVisible;
+        var editable = !host.Named<TextBox>("SearchQueryBox").IsReadOnly;
+
+        host.Lane.OnNext(new ServerLaneStatus(ServerLaneState.SignedOut));
+        host.Settle();
+        var readOnlySignedOut = host.Named<TextBox>("SearchQueryBox").IsReadOnly;
+        host.Outcome = ServerReadOutcome.Ok;
+        host.Lane.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+        host.Settle();
+        host.SettleSearch();
+
+        await Assert.That(promptAfter401).IsTrue();
+        await Assert.That(editable).IsTrue();
+        await Assert.That(readOnlySignedOut).IsTrue();
+        await Assert.That(host.Requests.Count).IsEqualTo(2);
+        await Assert.That(host.Named<StackPanel>("SearchSignInPrompt").IsVisible).IsFalse();
+        await Assert.That(host.Named<DockPanel>("SearchResults").IsVisible).IsTrue();
+        await Assert.That(host.Vm.Search!.Hits.Count).IsEqualTo(1);
     });
 }

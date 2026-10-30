@@ -34,7 +34,7 @@ public partial class SessionSearchView : UserControl {
 
     void OnQueryKeyDown(object? sender, KeyEventArgs e) {
         if (Window is not { } window) return;
-        var search = window.SearchShowsSignIn ? null : Search;
+        var search = window.SearchSignedOut ? null : Search;
         switch (e.Key) {
             case Key.Escape:
                 window.DismissSearchCommand.Execute().Subscribe();

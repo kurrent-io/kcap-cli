@@ -21,22 +21,25 @@ sealed class SearchWindowHost : IDisposable {
     public HistoricalScheduler Scheduler { get; } = new();
     public List<SearchRequest> Requests { get; } = [];
     public SearchResponseDto Response { get; set; } = new();
+    public ServerReadOutcome Outcome { get; set; } = ServerReadOutcome.Ok;
+    public System.Reactive.Subjects.BehaviorSubject<ServerLaneStatus> Lane { get; }
     public SessionRailViewModel Rail { get; }
     public MainWindowViewModel Vm { get; }
     public MainWindow Window { get; }
     public int SignIns { get; private set; }
 
     public SearchWindowHost(bool signedOut = false, Func<string, WorkspaceViewModel>? workspaceFactory = null) {
+        Lane = new(new ServerLaneStatus(signedOut ? ServerLaneState.SignedOut : ServerLaneState.Connected));
         Rail = new SessionRailViewModel(Directory, _ => { }, _ => { }, TimeProvider.System, sessions: Sessions);
         Vm = new MainWindowViewModel(
             Service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
             workspaceFactory: workspaceFactory, rail: Rail,
-            laneStatus: Observable.Return(new ServerLaneStatus(signedOut ? ServerLaneState.SignedOut : ServerLaneState.Connected)),
+            laneStatus: Lane,
             requestSignIn: () => SignIns++,
             searchFactory: open => new SessionSearchViewModel(
                 (request, _) => {
                     Requests.Add(request);
-                    return Task.FromResult(new SearchFetch(ServerReadOutcome.Ok, Response));
+                    return Task.FromResult(new SearchFetch(Outcome, Outcome == ServerReadOutcome.Ok ? Response : null));
                 },
                 Sessions.Identity, Observable.Never<string>(), new FakeTimeProvider(), Scheduler, open),
             sessions: Sessions);

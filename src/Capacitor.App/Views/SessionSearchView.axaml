@@ -50,7 +50,7 @@
                         <TextBox x:Name="SearchQueryBox" Grid.Column="1" Classes="kcapEmbedded" Margin="8,0"
                                  VerticalAlignment="Center" PlaceholderText="Search…"
                                  Text="{Binding Search.Query, FallbackValue=''}"
-                                 IsReadOnly="{Binding SearchShowsSignIn}"
+                                 IsReadOnly="{Binding SearchSignedOut}"
                                  AutomationProperties.Name="Search sessions" />
                         <Button x:Name="SearchEscapeChip" Grid.Column="2" Classes="kcapChip" Content="esc"
                                 Padding="6,2" FontSize="11" CornerRadius="5" Focusable="False" VerticalAlignment="Center"
@@ -61,12 +61,12 @@
                         <ProgressBar.IsVisible>
                             <MultiBinding Converter="{x:Static BoolConverters.And}">
                                 <Binding Path="Search.IsLoading" FallbackValue="False" />
-                                <Binding Path="!SearchShowsSignIn" />
+                                <Binding Path="!SearchSignedOut" />
                             </MultiBinding>
                         </ProgressBar.IsVisible>
                     </ProgressBar>
                     <Border Height="1" Background="{StaticResource KcapBorderBrush}" />
-                    <StackPanel Orientation="Horizontal" Spacing="4" Margin="10,8" IsVisible="{Binding !SearchShowsSignIn}">
+                    <StackPanel Orientation="Horizontal" Spacing="4" Margin="10,8" IsVisible="{Binding !SearchSignedOut}">
                         <Button x:Name="SearchSessionsTab" Classes="kcapChip searchTab" Content="Sessions"
                                 Click="OnSessionsTabClick" AutomationProperties.Name="Sessions">
                             <Classes.active>

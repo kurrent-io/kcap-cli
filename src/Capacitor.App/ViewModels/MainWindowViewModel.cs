@@ -286,9 +286,12 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// is open.
     public bool SignInVisible => _signInVisible?.Value ?? false;
 
-    /// The search page shows the sign-in prompt in place of the list, and takes no query: there is
-    /// no server to ask, the window already reads signed out, or the server answered 401.
-    public bool SearchShowsSignIn => Search is null || _searchSignedOut || Search.ListState == SearchListState.SignInRequired;
+    /// No server to ask, or the window reads signed out: the page takes no query.
+    public bool SearchSignedOut => Search is null || _searchSignedOut;
+
+    /// The page shows the sign-in prompt in place of the list: signed out, or the server answered
+    /// 401 to the page, where the query stays editable and the next edit asks again.
+    public bool SearchShowsSignIn => SearchSignedOut || Search?.ListState == SearchListState.SignInRequired;
     bool _searchSignedOut;
 
     string? _startMessage;
@@ -549,8 +552,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .DisposeWith(disposables);
             // Its own copy: an OAPH notifies before its new value is readable.
             signInVisible.Subscribe(visible => {
+                var signedBackIn = _searchSignedOut && !visible;
                 _searchSignedOut = visible;
+                this.RaisePropertyChanged(nameof(SearchSignedOut));
                 this.RaisePropertyChanged(nameof(SearchShowsSignIn));
+                if (signedBackIn) Search?.RetrySignIn();
             }).DisposeWith(disposables);
 
             _connectionDisplay = status.CombineLatest(daemonConnection, signedOut, ConnectionDisplayFor)

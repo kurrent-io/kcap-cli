@@ -127,8 +127,20 @@ public sealed class SessionSearchViewModel : ReactiveObject, IDisposable {
         else if (next.Generation != previous.Generation) {
             CancelInFlight();
             CancelIntent();
-            if (next.Connected) RunCurrent();
+            if (!next.Connected) return;
+            if (_listState == SearchListState.SignInRequired) RetrySignIn();
+            else RunCurrent();
         }
+    }
+
+    /// Leaves a 401's sign-in state once the credential may have been repaired: the current query
+    /// is asked again, or the page shows what its query length calls for.
+    public void RetrySignIn() {
+        if (_listState != SearchListState.SignInRequired) return;
+        if (Trimmed.Length >= MinQueryLength) {
+            Clear();
+            RunCurrent();
+        } else SetState(Trimmed.Length == 0 ? SearchListState.Empty : SearchListState.TooShort);
     }
 
     public Task OpenHighlighted() =>

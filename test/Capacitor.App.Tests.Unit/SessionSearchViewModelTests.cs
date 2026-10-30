@@ -335,4 +335,60 @@ public class SessionSearchViewModelTests {
         await Assert.That(h.Vm.Tab).IsEqualTo(SearchMode.Sessions);
         await Assert.That(h.Vm.ListState).IsEqualTo(SearchListState.Empty);
     }
+
+    static readonly SearchFetch Unauthorized = new(ServerReadOutcome.Unauthorized, null);
+
+    [Test]
+    public async Task After_a_401_the_next_edit_asks_again_and_shows_results() {
+        using var h = new Harness();
+        h.Vm.Query = "local";
+        h.Advance(150);
+        await h.Complete(0, Unauthorized);
+        var afterUnauthorized = h.Vm.ListState;
+
+        h.Vm.Query = "locale";
+        h.Advance(150);
+        await h.Complete(1, Sessions("A"));
+
+        await Assert.That(afterUnauthorized).IsEqualTo(SearchListState.SignInRequired);
+        await Assert.That(h.Calls[1].Request.Query).IsEqualTo("locale");
+        await Assert.That(h.Vm.ListState).IsEqualTo(SearchListState.Results);
+        await Assert.That(h.Vm.Hits.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task After_a_401_a_new_identity_generation_asks_again() {
+        using var h = new Harness();
+        h.Vm.Query = "local";
+        h.Advance(150);
+        await h.Complete(0, Unauthorized);
+
+        h.Identity.OnNext(new SessionIdentity(1, 2, true));
+        var whileAsking = h.Vm.ListState;
+        await h.Complete(1, Sessions("A"));
+
+        await Assert.That(h.Calls.Count).IsEqualTo(2);
+        await Assert.That(whileAsking).IsEqualTo(SearchListState.Searching);
+        await Assert.That(h.Vm.ListState).IsEqualTo(SearchListState.Results);
+    }
+
+    [Test]
+    public async Task Retrying_sign_in_asks_again_only_from_the_sign_in_state() {
+        using var h = new Harness();
+        h.Vm.Query = "local";
+        h.Advance(150);
+        await h.Complete(0, Sessions("A"));
+
+        h.Vm.RetrySignIn();
+        var untouched = h.Calls.Count;
+        h.Vm.Query = "loca";
+        h.Advance(150);
+        await h.Complete(1, Unauthorized);
+        h.Vm.RetrySignIn();
+        await h.Complete(2, Sessions("B"));
+
+        await Assert.That(untouched).IsEqualTo(1);
+        await Assert.That(h.Calls[2].Request.Query).IsEqualTo("loca");
+        await Assert.That(h.Vm.ListState).IsEqualTo(SearchListState.Results);
+    }
 }
