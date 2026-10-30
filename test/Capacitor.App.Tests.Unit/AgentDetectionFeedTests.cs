@@ -1,4 +1,3 @@
-using System.Runtime.Versioning;
 using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.Cli.Core.Harness;
 
@@ -16,16 +15,13 @@ public class AgentDetectionFeedTests {
     [TempHome] public required TempHome Home { get; init; }
 
     [Test]
-    [UnsupportedOSPlatform("windows")]
     public async Task Uses_the_probed_terminal_PATH_not_the_process_PATH() {
         Skip.When(OperatingSystem.IsWindows(), "chmod-based executable probe is POSIX-only.");
 
         using var tmp = new TempDir();
         var emptyDir  = tmp.CreateDir("empty");
         var claudeDir = tmp.CreateDir("claude");
-        var claudeBin = claudeDir.PathTo("claude");
-        await File.WriteAllTextAsync(claudeBin, "#!/bin/sh\n");
-        File.SetUnixFileMode(claudeBin, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        tmp.CreateExecutable("claude/claude", "#!/bin/sh\n");
 
         // Same probe, two different crafted PATHs: the outcome must track the probe, not
         // whatever the real process PATH happens to contain on this machine.
@@ -35,7 +31,9 @@ public class AgentDetectionFeedTests {
         probe.TerminalPathBehavior = _ => Task.FromResult<string?>(claudeDir);
         var withClaude = await HarnessesStepViewModel.BuildDetectionFeed(probe, Home)(CancellationToken.None);
 
-        await Assert.That(withoutClaude.ContainsKey(HarnessId.Claude)).IsFalse();
+        // Only the launch signal follows PATH: the desktop-app probe always searches /Applications,
+        // so a Mac with Claude.app still lists the row.
+        await Assert.That(withoutClaude.GetValueOrDefault(HarnessId.Claude)?.BinaryFound ?? false).IsFalse();
         await Assert.That(withClaude[HarnessId.Claude].BinaryFound).IsTrue();
     }
 
