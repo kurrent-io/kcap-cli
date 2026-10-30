@@ -23,13 +23,9 @@ partial class McpFlowsServer(
     public async Task<int> RunAsync(string? driverArg = null) {
         var baseUrl = profiles.Resolution.ServerUrl!;
 
-        // Requester context comes from the running harness rather than from the environment this
-        // process inherited — see HarnessRequesterContext for why an inherited KCAP_SESSION_ID /
-        // process cwd names the launching session instead of this driver. The directory is resolved
-        // once; the session on each call, because a hosted agent is bound to one only after this
-        // server has started.
-        var requester    = HarnessRequesterContext.Resolve();
-        var cwd          = requester.ProjectDir ?? workdir.Path;
+        // The directory is resolved once; the session on each call, because a hosted agent is bound to
+        // one only after this server has answered its handshake.
+        var cwd          = HarnessRequesterContext.ProjectDir() ?? workdir.Path;
         var repoRoot     = GitRepository.FindRoot(cwd);
         // Prefer the `--driver` stamp from this server's own registration (deterministic for the JSON
         // harnesses); fall back to env inference for Claude/Codex, whose registrations are unstamped.

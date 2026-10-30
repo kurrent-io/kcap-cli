@@ -18,6 +18,18 @@ public class SessionFactTextTests {
         await Assert.That(SessionFactText.Context(null)).IsEqualTo(SessionFactText.Unknown);
     }
 
+    [Test]
+    public async Task Tokens_sum_input_and_output_across_models_and_leave_out_the_cache() {
+        var stats = new SessionStatsDto {
+            TokenUsageByModel = [
+                new() { Model = "opus", InputTokens = 10_000, OutputTokens = 2_000, CacheReadTokens = 5_000_000, CacheWriteTokens = 300_000 },
+                new() { Model = "haiku", InputTokens = 2_340, OutputTokens = 500, CacheReadTokens = 90_000 },
+            ],
+        };
+
+        await Assert.That(SessionFactText.Tokens(stats)).IsEqualTo("12.3k in · 2.5k out");
+    }
+
     /// An older server sends no resolved window; a reported one still makes the fraction.
     [Test]
     public async Task Context_falls_back_to_the_reported_window() {
