@@ -599,12 +599,14 @@ public class PullRequestPresentationTests {
     [Test]
     [Arguments("exact", "Checks pending · 9/12")]
     [Arguments("lower_bound", "Checks pending")]
-    public Task A_pending_summary_shows_completed_over_total_only_when_every_count_is_exact(string kind, string expected) => RunOnUiAsync(async () => {
+    [Arguments("unknown", "Checks pending")]
+    public Task A_pending_summary_shows_completed_over_total_only_when_every_count_is_exact_and_known(string kind, string expected) => RunOnUiAsync(async () => {
         await using var h = new PullRequestViewTestHost();
         h.Source.OverviewResponses.Enqueue((subject, _) => {
             var read = h.Source.Overview(subject);
             var counts = new Dictionary<string, PullRequestCountDto> {
-                ["success"] = new() { Kind = "exact", Value = 8 }, ["skipped"] = new() { Kind = "exact", Value = 1 }, ["pending"] = new() { Kind = kind, Value = 3 } };
+                ["success"] = new() { Kind = "exact", Value = 8 }, ["skipped"] = new() { Kind = "exact", Value = 1 }, ["pending"] = new() { Kind = kind == "lower_bound" ? kind : "exact", Value = 3 } };
+            if (kind == "unknown") counts["unknown"] = new() { Kind = "exact", Value = 1 };
             return Task.FromResult(read with { Data = read.Data! with { Checks = read.Data.Checks! with { Rollup = "pending", Counts = counts } } });
         });
         await h.ShowAsync();
