@@ -461,6 +461,31 @@ public class ServerSessionsServiceTests {
         await Assert.That(service.Ended.Count).IsEqualTo(20);
     }
 
+    /// The server announces an end only after its removal delay, while a live re-read already stops
+    /// listing the session: that read goes on to the ended prefix, so the session is never in
+    /// neither set.
+    [Test]
+    public async Task A_live_read_that_drops_an_unlisted_session_reads_the_ended_prefix_before_publishing() {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        var seen = new List<ServerSessionsSnapshot>();
+        Connect(lane);
+        await Eventually(() => service.Ended.Count == 20, "first page");
+        using var sub = service.Snapshots.Subscribe(s => { lock (seen) seen.Add(s); });
+
+        listing.Answer("active", "me", 0, 0);
+        listing.Answer("active", null, 0, 1, Row("live-other", "active", "other"));
+        listing.Answer("ended", "me", 0, 213, [Row("live-me"), .. Rows("s", 1, 19)]);
+        lane.SessionPushesSubject.OnNext(new SessionPush(SessionPushKind.ActiveChanged, "live-me"));
+
+        await Eventually(() => service.Ended.Lookup("live-me").HasValue, "the ended row");
+        await Assert.That(listing.Count("ended", "me", 0)).IsEqualTo(2);
+        List<ServerSessionsSnapshot> published;
+        lock (seen) published = [.. seen];
+        await Assert.That(published.All(s => s.Live.Concat(s.MineLive).Concat(s.Ended).Any(r => r.SessionId == "live-me"))).IsTrue();
+    }
+
     /// The directory recomputes on every publication, so one read is one publication of all three sets.
     [Test]
     public async Task A_read_publishes_live_mine_and_ended_in_one_snapshot() {

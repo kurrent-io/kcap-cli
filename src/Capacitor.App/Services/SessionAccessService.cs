@@ -64,7 +64,9 @@ public sealed class SessionAccessService : IDisposable {
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (!_entries.TryGetValue(sessionId, out entry!)) { entry = new Entry(sessionId); _entries[sessionId] = entry; fresh = true; }
             entry.Leases++;
-            if (fresh) Begin(entry);
+            // A refusal is not handed on: a workspace taking over a session another lease holds, such
+            // as the recorded session after its hosted agent stops, asks the server again.
+            if (fresh || entry.State.Value == SessionAccessState.Denied) Begin(entry);
         }
         return new SessionAccessLease(sessionId, entry.State, Release);
     }

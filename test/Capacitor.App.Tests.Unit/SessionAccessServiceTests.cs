@@ -43,6 +43,53 @@ public class SessionAccessServiceTests {
         await Assert.That(h.Lane.ChatSubscribes).DoesNotContain("s1");
     }
 
+    /// The recorded session's workspace is built while the hosted one still holds its lease, so it
+    /// joins that entry: a refusal the first lease got must be asked again, not handed on.
+    [Test]
+    public async Task A_lease_joining_a_denied_entry_asks_the_server_again() {
+        using var h = new Harness();
+        h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
+        h.Connect();
+        using var first = h.Service.Acquire("s1");
+        await WaitUntilAsync(async () => await Harness.Current(first) == SessionAccessState.Denied, "first denied");
+
+        h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Ok);
+        using var second = h.Service.Acquire("s1");
+
+        await WaitUntilAsync(async () => await Harness.Current(second) == SessionAccessState.Established, "second re-asked");
+        await Assert.That(h.Lane.AccessWatches.Count(s => s == "s1")).IsEqualTo(2);
+    }
+
+    /// Asking again is not a way past a real refusal: the joining lease reads the server's answer.
+    [Test]
+    public async Task A_lease_joining_a_denied_entry_stays_denied_when_the_server_still_refuses() {
+        using var h = new Harness();
+        h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
+        h.Connect();
+        using var first = h.Service.Acquire("s1");
+        await WaitUntilAsync(async () => await Harness.Current(first) == SessionAccessState.Denied, "first denied");
+
+        using var second = h.Service.Acquire("s1");
+
+        await WaitUntilAsync(() => h.Lane.AccessWatches.Count(s => s == "s1") == 2, what: "second asked");
+        await WaitUntilAsync(async () => await Harness.Current(second) == SessionAccessState.Denied, "still denied");
+        await Assert.That(h.Lane.ChatSubscribes).DoesNotContain("s1");
+    }
+
+    /// An established entry is shared as is: joining it costs no hub call.
+    [Test]
+    public async Task A_lease_joining_an_established_entry_does_not_ask_again() {
+        using var h = new Harness();
+        h.Connect();
+        using var first = h.Service.Acquire("s1");
+        await WaitUntilAsync(async () => await Harness.Current(first) == SessionAccessState.Established, "established");
+
+        using var second = h.Service.Acquire("s1");
+
+        await Assert.That(await Harness.Current(second)).IsEqualTo(SessionAccessState.Established);
+        await Assert.That(h.Lane.AccessWatches.Count(s => s == "s1")).IsEqualTo(1);
+    }
+
     [Test]
     public async Task Lane_down_is_unavailable_and_reconnect_re_establishes() {
         using var h = new Harness();

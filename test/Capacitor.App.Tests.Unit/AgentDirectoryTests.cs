@@ -569,6 +569,68 @@ public class AgentDirectoryTests {
         await Assert.That(dir.Rows.Lookup("server:S").Value.IsTerminalSession).IsTrue();
     }
 
+    /// Stop completes the local row before the listing stops calling the session active. Within the
+    /// grace the daemon's word stands, so the rail does not say Running beside a Done header; past
+    /// it the listing's answer is the one shown.
+    [Test]
+    public async Task A_local_row_that_completes_shows_its_session_ended_while_the_listing_catches_up() {
+        var (local, _, sessions, time, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        LocalConnected(local);
+        local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "S"));
+        MineLive(sessions, "S");
+
+        local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "S", status: "Completed"));
+
+        await Assert.That(dir.Rows.Lookup("local:a1").HasValue).IsFalse();
+        await Assert.That(dir.Rows.Lookup("server:S").Value.IsEndedSession).IsTrue();
+
+        // The daemon can drop the completed row before the listing catches up.
+        local.Agents.RemoveKey("a1");
+        await Assert.That(dir.Rows.Lookup("server:S").Value.IsEndedSession).IsTrue();
+
+        time.Advance(AgentDirectory.HandoverGrace + TimeSpan.FromSeconds(1));
+        await Assert.That(dir.Rows.Lookup("server:S").Value.IsEndedSession).IsFalse();
+    }
+
+    /// A row the daemon never saw live proves nothing about the session's end.
+    [Test]
+    public async Task A_completed_local_row_outside_the_grace_leaves_an_active_listing_alone() {
+        var (local, _, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        LocalConnected(local);
+        local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "S", status: "Completed"));
+        MineLive(sessions, "S");
+
+        await Assert.That(dir.Rows.Lookup("server:S").Value.IsEndedSession).IsFalse();
+    }
+
+    /// The listing names only a cwd, which for a worktree agent is the worktree; the row that
+    /// replaces the daemon's keeps the checkout the daemon reported, after the daemon forgets it too.
+    [Test]
+    public async Task The_server_row_that_replaces_a_daemon_row_keeps_its_checkout() {
+        var (local, _, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        LocalConnected(local);
+        local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "S") with { WorktreePath = "/r/.wt/a1", WorkLocation = "owned" });
+        sessions.LiveCache.AddOrUpdate(Listed("S", "active") with { Cwd = "/r/.wt/a1", Branch = "feature" });
+        sessions.MineLiveCache.AddOrUpdate(Listed("S", "active") with { Cwd = "/r/.wt/a1", Branch = "feature" });
+
+        local.Agents.RemoveKey("a1");
+        sessions.LiveCache.RemoveKey("S");
+        sessions.MineLiveCache.RemoveKey("S");
+        sessions.EndedCache.AddOrUpdate(Listed("S") with { Cwd = "/r/.wt/a1" });
+
+        var row = dir.Rows.Lookup("server:S").Value;
+        await Assert.That(row.RepoPath).IsEqualTo("/r");
+        await Assert.That(row.WorktreePath).IsEqualTo("/r/.wt/a1");
+        await Assert.That(row.WorkLocation).IsEqualTo("owned");
+        await Assert.That(row.Branch).IsEqualTo("feature");
+    }
+
     [Test]
     public async Task Mine_hides_a_teammates_hosted_row_and_keeps_unknown_local_rows() {
         var (local, remote, sessions, _, dir) = BuildWithSessions();

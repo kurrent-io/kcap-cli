@@ -501,7 +501,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         var sessionId = _workAccessDenied ? null : _row.SessionId;
         _presence.OnNext(new AgentStatusDto(_row.Id, _row.Kind, _row.Vendor, _row.RepoPath, _row.Status,
             null, null, null, _row.CreatedAt, _row.Model, _row.RequesterDisplay,
-            Title: _row.Title, SessionId: sessionId, Branch: _row.Branch));
+            Title: _row.Title, SessionId: sessionId, Branch: _row.Branch,
+            WorktreePath: _row.WorktreePath, WorkLocation: _row.WorkLocation, BorrowedFrom: _row.BorrowedFrom));
         if (string.IsNullOrEmpty(sessionId)) PullRequests?.ClearSession();
     }
 
