@@ -237,6 +237,9 @@ changes.
   Keep provider API keys                --use-provider-api-key  kept
   Daemon name                           --daemon-name           suggested
   Import past sessions                  --skip-import           yes
+  Name imported sessions with your      -                       no
+  coding agent (sends excerpts to its
+  model provider)
   * except to reuse an installation  ** see Local edition below
 
   Signing in: a machine credential (KCAP_CLIENT_ID and KCAP_CLIENT_SECRET, from
@@ -383,7 +386,9 @@ otherwise it's skipped with a one-line reason and the usual `kcap import` hint.
 If you answered the browser's Import screen, its newest sessions have already
 imported, the rest continue in a detached background import (logged under the
 config directory), and this step reports it instead of asking. Opt out with --skip-import, which
-does not cancel an import chosen in the browser.
+does not cancel an import chosen in the browser. Either way the import's
+summary counts the sessions left for the background import as queued, so its
+totals match the sessions it found.
 
 --no-prompt answers yes to this step too, so `kcap setup --no-prompt` uploads
 this machine's session history unless you add --skip-import.

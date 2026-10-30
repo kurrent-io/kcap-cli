@@ -1156,7 +1156,9 @@ sealed class SetupCommand(
             InstallGrokHooks:         GrokHooksInstaller.Install,
             // Muse's hooks and MCP servers share one JSON settings.json; an unparseable file is a failure, not a success.
             InstallMuseHooks:         p => InstallMuseHooks(p, home, muse, WriteLine),
-            RegisterMuseMcp:          () => MuseSettingsJson.RegisterKcapMcpServers(muse.SettingsJson, home));
+            RegisterMuseMcp:          () => MuseSettingsJson.RegisterKcapMcpServers(muse.SettingsJson, home),
+            ReadAgentSkillsConsumers:  dir => SharedSkillsConsumers.Read(dir, () => SharedSkillsConsumerProbe.Configured(harnesses, home)),
+            WriteAgentSkillsConsumers: (dir, consumers) => SharedSkillsConsumers.Write(dir, consumers));
 
         void WriteLine(string line) => AnsiConsole.MarkupLine(line);
 
@@ -1379,6 +1381,7 @@ sealed class SetupCommand(
             SkipImport:          skipImport,
             NoPrompt:            noPrompt,
             PromptYesNo:         () => AnsiConsole.Prompt(new ConfirmationPrompt(ImportPrompt) { DefaultValue = true }),
+            PromptNameSessions:  () => AnsiConsole.Prompt(new ConfirmationPrompt(NameSessionsPrompt) { DefaultValue = false }),
             Profiles:            saved,
             ProfileName:         activeName,
             ServerUrl:           serverUrl,
@@ -1580,6 +1583,15 @@ sealed class SetupCommand(
     /// <summary>Verbatim, pinned by <c>SetupCommandTests</c>.</summary>
     internal const string ImportPrompt = "Import past sessions from this machine?";
 
+    /// <summary>Said before <see cref="NameSessionsPrompt"/>, so consent to naming is given knowing where
+    /// the excerpts go. Verbatim, pinned by <c>SetupCommandTests</c>.</summary>
+    internal const string NameSessionsDisclosure =
+        "Naming runs your own claude or codex on each imported Claude Code or Codex session's first message "
+      + "and reply, so those excerpts go to the model provider that agent uses, on your quota. "
+      + "Unnamed sessions are just as searchable.";
+
+    internal const string NameSessionsPrompt = "Name imported sessions with your coding agent?";
+
     internal const string EvalWatchQuestion = "Want to watch your import and its evals from your agent?";
 
     /// <summary>The one place this skill's name is spelled — <see cref="HandoffVendorEligibility.SkillName"/>
@@ -1652,7 +1664,8 @@ sealed class SetupCommand(
         bool                          BrowserImportFailed,
         bool                          BrowserFinished = false,
         string?                       BrowserHandoffPrompt = null,
-        BackgroundImportLaunch?       BrowserBackground = null);
+        BackgroundImportLaunch?       BrowserBackground = null,
+        Func<bool>?                   PromptNameSessions = null);
 
     /// <summary><see cref="RunId"/> and <see cref="Handoff"/> are null whenever the foreground pass
     /// never ran (browser-answered, skipped, declined or <c>--no-prompt</c>). <see cref="PasteBlock"/>
@@ -1739,6 +1752,8 @@ sealed class SetupCommand(
             return new ImportStepResult(false, null, null, null);
         }
 
+        // Naming sends excerpts to a model provider, so it runs only on a yes given after the disclosure:
+        // an unattended run, or a run that cannot ask, imports without it.
         if (inputs.NoPrompt) {
             var run = await imports.RunAsync(new ImportInvocation(
                 Scope:              new ImportScope.All(),
@@ -1747,7 +1762,7 @@ sealed class SetupCommand(
                 DefaultVisibility:  inputs.DefaultVisibility,
                 AutoSkipExclusions: true,
                 ForcePrivate:       false,
-                SkipTitle:          false,
+                SkipTitle:          true,
                 Profiles:           inputs.Profiles));
 
             if (run.Fault is { } ex) {
@@ -1761,6 +1776,13 @@ sealed class SetupCommand(
             return new ImportStepResult(true, null, null, null);
         }
 
+        var nameSessions = false;
+
+        if (inputs.PromptNameSessions is { } promptNameSessions) {
+            AnsiConsole.MarkupLine($"  [dim]{Markup.Escape(NameSessionsDisclosure)}[/]");
+            nameSessions = promptNameSessions();
+        }
+
         var runId = Guid.NewGuid().ToString("N");
 
         var foreground = await imports.RunAsync(new ImportInvocation(
@@ -1770,7 +1792,7 @@ sealed class SetupCommand(
             DefaultVisibility:  inputs.DefaultVisibility,
             AutoSkipExclusions: true,
             ForcePrivate:       false,
-            SkipTitle:          false,
+            SkipTitle:          !nameSessions,
             Profiles:           inputs.Profiles));
 
         var outcome = ForegroundImportOutcome.From(foreground);
@@ -1781,7 +1803,9 @@ sealed class SetupCommand(
         }
 
         var launch = outcome.RemainderExists || outcome.Failed > 0 || outcome.Certainty == ForegroundCertainty.Incomplete
-            ? spawner.Spawn(new BackgroundImportRequest(runId, inputs.ProfileName, inputs.DefaultVisibility, inputs.WorkingDirectory))
+            ? spawner.Spawn(new BackgroundImportRequest(runId, inputs.ProfileName, inputs.DefaultVisibility, inputs.WorkingDirectory) {
+                NameSessions = nameSessions
+            })
             : BackgroundImportLaunch.NotNeeded;
 
         PrintBackground(launch);

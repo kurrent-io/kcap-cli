@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Capacitor.Cli.Core.Harness;
 
 namespace Capacitor.Cli.Commands;
 
@@ -17,8 +18,10 @@ public sealed record ImportDiscoveryJson(
 
 /// <param name="Windows">This repository's sessions in each window, in the order of the report's own
 /// <see cref="ImportDiscoveryJson.Windows"/>.</param>
+/// <param name="Vendors">The same figures for each harness that wrote sessions here.</param>
 public sealed record ImportDiscoveryRepoJson(
-    string Owner, string Name, int Sessions, string? LastSessionAt, IReadOnlyList<ImportDiscoveryWindowJson> Windows);
+    string Owner, string Name, int Sessions, string? LastSessionAt, IReadOnlyList<ImportDiscoveryWindowJson> Windows,
+    IReadOnlyList<ImportDiscoveryVendorJson> Vendors);
 
 /// <param name="Since">ISO date, or null for "everything".</param>
 public sealed record ImportDiscoveryWindowJson(string? Since, int Sessions);
@@ -34,12 +37,19 @@ public static class ImportDiscoveryRender {
             new ImportDiscoveryJson(
                 [.. summary.Repos.Select(r => new ImportDiscoveryRepoJson(
                     r.Owner, r.Name, r.SessionCount, r.LastSessionAt?.UtcDateTime.ToString("O"),
-                    [.. summary.ByWindow.Select(w => new ImportDiscoveryWindowJson(
-                        w.Since?.ToString("yyyy-MM-dd"), r.SessionsByWindow.GetValueOrDefault(w.Key)))]))],
+                    WindowsOf(summary, r.SessionsByWindow),
+                    [.. (r.ByVendor ?? []).Select(v => new ImportDiscoveryVendorJson(
+                        v.Vendor.VendorId, v.SessionCount, v.LastSessionAt?.UtcDateTime.ToString("O"),
+                        WindowsOf(summary, v.SessionsByWindow)))]))],
                 summary.UnmatchedCount,
                 [.. summary.ByWindow.Select(w => new ImportDiscoveryWindowJson(
                     w.Since?.ToString("yyyy-MM-dd"), w.SessionCount))]),
             ImportDiscoveryJsonContext.Default.ImportDiscoveryJson);
+
+    static IReadOnlyList<ImportDiscoveryWindowJson> WindowsOf(
+            ImportDiscoverySummary summary, IReadOnlyDictionary<string, int> sessionsByWindow) =>
+        [.. summary.ByWindow.Select(w => new ImportDiscoveryWindowJson(
+            w.Since?.ToString("yyyy-MM-dd"), sessionsByWindow.GetValueOrDefault(w.Key)))];
 
     public static string ToText(ImportDiscoverySummary summary) {
         var lines = new List<string> { "Discovered sessions:" };

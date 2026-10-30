@@ -829,7 +829,9 @@ switch (command) {
         // The detached import already opened its log, redirected output and detached at startup
         // (before this potentially slow resolution) so a parent exit can't truncate it.
         try {
-            return await Run<ImportCommand>().HandleImport(
+            ImportCommand.ImportRunOutcome? importOutcome = null;
+
+            var handled = await Run<ImportCommand>().HandleImport(
                 filterCwd,
                 filterSession,
                 minLines,
@@ -847,7 +849,10 @@ switch (command) {
                 reimport:                reimport,
                 skipTitle:               skipTitle,
                 discoverOnly:            discoverOnly,
-                discoverJson:            discoverJson);
+                discoverJson:            discoverJson,
+                onFinished:              o => importOutcome = o);
+
+            return ImportExitCode.For(handled, importOutcome);
         } finally {
             detachedImportLog?.Dispose();
         }

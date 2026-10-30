@@ -62,7 +62,8 @@ Options:
                           window. Needs no scope flag — it is what you run to
                           decide which one to use
   --json                  With --discover: emit the report as JSON
-  --yes, -y               Skip the confirmation prompt
+  --yes, -y               Skip the confirmation prompt. Never includes an
+                          excluded session (see Exclusions below)
   --private               Mark every imported session as Only Visible to You
   --since YYYY-MM-DD      Only import sessions started on or after this date
   --cwd <path>            Filter by working directory (composes with scope)
@@ -70,10 +71,13 @@ Options:
   --min-lines <n>         Skip sessions shorter than n lines (default: 15)
   --skip-title            Don't generate titles for imported Claude and Codex
                           sessions. Titling shells out to your own `claude` /
-                          `codex`, once per session, on your subscription — the
-                          same opt-out `kcap watch` takes. Sessions are searchable
-                          without a title, and the other eight agents never title
-                          locally, so this changes nothing for them.
+                          `codex`, once per session, on your subscription, and
+                          sends the session's first message and the start of its
+                          reply to the model provider that agent uses, even with
+                          a local server — the same opt-out `kcap watch` takes.
+                          Sessions are searchable without a title, and the other
+                          agents never title locally, so this changes nothing
+                          for them.
   --generate-summaries    Also generate per-session what's-done summaries
   --repair-capture        Recover omitted file-tool records for one ended session
                           you own. Requires --session; Claude and Codex only.
@@ -86,7 +90,24 @@ Options:
                           --cwd/--session filters. No effect on other vendors.
 
 Re-running the same command is idempotent — a server-side watermark dedupes
-already-imported lines so nothing is double-loaded.
+already-imported lines so nothing is double-loaded. A session whose only lines
+past that watermark are records the server stores nothing for counts as already
+loaded and is not re-sent. A session you deleted on the server is counted as
+Deleted, never sent again, and is not a failure.
+
+Claude and Codex sessions carry the git branch their transcript recorded, not
+the one checked out at import time; with none recorded the branch stays empty.
+
+Exclusions: sessions under a path or repo you excluded (kcap ignore,
+excluded_repos, or outside an allow list) stay out. At a terminal without --yes,
+import asks before including each excluded path or repo (default no); that answer
+is the only way to include one. With --yes, or without a terminal, every
+exclusion is kept and the skipped sessions are counted as Excluded.
+
+Exit codes: 0 = nothing failed (sessions already loaded, too short or excluded
+are not failures); 2 = some sessions landed and others failed; 1 = none landed,
+or the command was refused. When the server answered for no session at all, the
+run also says it looks unavailable. Re-running retries only what failed.
 
 Transcript records are secret-redacted before upload, with a 4 MiB UTF-8 limit
 per record and batch. Records that cannot be safely processed produce a warning

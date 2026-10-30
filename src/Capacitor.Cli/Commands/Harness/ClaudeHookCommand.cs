@@ -257,6 +257,10 @@ public sealed class ClaudeHookCommand(
             toolName       = node?["tool_name"]?.GetValue<string>();
             toolInput      = node?["tool_input"]?.DeepClone();
 
+            // KCAP_SKIP normally stops kcap's own headless runs before this; the marks hold where the
+            // variable does not reach the hook. Ahead of the stamp, which claims the session.
+            if (ClaudeHelperRun.IsHelperRun(sessionId, cwd)) return 0;
+
             // Ahead of both arms below, since each claims the new session before it posts.
             if (node is JsonObject hook && PreviousSession.Stamp(hook, config, () => ProcessHelpers.GetCodingAgentPid("claude", allowFallback: false)))
                 body = hook.ToJsonString();
@@ -488,6 +492,8 @@ public sealed class ClaudeHookCommand(
 
     internal async Task<bool> ShouldSuppressCaptureAsync(
             string? canonicalSessionId, string body, string? command, Profile? activeProfile, HookBudget budget) {
+        if (ClaudeHelperRun.IsHelperSessionId(canonicalSessionId)) return true;
+
         if (canonicalSessionId is not null && DisabledSessions.IsDisabled(canonicalSessionId, config)) {
             if (command == "session-end") DisabledSessions.RemoveMarker(canonicalSessionId, config);
             return true;
@@ -531,8 +537,16 @@ public sealed class ClaudeHookCommand(
         var body = await stdin.ReadToEndAsync();
 
         var eventName = ExtractEventName(body);
-        string? nativeSessionId = null;
-        try { nativeSessionId = JsonNode.Parse(body)?["session_id"]?.GetValue<string>(); } catch { }
+        string? nativeSessionId = null, payloadCwd = null;
+        try {
+            var parsed = JsonNode.Parse(body);
+            nativeSessionId = parsed?["session_id"]?.GetValue<string>();
+            payloadCwd      = parsed?["cwd"]?.GetValue<string>();
+        } catch { }
+
+        // An entry point of its own, so it holds the same line HandleWithDeps does: kcap's own
+        // headless runs are never captured.
+        if (ClaudeHelperRun.IsHelperRun(nativeSessionId, payloadCwd)) return 0;
 
         if (eventName is null) {
             Console.Error.WriteLine("kcap hook --claude: missing hook_event_name in payload");

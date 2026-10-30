@@ -1190,12 +1190,12 @@ public class SetupCommandTests {
     SetupCommand.ImportStepInputs Inputs(
             bool noPrompt = false, Func<bool>? prompt = null, FirstRunImportAnswer? browser = null,
             bool auth = true, bool skip = false, string visibility = "org_public",
-            CodingAgentsStep.Paths? paths = null, bool browserFinished = false) => new(
+            CodingAgentsStep.Paths? paths = null, bool browserFinished = false, Func<bool>? nameSessions = null) => new(
         AuthSatisfied: auth, SkipImport: skip, NoPrompt: noPrompt, PromptYesNo: prompt ?? (() => true),
         Profiles: Resolutions.At("https://example.test", Config.Root), ProfileName: "work", ServerUrl: "https://example.test",
         DefaultVisibility: visibility, CurrentRepo: null, WorkingDirectory: Config.Directory,
         Paths: paths ?? PathsWithEvalWatchFor(HarnessId.Codex), BrowserImport: browser, BrowserImportFailed: false,
-        BrowserFinished: browserFinished);
+        BrowserFinished: browserFinished, PromptNameSessions: nameSessions);
 
     /// <summary>Synthetic discovery figures: <paramref name="attributed"/> sessions spread round-robin
     /// over <paramref name="repos"/> repositories, plus <paramref name="unmatched"/> sessions with no
@@ -1244,7 +1244,7 @@ public class SetupCommandTests {
         var inv = runner.Captured!;
         await Assert.That(inv.Scope).IsEqualTo(new ImportScope.All());
         await Assert.That(inv.MaxSessions).IsEqualTo(5);
-        await Assert.That(inv.SkipTitle).IsFalse();
+        await Assert.That(inv.SkipTitle).IsTrue();
         await Assert.That(inv.DefaultVisibility).IsEqualTo("org_public");
         await Assert.That(spawner.Spawns).IsEqualTo(1);
         await Assert.That(spawner.Seen!.ProfileName).IsEqualTo("work");
@@ -1274,6 +1274,47 @@ public class SetupCommandTests {
         await Assert.That(capture.Text).Contains("Could not write the import handoff file");
         await Assert.That(result.Handoff!.Offered).IsTrue();
         await Assert.That(Directory.GetFiles(Config.Directory, "import-handoff-*.json")).IsEmpty();
+    }
+
+    /// <summary>Naming sends excerpts to the agent's model provider, so it is asked after the import is
+    /// accepted, said before it is asked, and only a yes turns it on — for the foreground pass and the
+    /// background remainder alike.</summary>
+    [Test, NotInParallel]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task Naming_runs_only_on_a_yes_given_after_the_disclosure(bool answer) {
+        var runner  = FakeImportRunner.Succeeding().Discovering(Discovered(3, 20, 5));
+        var spawner = FakeBackgroundImportSpawner.Running();
+        using var console = new SpectreCapture();
+        string? saidBeforeAsking = null;
+
+        await Command(runner, spawner, FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs(nameSessions: () => {
+                saidBeforeAsking = console.Flat;
+                return answer;
+            }));
+
+        await Assert.That(saidBeforeAsking).Contains("go to the model provider that agent uses");
+        await Assert.That(runner.Captured!.SkipTitle).IsEqualTo(!answer);
+        await Assert.That(spawner.Seen!.NameSessions).IsEqualTo(answer);
+    }
+
+    /// <summary>Declining the import is not a question about naming, and an unattended run cannot consent:
+    /// neither asks, and the unattended import runs unnamed.</summary>
+    [Test]
+    public async Task Naming_is_never_asked_without_an_accepted_interactive_import() {
+        var runner = FakeImportRunner.Succeeding().Discovering(Discovered(1, 2, 0));
+        Func<bool> mustNotAsk = () => throw new InvalidOperationException("must not ask about naming");
+
+        await Command(runner, FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs(prompt: () => false, nameSessions: mustNotAsk));
+        var declined = runner.Captured;
+
+        await Command(runner, FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs(noPrompt: true, nameSessions: mustNotAsk));
+
+        await Assert.That(declined).IsNull();
+        await Assert.That(runner.Captured!.SkipTitle).IsTrue();
     }
 
     [Test]

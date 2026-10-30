@@ -13,11 +13,14 @@ public sealed record ImportDiscoveryReport(
             if (report?.Repos is null || report.UnmatchedSessions < 0 ||
                 report.Repos.Any(r => r is null || string.IsNullOrWhiteSpace(r.Owner) ||
                     string.IsNullOrWhiteSpace(r.Name) || r.Sessions < 0 ||
-                    r.Windows?.Any(w => w is null || w.Sessions < 0) == true) ||
-                report.Windows?.Any(w => w is null || w.Sessions < 0) == true) return null;
+                    Invalid(r.Windows) ||
+                    r.Vendors?.Any(v => v is null || string.IsNullOrWhiteSpace(v.Vendor) || v.Sessions < 0 || Invalid(v.Windows)) == true) ||
+                Invalid(report.Windows)) return null;
             return report with { Windows = report.Windows ?? [] };
         } catch (JsonException) {
             return null;
         }
     }
+
+    static bool Invalid(IReadOnlyList<ImportDiscoveryWindow>? windows) => windows?.Any(w => w is null || w.Sessions < 0) == true;
 }

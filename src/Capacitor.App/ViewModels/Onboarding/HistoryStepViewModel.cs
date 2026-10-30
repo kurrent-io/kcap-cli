@@ -8,37 +8,36 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels.Onboarding;
 
-public enum HistoryState { Looking, NoHarness, NoHistory, OnlyUnmatched, Unreadable, Repos }
+public enum HistoryState { Looking, NoHistory, OnlyUnmatched, Unreadable, Repos }
 
 /// <summary>
-/// Which repositories' past sessions to upload, how far each goes, and how far back. Discovery
-/// runs on entry for the harnesses the Harnesses page turned recording on for; Next starts the
-/// import and moves on at once, because the import outlives the page. The page leads with what
-/// it found and what it will import, and keeps the per-repository choices behind Customize.
+/// Which harnesses' and repositories' past sessions to upload, and how far back. Discovery runs on
+/// entry over every harness on this machine, whichever of them the Harnesses page turned recording on
+/// for: importing history and recording from now on are separate choices. Next starts the import and
+/// moves on at once, because the import outlives the page. The page leads with what it found and what
+/// it will import, and keeps the per-repository choices behind Customize.
 /// </summary>
 public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     internal const string DocsUrl = "https://github.com/kurrent-io/kcap-cli#configuration";
 
-    readonly IKcapCli                          _cli;
-    readonly Func<IReadOnlyList<HarnessId>>    _inScope;
-    readonly Action<Action>                    _post;
-    readonly TimeProvider                      _time;
-    readonly Func<bool>                        _onLocalPath;
+    readonly IKcapCli       _cli;
+    readonly Action<Action> _post;
+    readonly TimeProvider   _time;
+    readonly Func<bool>     _onLocalPath;
 
-    IReadOnlyList<HarnessId>? _discoveredFor;
-    bool                      _discoveredLocal;
-    HistoryState              _state = HistoryState.Looking;
-    bool                      _titleLocally = true;
-    bool                      _customizing;
-    int                       _unmatched;
-    HistoryImportRun?         _run;
-    CancellationTokenSource?  _discovery;
+    bool                     _discovered;
+    bool                     _discoveredLocal;
+    HistoryState             _state = HistoryState.Looking;
+    bool                     _titleLocally;
+    bool                     _customizing;
+    int                      _unmatched;
+    ImportDiscoveryReport?   _report;
+    HistoryImportRun?        _run;
+    CancellationTokenSource? _discovery;
 
     public HistoryStepViewModel(
-            IKcapCli cli, Func<IReadOnlyList<HarnessId>> inScope, Action<Action> post, string machineName, TimeProvider time,
-            Func<bool>? onLocalPath = null) {
+            IKcapCli cli, Action<Action> post, string machineName, TimeProvider time, Func<bool>? onLocalPath = null) {
         _cli         = cli;
-        _inScope     = inScope;
         _post        = post;
         _time        = time;
         _onLocalPath = onLocalPath ?? (() => false);
@@ -53,9 +52,12 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     public bool         Applicable => true;
     public string       SkipLabel  => "Not now";
 
+    /// The local promise holds only while naming is off: a named import sends excerpts to a model provider.
     public string Lede => _onLocalPath()
         ? "kcap imports the transcripts your harnesses have already written, so your past work is searchable " +
-          "from day one. Everything stays on this machine."
+          (Naming
+              ? "from day one. Naming sends excerpts to your agent's model provider; everything else stays on this machine."
+              : "from day one. Everything stays on this machine.")
         : "kcap uploads the transcripts your harnesses have already written, so your past work is searchable " +
           "from day one. Nothing leaves this machine until you choose.";
 
@@ -78,6 +80,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
             this.RaisePropertyChanged(nameof(CloudDeclineVisible));
             this.RaisePropertyChanged(nameof(LocalDeclineVisible));
             this.RaisePropertyChanged(nameof(DetailsVisible));
+            this.RaisePropertyChanged(nameof(SourcesVisible));
             Restate();
         }
     }
@@ -87,8 +90,6 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
 
     /// The one line an empty arm says instead of a list.
     public string? EmptyMessage => _onLocalPath() ? LocalEmptyMessage : State switch {
-        HistoryState.NoHarness =>
-            "No harnesses were connected in this setup. Go back to connect one, or run kcap import later.",
         HistoryState.NoHistory =>
             $"No history on {MachineName} to import. New sessions will record as they happen.",
         HistoryState.OnlyUnmatched =>
@@ -99,8 +100,6 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     };
 
     string? LocalEmptyMessage => State switch {
-        HistoryState.NoHarness =>
-            $"No harnesses were connected in this setup. Go back to connect one, or import later from {SetupLocation.Path}.",
         HistoryState.NoHistory =>
             $"No history on {MachineName} to import. New sessions will record as they happen.",
         HistoryState.OnlyUnmatched =>
@@ -118,8 +117,11 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         ? "Checked repositories import into kcap on this Mac"
         : "Checked repositories import with your recording privacy setting. Only me keeps a repository's history private";
 
-    /// "from ✓ Claude Code ✓ Codex": the harnesses this page reads from.
-    public IReadOnlyList<string> FromLabels { get; private set; } = [];
+    /// The harnesses discovery found history from, each one its own choice. Empty when the CLI's report
+    /// does not split repositories by harness; the import then reads every harness it counted.
+    public IReadOnlyList<HistorySourceOption> Sources { get; private set; } = [];
+
+    public bool SourcesVisible => HasRepos && Sources.Count > 0;
 
     public IReadOnlyList<HistoryOwnerGroup> Groups { get; private set; } = [];
 
@@ -151,18 +153,18 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     /// What discovery found, before any choice narrows it.
     public string? FoundLine {
         get {
-            var repos = Groups.SelectMany(g => g.Repos).ToList();
+            var repos = _report?.Repos.Select(r => Project(r, _ => true)).OfType<ImportDiscoveryRepo>().ToList() ?? [];
             if (repos.Count == 0) return null;
 
             return $"Found {SessionCount(repos.Sum(r => r.Sessions))} in {RepositoryCount(repos.Count)} on {MachineName}";
         }
     }
 
-    /// What Next will import, following the repositories and window chosen under Customize.
+    /// What Next will import, following the harnesses, repositories and window chosen.
     public string? ImportLine {
         get {
             var total = Groups.Sum(g => g.Repos.Count);
-            if (total == 0 || _windows.Count == 0) return null;
+            if (!HasRepos || _windows.Count == 0) return null;
             if (SelectedCount == 0) return "Nothing is selected to import";
 
             var from = total == 1         ? "the one repository"
@@ -184,13 +186,25 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         : ImportStarted ? "Shared imports follow your recording privacy setting"
         :                 "Shared imports follow your recording privacy setting. Use Customize to keep a repository to Only me";
 
-    /// Titling runs your own agent, so it is a choice only where a harness that titles is in scope.
-    public bool TitlingOffered => HasRepos && FromHarnesses.Any(h => h is HarnessId.Claude or HarnessId.Codex);
+    /// Titling runs your own agent, so it is a choice only where a harness that titles is imported from.
+    public bool TitlingOffered => HasRepos
+        && (Sources.Count == 0 || Sources.Any(s => s is { IsSelected: true, Id: HarnessId.Claude or HarnessId.Codex }));
 
+    /// Off until the user turns it on: naming sends each session's opening excerpts to whichever model
+    /// provider their claude or codex uses, which nothing else on this page does.
     public bool TitleLocally {
         get => _titleLocally;
-        set => this.RaiseAndSetIfChanged(ref _titleLocally, value);
+        set {
+            this.RaiseAndSetIfChanged(ref _titleLocally, value);
+            this.RaisePropertyChanged(nameof(Lede));
+        }
     }
+
+    public const string TitlingDisclosure =
+        "Your own claude or codex writes each title from the session's first message and reply, so those " +
+        "excerpts go to the model provider it uses, on your quota. Unnamed sessions are just as searchable.";
+
+    bool Naming => TitlingOffered && TitleLocally;
 
     public int SelectedCount => Groups.SelectMany(g => g.Repos).Count(r => r.Level != ImportLevel.Skip);
 
@@ -239,56 +253,47 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         this.RaisePropertyChanged(nameof(Satisfied));
     }
 
-    IReadOnlyList<HarnessId> FromHarnesses { get; set; } = [];
-
     HistoryWindowOption SelectedWindow => _windows.FirstOrDefault(w => w.IsSelected) ?? _windows[1];
 
     public Task OnEnterAsync(CancellationToken ct) {
-        var scope = _inScope();
-        // The same harnesses as last time: the list the user may already have adjusted stands. A
-        // discovery that could not read the disk is asked again.
-        if (_discoveredFor is not null && _discoveredFor.SequenceEqual(scope) && _discoveredLocal == _onLocalPath()
-            && State != HistoryState.Unreadable)
+        // The list the user may already have adjusted stands. A discovery that could not read the disk
+        // is asked again.
+        if (_discovered && _discoveredLocal == _onLocalPath() && State != HistoryState.Unreadable)
             return Task.CompletedTask;
 
         _discovery?.Cancel();
         _discovery?.Dispose();
         _discovery = null;
-        Groups = [];
+        _report    = null;
+        Groups     = [];
+        Sources    = [];
         _windows.Clear();
         _unmatched = 0;
         this.RaisePropertyChanged(nameof(Groups));
+        this.RaisePropertyChanged(nameof(Sources));
         this.RaisePropertyChanged(nameof(Windows));
         this.RaisePropertyChanged(nameof(UnmatchedNote));
-        _discoveredFor   = scope;
+        _discovered      = true;
         _discoveredLocal = _onLocalPath();
         this.RaisePropertyChanged(nameof(LocalLevels));
         this.RaisePropertyChanged(nameof(CloudLevels));
         this.RaisePropertyChanged(nameof(LevelsNote));
-        FromHarnesses    = scope;
-        FromLabels     = [.. scope.Select(HarnessRegistry.LabelOf)];
-        this.RaisePropertyChanged(nameof(FromLabels));
-        this.RaisePropertyChanged(nameof(TitlingOffered));
-
-        if (scope.Count == 0) {
-            State = HistoryState.NoHarness;
-            return Task.CompletedTask;
-        }
 
         State = HistoryState.Looking;
         var cts = _discovery = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
-        Discovery = DiscoverAsync(scope, cts.Token);
+        Discovery = DiscoverAsync(cts.Token);
 
         return Task.CompletedTask;
     }
 
     internal Task Discovery { get; private set; } = Task.CompletedTask;
 
-    async Task DiscoverAsync(IReadOnlyList<HarnessId> scope, CancellationToken ct) {
+    async Task DiscoverAsync(CancellationToken ct) {
         ImportDiscoveryReport? report;
         try {
-            report = await _cli.ImportDiscoverAsync([.. scope.Select(h => h.Flag)], ct).ConfigureAwait(false);
+            // No vendor flag: every harness with history, not only the ones recording from now on.
+            report = await _cli.ImportDiscoverAsync([], ct).ConfigureAwait(false);
         } catch (OperationCanceledException) {
             return;
         } catch (Exception ex) {
@@ -308,28 +313,80 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
             return;
         }
 
+        _report    = report;
         _unmatched = report.UnmatchedSessions;
 
-        // Owners by their most recent repository, repositories in the report's own order.
-        Groups = [.. report.Repos
-            .Select(r => new HistoryRepoRow(r, _discoveredLocal))
-            .GroupBy(r => r.Owner, StringComparer.OrdinalIgnoreCase)
-            .OrderByDescending(g => g.Max(r => r.LastSessionAt ?? DateTimeOffset.MinValue))
-            .ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
-            .Select(g => new HistoryOwnerGroup(g.Key, [.. g]))];
-
-        foreach (var repo in Groups.SelectMany(g => g.Repos)) {
-            repo.PropertyChanged += (_, e) => {
-                if (e.PropertyName == nameof(HistoryRepoRow.Level)) Restate();
+        // Registry order. A vendor id this build does not know has no flag to import it with.
+        Sources = [.. report.Repos
+            .SelectMany(r => r.Vendors ?? [])
+            .Select(v => (Id: HarnessId.From(v.Vendor), v.Sessions))
+            .Where(v => v is { Id: not null, Sessions: > 0 })
+            .GroupBy(v => v.Id!.Value)
+            .OrderBy(g => g.Key)
+            .Select(g => new HistorySourceOption(g.Key, g.Sum(v => v.Sessions)))];
+        foreach (var source in Sources) {
+            source.PropertyChanged += (_, e) => {
+                if (e.PropertyName == nameof(HistorySourceOption.IsSelected)) Regroup();
             };
         }
+        this.RaisePropertyChanged(nameof(Sources));
 
+        Regroup();
         BuildWindows(report);
-        this.RaisePropertyChanged(nameof(Groups));
         State = Groups.Count > 0 ? HistoryState.Repos
             : _unmatched > 0     ? HistoryState.OnlyUnmatched
             :                      HistoryState.NoHistory;
         this.RaisePropertyChanged(nameof(UnmatchedNote));
+    }
+
+    /// The repositories the selected harnesses wrote to. A repository that stays keeps the choices
+    /// already made on it.
+    void Regroup() {
+        if (_report is not { } report) return;
+
+        var before = Groups.SelectMany(g => g.Repos).ToDictionary(r => r.Slug, StringComparer.OrdinalIgnoreCase);
+        var rows   = new List<HistoryRepoRow>();
+        foreach (var repo in report.Repos) {
+            if (Project(repo, id => Sources.Any(s => s.Id == id && s.IsSelected)) is not { } projected) continue;
+
+            var row = new HistoryRepoRow(projected, _discoveredLocal);
+            if (before.TryGetValue(row.Slug, out var previous)) row.Adopt(previous);
+            row.PropertyChanged += (_, e) => {
+                if (e.PropertyName == nameof(HistoryRepoRow.Level)) Restate();
+            };
+            rows.Add(row);
+        }
+
+        // Owners by their most recent repository, repositories in the report's own order.
+        Groups = [.. rows
+            .GroupBy(r => r.Owner, StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(g => g.Max(r => r.LastSessionAt ?? DateTimeOffset.MinValue))
+            .ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(g => new HistoryOwnerGroup(g.Key, [.. g]))];
+        this.RaisePropertyChanged(nameof(Groups));
+        Restate();
+    }
+
+    /// A repository as the included harnesses see it, or null when none of them has a session there.
+    /// A repository the report does not split by harness counts every harness.
+    static ImportDiscoveryRepo? Project(ImportDiscoveryRepo repo, Func<HarnessId, bool> included) {
+        if (repo.Vendors is null or { Count: 0 }) return repo;
+
+        var cells    = repo.Vendors.Where(v => HarnessId.From(v.Vendor) is { } id && included(id)).ToList();
+        var sessions = cells.Sum(v => v.Sessions);
+        if (sessions == 0) return null;
+
+        // A window one harness did not report leaves the sum unknown rather than short.
+        var first   = cells[0].Windows ?? [];
+        var windows = cells.All(c => c.Windows is { } own && own.Select(w => w.Since).SequenceEqual(first.Select(w => w.Since)))
+            ? first.Select((w, i) => new ImportDiscoveryWindow(w.Since, cells.Sum(c => c.Windows![i].Sessions))).ToList()
+            : null;
+
+        return repo with {
+            Sessions      = sessions,
+            LastSessionAt = cells.Max(c => c.LastSessionAt),
+            Windows       = windows,
+        };
     }
 
     void BuildWindows(ImportDiscoveryReport report) {
@@ -369,8 +426,9 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     void StartImport() {
         var selected = Groups.SelectMany(g => g.Repos).Where(r => r.Level != ImportLevel.Skip).ToList();
         var window   = SelectedWindow;
-        var vendors  = FromHarnesses.Select(h => h.Flag).ToList();
-        var skip     = !(TitlingOffered && TitleLocally);
+        // Only the harnesses left checked, or no flag at all when the report did not name them.
+        var vendors  = Sources.Where(s => s.IsSelected).Select(s => s.Id.Flag).ToList();
+        var skip     = !Naming;
 
         List<ImportRequest> passes = [];
         foreach (var level in new[] { ImportLevel.OnlyMe, ImportLevel.Shared }) {
@@ -402,6 +460,8 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         this.RaisePropertyChanged(nameof(FoundLine));
         this.RaisePropertyChanged(nameof(ImportLine));
         this.RaisePropertyChanged(nameof(SharingLine));
+        this.RaisePropertyChanged(nameof(TitlingOffered));
+        this.RaisePropertyChanged(nameof(Lede));
     }
 
     string? CountFor(HistoryWindowOption window) {

@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core.FirstRun;
+using Capacitor.Cli.Core.Harness;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -53,6 +54,32 @@ public class ImportDiscoveryRenderTests {
         await Assert.That(windows[0]!["sessions"]!.GetValue<int>()).IsEqualTo(1);
         await Assert.That(windows[1]!["since"]).IsNull();
         await Assert.That(windows[1]!["sessions"]!.GetValue<int>()).IsEqualTo(2);
+    }
+
+    /// The desktop app offers each harness's history as its own choice and imports with that harness's
+    /// flag, so a share is keyed by the id the flag is spelled with.
+    [Test]
+    public async Task Json_carries_each_harness_share_of_a_repo_under_its_flag_id() {
+        var summary = ImportDiscoverySummary.Build(
+            [("a", new DateTimeOffset(2026, 3, 1, 9, 0, 0, TimeSpan.Zero)),
+             ("b", new DateTimeOffset(2026, 1, 4, 9, 0, 0, TimeSpan.Zero))],
+            new Dictionary<string, (string Owner, string Name)?> {
+                ["a"] = ("EventStore", "kcap"),
+                ["b"] = ("EventStore", "kcap"),
+            },
+            [new ImportDiscoveryWindow(FirstRunImportWindows.Last30, new DateOnly(2026, 2, 1)),
+             new ImportDiscoveryWindow(FirstRunImportWindows.Everything, null)],
+            new Dictionary<string, HarnessId> { ["a"] = HarnessId.MistralVibe, ["b"] = HarnessId.Codex });
+
+        var vendors = JsonNode.Parse(ImportDiscoveryRender.ToJson(summary))!["repos"]!.AsArray()[0]!["vendors"]!.AsArray();
+
+        await Assert.That(vendors.Count).IsEqualTo(2);
+        await Assert.That(vendors[0]!["vendor"]!.GetValue<string>()).IsEqualTo("codex");
+        await Assert.That(vendors[0]!["sessions"]!.GetValue<int>()).IsEqualTo(1);
+        await Assert.That(vendors[0]!["last_session_at"]!.GetValue<string>()).StartsWith("2026-01-04");
+        await Assert.That(vendors[0]!["windows"]!.AsArray()[0]!["sessions"]!.GetValue<int>()).IsEqualTo(0);
+        await Assert.That(vendors[1]!["vendor"]!.GetValue<string>()).IsEqualTo("mistral-vibe");
+        await Assert.That(vendors[1]!["windows"]!.AsArray()[0]!["sessions"]!.GetValue<int>()).IsEqualTo(1);
     }
 
     [Test]

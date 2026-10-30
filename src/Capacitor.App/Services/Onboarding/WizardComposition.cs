@@ -298,8 +298,7 @@ internal static class WizardComposition {
             () => options.ResolveIdentity()?.Profile, options.ShutdownToken,
             onLocalPath: OnLocalPath,
             visibilityOptions: options.ReadVisibilityOptions);
-        var history = new HistoryStepViewModel(
-            cli, () => harnesses.Recording, options.Bridges.Post, machine, options.Time, OnLocalPath);
+        var history = new HistoryStepViewModel(cli, options.Bridges.Post, machine, options.Time, OnLocalPath);
         var daemon = new DaemonEnabler(
             cli, options.RunMutation,
             // Gated on a committed sign-in or local install and resolved fresh per call, never the startup-cached profile.

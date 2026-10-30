@@ -112,7 +112,8 @@ public interface IKcapCli {
     /// `local start`, bounded above the CLI's own readiness budget.
     Task<ProcessResult> LocalStartAsync(CancellationToken ct);
 
-    /// `import --discover --json` for these vendors; null when the run failed or printed no report.
+    /// `import --discover --json` for these vendors, or every harness when none is named; null when the
+    /// run failed or printed no report.
     Task<ImportDiscoveryReport?> ImportDiscoverAsync(IReadOnlyList<string> vendorFlags, CancellationToken ct);
 }
 

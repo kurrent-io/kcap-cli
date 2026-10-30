@@ -82,7 +82,7 @@ public class HarnessesStepViewModelTests {
             var h = new Harness(Config.Root);
             h.Cli.DiscoverBehavior = _ => Task.FromResult<ImportDiscoveryReport?>(new(
                 [.. Enumerable.Range(0, 20).Select(i => new ImportDiscoveryRepo("org", $"repo-{i}", 3, null, null))], 0, []));
-            var history = new HistoryStepViewModel(h.Cli, () => h.Vm.Recording, a => a(), "test-mac", TimeProvider.System);
+            var history = new HistoryStepViewModel(h.Cli, a => a(), "test-mac", TimeProvider.System);
             var vm = new OnboardingViewModel([h.Vm, history]);
             await vm.PendingEnterForTesting;
             var window = new MainWindow { Onboarding = vm, Width = 1024, Height = 640 };

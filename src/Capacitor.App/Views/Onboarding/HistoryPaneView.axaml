@@ -39,6 +39,27 @@
 
                 <StackPanel Spacing="4" IsVisible="{Binding HasRepos}">
                     <TextBlock x:Name="FoundLineText" Classes="onboardingLabel" FontSize="15" TextWrapping="Wrap" Text="{Binding FoundLine}" />
+                    <!-- Outside Customize: which harnesses' history imports is a choice apart from which record from now on. -->
+                    <StackPanel Orientation="Horizontal" Spacing="14" Margin="0,4" IsVisible="{Binding SourcesVisible}">
+                        <TextBlock Classes="onboardingMicro" Text="FROM" VerticalAlignment="Center" />
+                        <ItemsControl x:Name="SourceOptions" ItemsSource="{Binding Sources}" IsEnabled="{Binding !ImportStarted}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel Orientation="Horizontal" ItemSpacing="14" LineSpacing="4" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:HistorySourceOption">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <CheckBox x:Name="SourceImportCheck" Classes="onboardingCheck" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                  AutomationProperties.Name="{Binding AutomationName}" />
+                                        <TextBlock Classes="onboardingLabel" FontSize="13" Text="{Binding Label}" VerticalAlignment="Center" />
+                                        <TextBlock Classes="onboardingSignal" Text="{Binding SignalLine}" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
                     <TextBlock x:Name="ImportLineText" Classes="onboardingBody" FontSize="13" TextWrapping="Wrap" Text="{Binding ImportLine}" />
                     <TextBlock x:Name="SharingLineText" Classes="onboardingNote" TextWrapping="Wrap" Text="{Binding SharingLine}"
                                IsVisible="{Binding SharingLine, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
@@ -55,29 +76,7 @@
                 </StackPanel>
 
                 <StackPanel IsVisible="{Binding DetailsVisible}">
-                    <Border Classes="onboardingRowRule" Padding="0,0,0,9">
-                        <StackPanel Orientation="Horizontal" Spacing="14">
-                            <TextBlock Classes="onboardingMicro" Text="FROM" VerticalAlignment="Center" />
-                            <ItemsControl ItemsSource="{Binding FromLabels}">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <WrapPanel Orientation="Horizontal" ItemSpacing="14" LineSpacing="4" />
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate x:DataType="x:String">
-                                        <StackPanel Orientation="Horizontal" Spacing="4">
-                                            <icons:AppIcon Kind="Check" Size="12" Foreground="{StaticResource KcapSuccessBrush}" />
-                                            <TextBlock Classes="onboardingSignal" Text="{Binding}"
-                                                       Foreground="{StaticResource OnboardingTextBrush}" VerticalAlignment="Center" />
-                                        </StackPanel>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </StackPanel>
-                    </Border>
-
-                    <Border Classes="onboardingRowRule" Padding="0,9,0,8">
+                    <Border Classes="onboardingRowRule" Padding="0,0,0,8">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                             <TextBlock Classes="onboardingMicro" VerticalAlignment="Bottom">
                                 <Run Text="FOUND ON " /><Run Text="{Binding MachineName}" Foreground="{StaticResource OnboardingTextBrush}" />
@@ -157,16 +156,16 @@
                     </ItemsControl>
                 </StackPanel>
 
-                <!-- Titling runs the user's own agent, on their quota: theirs to turn off. -->
+                <!-- Naming sends excerpts to the user's model provider: theirs to turn on, told where they go. -->
                 <Border Classes="onboardingCallout" IsVisible="{Binding TitlingOffered}" Margin="0,4,0,0">
                     <Grid ColumnDefinitions="Auto,*" ColumnSpacing="11">
                         <CheckBox x:Name="TitleLocallyCheckBox" Classes="onboardingCheck" VerticalAlignment="Top" Margin="0,1,0,0"
                                   IsChecked="{Binding TitleLocally, Mode=TwoWay}" IsEnabled="{Binding !ImportStarted}"
-                                  AutomationProperties.Name="Name sessions using my agent and quota" />
+                                  AutomationProperties.Name="Name sessions with my agent, sending excerpts to its model provider" />
                         <StackPanel Grid.Column="1" Spacing="3">
                             <TextBlock Classes="onboardingLabel" FontSize="13" Text="Name sessions as they import" />
                             <TextBlock Classes="onboardingDetail" Foreground="{StaticResource OnboardingMutedBrush}"
-                                       Text="Uses your own agent and quota" />
+                                       Text="{x:Static vm:HistoryStepViewModel.TitlingDisclosure}" />
                         </StackPanel>
                     </Grid>
                 </Border>

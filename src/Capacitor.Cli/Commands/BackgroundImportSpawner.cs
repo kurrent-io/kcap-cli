@@ -42,7 +42,7 @@ sealed class BackgroundImportSpawner(ConfigRoot config, IProcessStarter starter)
     }
 
     /// <summary>A plan request runs <c>import --yes</c> under <see cref="ImportPlan.EnvVar"/>; any other
-    /// imports everything.</summary>
+    /// imports everything, unnamed unless the user agreed to naming.</summary>
     internal static ProcessStartInfo BuildStartInfo(ConfigRoot config, BackgroundImportRequest request, string logPath) {
         var psi = new ProcessStartInfo {
             FileName               = Environment.ProcessPath ?? "kcap",
@@ -53,7 +53,11 @@ sealed class BackgroundImportSpawner(ConfigRoot config, IProcessStarter starter)
             RedirectStandardError  = true,
             CreateNoWindow         = true,
         };
-        string[] argv = request.PlanPath is null ? ["import", "--all", "--yes", "--skip-title"] : ["import", "--yes"];
+        string[] argv = request switch {
+            { PlanPath: not null }  => ["import", "--yes"],
+            { NameSessions: true }  => ["import", "--all", "--yes"],
+            _                       => ["import", "--all", "--yes", "--skip-title"],
+        };
         foreach (var arg in argv) psi.ArgumentList.Add(arg);
 
         // A URL override outranks the profile pin and resolves to no profile, so it must not travel:

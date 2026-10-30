@@ -1,3 +1,5 @@
+using Capacitor.Cli.Core.Harness;
+
 namespace Capacitor.Cli.Commands;
 
 /// <summary>One candidate <c>--since</c> window. <paramref name="Key"/> is the only half that
@@ -34,9 +36,18 @@ public sealed record ImportDiscoverySummary(
     /// Claude's first timestamp cannot be read. Close enough to "last activity" to label, not precise
     /// enough to compute with.
     /// </param>
+    /// <param name="ByVendor">The same figures split by the harness that wrote the sessions, in
+    /// registry order, so a caller can offer each harness's history as its own choice.</param>
     public sealed record RepoTotals(
         string                           Owner,
         string                           Name,
+        int                              SessionCount,
+        DateTimeOffset?                  LastSessionAt,
+        IReadOnlyDictionary<string, int> SessionsByWindow,
+        IReadOnlyList<VendorTotals>?     ByVendor = null);
+
+    public sealed record VendorTotals(
+        HarnessId                        Vendor,
         int                              SessionCount,
         DateTimeOffset?                  LastSessionAt,
         IReadOnlyDictionary<string, int> SessionsByWindow);
@@ -51,7 +62,8 @@ public sealed record ImportDiscoverySummary(
     public static ImportDiscoverySummary Build(
             IEnumerable<(string SessionId, DateTimeOffset? StartedAt)> sessions,
             IReadOnlyDictionary<string, (string Owner, string Name)?>  repoBySession,
-            IReadOnlyList<ImportDiscoveryWindow>                      windows) {
+            IReadOnlyList<ImportDiscoveryWindow>                      windows,
+            IReadOnlyDictionary<string, HarnessId>?                   vendorBySession = null) {
         var byRepo    = new Dictionary<(string Owner, string Name), Accumulator>(ImportScope.RepoComparer);
         var unmatched = new Accumulator(windows.Count);
 
@@ -64,6 +76,8 @@ public sealed record ImportDiscoverySummary(
                 if (!byRepo.TryGetValue(r, out var bucket)) byRepo[r] = bucket = new Accumulator(windows.Count);
 
                 into = bucket;
+
+                if (vendorBySession?.TryGetValue(sessionId, out var vendor) == true) bucket.Vendor(vendor).Add(startedAt, windows);
             }
 
             into.Add(startedAt, windows);
@@ -71,7 +85,8 @@ public sealed record ImportDiscoverySummary(
 
         var repos = byRepo
             .Select(kv => new RepoTotals(
-                kv.Key.Owner, kv.Key.Name, kv.Value.Count, kv.Value.Last, kv.Value.ByWindow(windows)))
+                kv.Key.Owner, kv.Key.Name, kv.Value.Count, kv.Value.Last, kv.Value.ByWindow(windows),
+                [.. kv.Value.Vendors.Select(v => new VendorTotals(v.Key, v.Value.Count, v.Value.Last, v.Value.ByWindow(windows)))]))
             // Newest first, so a cap over this list keeps the repositories someone is working in.
             .OrderByDescending(r => r.LastSessionAt ?? DateTimeOffset.MinValue)
             .ThenBy(r => $"{r.Owner}/{r.Name}", StringComparer.OrdinalIgnoreCase)
@@ -94,6 +109,14 @@ public sealed record ImportDiscoverySummary(
         public int             Count   { get; private set; }
         public DateTimeOffset? Last    { get; private set; }
         public int[]           Windows { get; } = new int[windowCount];
+
+        public SortedDictionary<HarnessId, Accumulator> Vendors { get; } = new();
+
+        public Accumulator Vendor(HarnessId vendor) {
+            if (!Vendors.TryGetValue(vendor, out var bucket)) Vendors[vendor] = bucket = new Accumulator(Windows.Length);
+
+            return bucket;
+        }
 
         public void Add(DateTimeOffset? startedAt, IReadOnlyList<ImportDiscoveryWindow> windows) {
             Count++;

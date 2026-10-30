@@ -65,6 +65,17 @@ public class BackgroundImportSpawnerTests {
         await Assert.That(psi.Environment.ContainsKey(ImportPlan.EnvVar)).IsFalse();
     }
 
+    /// <summary>The remainder names sessions only when the user agreed to it; a plan carries its own answer.</summary>
+    [Test]
+    public async Task Only_a_request_the_user_agreed_to_name_drops_skip_title() {
+        var named = BackgroundImportSpawner.BuildStartInfo(Config.Root, Request() with { NameSessions = true }, "/cfg/import-x.log");
+        var plan  = BackgroundImportSpawner.BuildStartInfo(
+            Config.Root, Request() with { NameSessions = true, PlanPath = "/cfg/import-plan-x.json" }, "/cfg/import-x.log");
+
+        await Assert.That(named.ArgumentList.ToList()).IsEquivalentTo(["import", "--all", "--yes"], CollectionOrdering.Matching);
+        await Assert.That(plan.ArgumentList.ToList()).IsEquivalentTo(["import", "--yes"], CollectionOrdering.Matching);
+    }
+
     [Test]
     public async Task Early_zero_exit_is_ExitedZero_and_early_nonzero_is_Failed() {
         if (OperatingSystem.IsWindows()) return;

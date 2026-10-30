@@ -5,11 +5,9 @@ using Capacitor.Cli.Core.Harness;
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
 /// <summary>
-/// Unit tests for <see cref="ImportCommand.ComputePerSourceFinalCounts"/>,
-/// the per-source attribution helper that feeds the Done sub-grid.
-///
-/// The regression this pins: routed-phase Skipped outcomes (e.g. Cursor's
-/// "already current" watermark) must roll up into Excluded, not Errored.
+/// Unit tests for <see cref="ImportCommand.ComputePerSourceFinalCounts"/>, the per-source attribution
+/// helper that feeds the Done sub-grid: routed-phase Skipped outcomes roll up into Excluded, not Errored,
+/// and the per-source rows add up to the totals row.
 /// </summary>
 public class ImportDoneBreakdownTests {
     static ImportCommand.SessionClassification Cls(
@@ -26,6 +24,13 @@ public class ImportDoneBreakdownTests {
             Vendor     = vendor,
         };
 
+    static readonly IReadOnlyDictionary<string, ImportCommand.SessionImportOutcome> NoChainOutcomes =
+        new Dictionary<string, ImportCommand.SessionImportOutcome>();
+
+    static IReadOnlyDictionary<string, ImportCommand.SessionImportOutcome> Ran(
+            params (string SessionId, ImportCommand.SessionImportOutcome Outcome)[] outcomes) =>
+        outcomes.ToDictionary(o => o.SessionId, o => o.Outcome);
+
     // --- Routed-phase vendor (Cursor) ---
 
     [Test]
@@ -41,7 +46,7 @@ public class ImportDoneBreakdownTests {
 
         var counts = ImportCommand.ComputePerSourceFinalCounts(
             classifications:  classifications,
-            imported:         1,
+            chainOutcomes:    NoChainOutcomes,
             routedOutcomes:   (Loaded: 1, Skipped: 1, Failed: 1));
 
         await Assert.That(counts.Loaded).IsEqualTo(1);
@@ -60,7 +65,7 @@ public class ImportDoneBreakdownTests {
 
         var counts = ImportCommand.ComputePerSourceFinalCounts(
             classifications:  classifications,
-            imported:         0,
+            chainOutcomes:    NoChainOutcomes,
             routedOutcomes:   (Loaded: 0, Skipped: 1, Failed: 0));
 
         await Assert.That(counts.Excluded).IsEqualTo(3);
@@ -77,7 +82,7 @@ public class ImportDoneBreakdownTests {
 
         var counts = ImportCommand.ComputePerSourceFinalCounts(
             classifications:  classifications,
-            imported:         0,
+            chainOutcomes:    NoChainOutcomes,
             routedOutcomes:   (Loaded: 0, Skipped: 5, Failed: 0));
 
         await Assert.That(counts.Errored).IsEqualTo(0);
@@ -88,9 +93,7 @@ public class ImportDoneBreakdownTests {
     // --- Chain-phase vendor (Claude / Codex) ---
 
     [Test]
-    public async Task chain_vendor_uses_imported_count_for_loaded() {
-        // No routed outcomes available — falls back to the chain approximation:
-        // Loaded = imported; Errored = (New+Partial) - imported.
+    public async Task chain_vendor_counts_each_session_by_how_it_ended() {
         var classifications = new[] {
             Cls("s1", HarnessId.Claude, ImportCommand.ClassificationStatus.New),
             Cls("s2", HarnessId.Claude, ImportCommand.ClassificationStatus.New),
@@ -99,43 +102,83 @@ public class ImportDoneBreakdownTests {
         };
 
         var counts = ImportCommand.ComputePerSourceFinalCounts(
-            classifications:  classifications,
-            imported:         2,
-            routedOutcomes:   null);
+            classifications: classifications,
+            chainOutcomes:   Ran(("s1", ImportCommand.SessionImportOutcome.Loaded),
+                                 ("s2", ImportCommand.SessionImportOutcome.Errored),
+                                 ("s3", ImportCommand.SessionImportOutcome.Resumed)),
+            routedOutcomes:  null);
 
-        await Assert.That(counts.Loaded).IsEqualTo(2);
-        await Assert.That(counts.AlreadyLoaded).IsEqualTo(1);
-        // (New=2 + Partial=1) - imported=2 = 1
+        await Assert.That(counts.Loaded).IsEqualTo(1);
+        await Assert.That(counts.Resumed).IsEqualTo(1);
         await Assert.That(counts.Errored).IsEqualTo(1);
+        await Assert.That(counts.AlreadyLoaded).IsEqualTo(1);
         await Assert.That(counts.Excluded).IsEqualTo(0);
     }
 
+    /// <summary>A session the chain phase never ran — one a cap left for a later run — is in none of the
+    /// totals, so it is no failure in its source's row either.</summary>
     [Test]
-    public async Task chain_vendor_with_all_imported_has_zero_errored() {
+    public async Task chain_vendor_does_not_count_a_session_that_never_ran_as_errored() {
         var classifications = new[] {
             Cls("s1", HarnessId.Claude, ImportCommand.ClassificationStatus.New),
             Cls("s2", HarnessId.Claude, ImportCommand.ClassificationStatus.New),
         };
 
         var counts = ImportCommand.ComputePerSourceFinalCounts(
-            classifications:  classifications,
-            imported:         2,
-            routedOutcomes:   null);
+            classifications: classifications,
+            chainOutcomes:   Ran(("s1", ImportCommand.SessionImportOutcome.Loaded)),
+            routedOutcomes:  null);
 
-        await Assert.That(counts.Loaded).IsEqualTo(2);
+        await Assert.That(counts.Loaded).IsEqualTo(1);
         await Assert.That(counts.Errored).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task deleted_sessions_count_as_skipped_in_their_source_row() {
+        var classifications = new[] {
+            Cls("s1", HarnessId.Claude, ImportCommand.ClassificationStatus.Deleted),
+            Cls("s2", HarnessId.Claude, ImportCommand.ClassificationStatus.AlreadyLoaded),
+        };
+
+        var counts = ImportCommand.ComputePerSourceFinalCounts(classifications, NoChainOutcomes, routedOutcomes: null);
+
+        await Assert.That(counts.Deleted).IsEqualTo(1);
+        await Assert.That(counts.Skipped).IsEqualTo(2);
+        await Assert.That(counts.Failed).IsEqualTo(0);
     }
 
     // --- Multi-source invariant: sub-grid sum == totals ---
 
+    /// <summary>Resumed sessions from two chain sources: each row reports them as resumed, the way the
+    /// totals row does, rather than as loaded.</summary>
+    [Test]
+    public async Task resumed_chain_sessions_add_up_to_the_totals_row() {
+        var claude = new[] {
+            Cls("k1", HarnessId.Claude, ImportCommand.ClassificationStatus.Partial),
+            Cls("k2", HarnessId.Claude, ImportCommand.ClassificationStatus.Partial),
+        };
+        var codex = new[] {
+            Cls("x1", HarnessId.Codex, ImportCommand.ClassificationStatus.Partial),
+            Cls("x2", HarnessId.Codex, ImportCommand.ClassificationStatus.New),
+        };
+        var ran = Ran(("k1", ImportCommand.SessionImportOutcome.Resumed),
+                      ("k2", ImportCommand.SessionImportOutcome.Resumed),
+                      ("x1", ImportCommand.SessionImportOutcome.Resumed),
+                      ("x2", ImportCommand.SessionImportOutcome.Loaded));
+        var totals = new ImportCommand.ImportChainsResult(Loaded: 1, Resumed: 3, Errored: 0, ran);
+
+        var claudeRow = ImportCommand.ComputePerSourceFinalCounts(claude, totals.BySession, routedOutcomes: null);
+        var codexRow  = ImportCommand.ComputePerSourceFinalCounts(codex, totals.BySession, routedOutcomes: null);
+
+        await Assert.That(claudeRow.Resumed).IsEqualTo(2);
+        await Assert.That(claudeRow.Resumed + codexRow.Resumed).IsEqualTo(totals.Resumed);
+        await Assert.That(claudeRow.Loaded + codexRow.Loaded).IsEqualTo(totals.Loaded);
+        await Assert.That(claudeRow.Errored + codexRow.Errored).IsEqualTo(totals.Errored);
+    }
+
     [Test]
     public async Task multi_source_subgrid_sum_matches_aggregate_totals() {
-        // Mixed run: Claude chain phase + Cursor routed phase.
-        // Claude: 3 New, 2 imported, 1 errored.
-        // Cursor: 4 New, 1 Loaded, 2 Skipped, 1 Failed.
-        // Expected aggregate Excluded = 0 (Claude) + 2 (Cursor Skipped) = 2.
-        // Expected aggregate Errored  = 1 (Claude) + 1 (Cursor Failed)  = 2.
-
+        // Claude chain phase: 2 loaded, 1 errored. Cursor routed phase: 1 Loaded, 2 Skipped, 1 Failed.
         var claude = new[] {
             Cls("k1", HarnessId.Claude, ImportCommand.ClassificationStatus.New),
             Cls("k2", HarnessId.Claude, ImportCommand.ClassificationStatus.New),
@@ -147,13 +190,16 @@ public class ImportDoneBreakdownTests {
             Cls("c3", HarnessId.Cursor, ImportCommand.ClassificationStatus.New),
             Cls("c4", HarnessId.Cursor, ImportCommand.ClassificationStatus.New),
         };
+        var ran = Ran(("k1", ImportCommand.SessionImportOutcome.Loaded),
+                      ("k2", ImportCommand.SessionImportOutcome.Loaded),
+                      ("k3", ImportCommand.SessionImportOutcome.Errored));
 
-        var claudeRow = ImportCommand.ComputePerSourceFinalCounts(claude, imported: 2, routedOutcomes: null);
-        var cursorRow = ImportCommand.ComputePerSourceFinalCounts(cursor, imported: 1, routedOutcomes: (Loaded: 1, Skipped: 2, Failed: 1));
+        var claudeRow = ImportCommand.ComputePerSourceFinalCounts(claude, ran, routedOutcomes: null);
+        var cursorRow = ImportCommand.ComputePerSourceFinalCounts(cursor, ran, routedOutcomes: (Loaded: 1, Skipped: 2, Failed: 1));
 
-        await Assert.That(claudeRow.Loaded + cursorRow.Loaded).IsEqualTo(3);   // 2 + 1
-        await Assert.That(claudeRow.Excluded + cursorRow.Excluded).IsEqualTo(2); // 0 + 2 (Skipped)
-        await Assert.That(claudeRow.Errored + cursorRow.Errored).IsEqualTo(2);   // 1 + 1
+        await Assert.That(claudeRow.Loaded + cursorRow.Loaded).IsEqualTo(3);
+        await Assert.That(claudeRow.Excluded + cursorRow.Excluded).IsEqualTo(2);
+        await Assert.That(claudeRow.Errored + cursorRow.Errored).IsEqualTo(2);
     }
 
     // --- IsLifecycleOnlyRoutedReplay (vendor-NEUTRAL — no per-vendor scoping) ---
