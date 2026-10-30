@@ -33,8 +33,8 @@ public class AppStartupTests {
     [TempDaemonPaths] public required TempDaemonStore Daemons { get; init; }
 
     sealed class NeverLaunchClient : ILaunchClient {
-        public Task<IReadOnlySet<string>> GetLaunchFeaturesAsync(CancellationToken ct) =>
-            Task.FromResult<IReadOnlySet<string>>(System.Collections.Frozen.FrozenSet<string>.Empty);
+        public Task<IReadOnlySet<string>?> GetLaunchFeaturesAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlySet<string>?>(System.Collections.Frozen.FrozenSet<string>.Empty);
         public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) =>
             Task.FromResult(new LaunchOutcome(false, null, "unexpected launch"));
     }
@@ -191,8 +191,8 @@ public class AppStartupTests {
     }
 
     sealed class AcceptingLaunchClient(string agentId) : ILaunchClient {
-        public Task<IReadOnlySet<string>> GetLaunchFeaturesAsync(CancellationToken ct) =>
-            Task.FromResult<IReadOnlySet<string>>(System.Collections.Frozen.FrozenSet<string>.Empty);
+        public Task<IReadOnlySet<string>?> GetLaunchFeaturesAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlySet<string>?>(System.Collections.Frozen.FrozenSet<string>.Empty);
         public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) =>
             Task.FromResult(new LaunchOutcome(true, agentId, null));
     }

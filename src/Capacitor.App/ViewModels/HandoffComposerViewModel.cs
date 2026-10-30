@@ -127,6 +127,10 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
         var canStart = this.WhenAnyValue(x => x.ProbedStart, x => x.DisabledReason, x => x.IsLaunching,
             (start, reason, launching) => start is not null && reason is null && !launching);
         StartCommand = ReactiveCommand.CreateFromTask(StartAsync, canStart);
+        // An unobserved command fault takes ReactiveUI's crash path.
+        StartCommand.ThrownExceptions
+            .Subscribe(ex => Console.Error.WriteLine($"kcap: hand-off start: {ex.Message}"))
+            .DisposeWith(_disposables);
     }
 
     public AttachmentTray Tray { get; } = new();
@@ -200,6 +204,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
     Task ReevaluateAsync(CancellationToken ct) => PendingEvaluationForTesting = RunEvaluationAsync(ct);
 
     async Task RunEvaluationAsync(CancellationToken ct) {
+        if (_disposed) return;
         _evaluation?.Cancel();
         _evaluation?.Dispose();
         var cts = _evaluation = CancellationTokenSource.CreateLinkedTokenSource(_shutdown, ct);
@@ -217,7 +222,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
             Console.Error.WriteLine($"kcap: hand-off check: {ex.Message}");
             result = new(ProbeFailed);
         }
-        if (cts.IsCancellationRequested || !ReferenceEquals(cts, _evaluation)) return;
+        if (_disposed || cts.IsCancellationRequested || !ReferenceEquals(cts, _evaluation)) return;
         IsProbing = result.Waiting;
         DisabledReason = result.Reason;
         _checkout = result.Checkout;
@@ -231,7 +236,11 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
             return new(NeedsFullAccess);
 
         if (!_serverConnected) return new(ServerUnreachable);
-        if (_features is null || _features.Count == 0) _features = await _launch.GetLaunchFeaturesAsync(ct);
+        if (_features is not { Count: > 0 }) {
+            // Null is no answer at all, which says nothing about the server's version.
+            if (await _launch.GetLaunchFeaturesAsync(ct) is not { } read) return new(ServerUnreachable);
+            _features = read;
+        }
         if (!_features.Contains(HandoffWire.Capability)) return new(ServerTooOld);
 
         switch (_attach) {
@@ -286,8 +295,16 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
                 UploadOutcome upload;
                 try { upload = await _uploader.UploadAsync(draft.Attachments, _shutdown); }
                 catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { return; }
-                if (upload.Kind == UploadKind.Unauthorized) { Error = HomeViewModel.SignInToAttach; return; }
-                if (upload.Kind != UploadKind.Uploaded) { Error = upload.Reason ?? "the upload failed"; return; }
+                var uploadError = upload.Kind switch {
+                    UploadKind.Uploaded => null,
+                    UploadKind.Unauthorized => HomeViewModel.SignInToAttach,
+                    _ => upload.Reason ?? "the upload failed",
+                };
+                if (_disposed) {
+                    _drafts.HoldFailed(_session.SessionId, draft with { Error = uploadError });
+                    return;
+                }
+                if (uploadError is not null) { Error = uploadError; return; }
                 attachmentIds = upload.Ids;
             }
 
@@ -299,13 +316,20 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
             // Captured before the call: a navigation while it is in flight must keep the launch from opening.
             var generation = _navigationGeneration();
             var outcome = await _launch.StartAsync(request, _shutdown);
+            // A composer torn down during the call keeps nothing: the source's next composer takes
+            // whatever comes back.
             if (!outcome.Started) {
-                Error = outcome.Unauthorized ? SignInToHandOff : HandoffFailureText.For(outcome.Error);
+                var refusal = outcome.Unauthorized ? SignInToHandOff : HandoffFailureText.For(outcome.Error);
+                if (_disposed) {
+                    _drafts.HoldFailed(_session.SessionId, draft with { Error = refusal });
+                    return;
+                }
+                Error = refusal;
                 await ReevaluateAsync(CancellationToken.None);
                 return;
             }
             if (HomeViewModel.NormalizeAgentId(outcome.AgentId) is not { } agentId) {
-                Error = HomeViewModel.UnusableIdMessage;
+                if (!_disposed) Error = HomeViewModel.UnusableIdMessage;
                 return;
             }
 
@@ -316,20 +340,24 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
             // The generation the placeholder's open left; null when the open was refused.
             int? openedUnder = null;
             var hold = _drafts.Hold(_session.SessionId, agentId, draft, () => {
+                // Read before the close, which is itself a navigation. Only a user still on the
+                // placeholder is taken back; anyone else finds the draft on the source's next open.
+                var stillThere = openedUnder is { } opened && navigationGeneration() == opened;
                 closeFailedLaunch(agentId);
-                // Only a user still on the placeholder is taken back; anyone else finds the draft on
-                // the source's next open.
-                if (openedUnder is { } opened && navigationGeneration() == opened) reopenSource(sourceKey);
+                if (stillThere) reopenSource(sourceKey);
             });
             if (hold == HandoffHold.AlreadyFailed) {
+                if (_disposed) return;
                 if (_drafts.TakeFailed(_session.SessionId) is { } failed) Apply(failed);
                 await ReevaluateAsync(CancellationToken.None);
                 return;
             }
 
-            Error = null;
-            Text = "";
-            Tray.Clear();
+            if (!_disposed) {
+                Error = null;
+                Text = "";
+                Tray.Clear();
+            }
             if (hold == HandoffHold.Pending)
                 _directory?.AddPlaceholder(agentId, draft.Vendor, checkout, AgentRow.TitleFromPrompt(draft.Text), draft.Model);
             var opens = _navigationGeneration() == generation;
@@ -341,14 +369,16 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
     }
 
     void TakeBackFailedDraft() {
-        if (IsLaunching || _drafts.TakeFailed(_session.SessionId) is not { } failed) return;
+        if (_disposed || IsLaunching || _drafts.TakeFailed(_session.SessionId) is not { } failed) return;
         Apply(failed);
         _ = ReevaluateAsync(CancellationToken.None);
     }
 
+    /// Text typed since the launch stays; the sent text comes back only into an empty box.
     void Apply(HandoffDraft draft) {
-        Text = draft.Text;
-        Tray.Restore(draft.Attachments);
+        if (Text.Length == 0) Text = draft.Text;
+        if (Tray.Count == 0) Tray.Restore(draft.Attachments);
+        else Tray.AddAll([.. draft.Attachments.Where(f => Tray.Items.All(staged => staged.Id != f.Id))]);
         _choices.Restore(draft);
         Error = draft.Error;
     }
@@ -400,6 +430,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
         _disposed = true;
         _evaluation?.Cancel();
         _evaluation?.Dispose();
+        _evaluation = null;
         _disposables.Dispose();
         StartCommand.Dispose();
     }

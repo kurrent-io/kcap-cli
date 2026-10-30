@@ -21,7 +21,7 @@ public class ServerConnectionServiceLaunchFeaturesTests {
 
         var features = await ((ILaunchClient)lane).GetLaunchFeaturesAsync(CancellationToken.None);
 
-        await Assert.That(features.Contains("handoff/1")).IsTrue();
+        await Assert.That(features!.Contains("handoff/1")).IsTrue();
         await Assert.That(features.Count).IsEqualTo(1);
     }
 
@@ -32,16 +32,28 @@ public class ServerConnectionServiceLaunchFeaturesTests {
 
         var features = await ((ILaunchClient)lane).GetLaunchFeaturesAsync(CancellationToken.None);
 
-        await Assert.That(features.Count).IsEqualTo(0);
+        await Assert.That(features).IsNotNull();
+        await Assert.That(features!.Count).IsEqualTo(0);
     }
 
     [Test]
-    public async Task Features_while_disconnected_are_empty() {
+    public async Task Features_from_a_failed_call_are_unknown() {
+        await using var host = await HubTestHost.StartAsync();
+        HubTestHost.LaunchFeaturesHandler = () => throw new InvalidOperationException("boom");
+        await using var lane = await ConnectedAsync(host);
+
+        var features = await ((ILaunchClient)lane).GetLaunchFeaturesAsync(CancellationToken.None);
+
+        await Assert.That(features).IsNull();
+    }
+
+    [Test]
+    public async Task Features_while_disconnected_are_unknown() {
         await using var lane = new ServerConnectionService(TimeProvider.System, "http://127.0.0.1:1", () => Task.FromResult<string?>(null));
         lane.Start();
 
         var features = await ((ILaunchClient)lane).GetLaunchFeaturesAsync(CancellationToken.None);
 
-        await Assert.That(features.Count).IsEqualTo(0);
+        await Assert.That(features).IsNull();
     }
 }

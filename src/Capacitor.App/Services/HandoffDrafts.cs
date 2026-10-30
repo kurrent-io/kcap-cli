@@ -69,6 +69,11 @@ public sealed class HandoffDrafts : IDisposable {
     /// hold's onFailed. Whichever composer calls TakeFailed first gets the draft.
     public IObservable<string> FailedFor => _failedFor;
 
+    /// A draft whose composer is gone before its launch settled, for the source's next composer.
+    public void HoldFailed(string sourceSessionId, HandoffDraft draft) {
+        lock (_lock) _failed[sourceSessionId] = draft;
+    }
+
     public HandoffDraft? TakeFailed(string sourceSessionId) {
         lock (_lock) return _failed.Remove(sourceSessionId, out var draft) ? draft : null;
     }

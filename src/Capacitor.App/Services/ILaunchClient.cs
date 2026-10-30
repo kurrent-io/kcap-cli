@@ -23,9 +23,10 @@ public sealed record LaunchOutcome(bool Started, string? AgentId, string? Error,
 public interface ILaunchClient {
     Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct);
 
-    /// The launch capabilities the server lists, such as <c>handoff/1</c>. Empty when the server lacks
-    /// the method or the call fails; never throws.
-    Task<IReadOnlySet<string>> GetLaunchFeaturesAsync(CancellationToken ct);
+    /// The launch capabilities the server lists, such as <c>handoff/1</c>. Empty when the server
+    /// answered without them, including a server that lacks the method; null when there was no answer
+    /// (no live connection, or the call failed). Never throws.
+    Task<IReadOnlySet<string>?> GetLaunchFeaturesAsync(CancellationToken ct);
 }
 
 /// The RequestLaunchAgentV2 hub argument, serialized by SignalR through reflection. Member names

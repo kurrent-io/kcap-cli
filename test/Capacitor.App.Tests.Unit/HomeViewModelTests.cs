@@ -30,8 +30,8 @@ public class HomeViewModelTests {
     const string SecondLaunchedId = "fedcba9876543210fedcba9876543210";
 
     sealed class RecordingLaunchClient : ILaunchClient {
-        public Task<IReadOnlySet<string>> GetLaunchFeaturesAsync(CancellationToken ct) =>
-            Task.FromResult<IReadOnlySet<string>>(System.Collections.Frozen.FrozenSet<string>.Empty);
+        public Task<IReadOnlySet<string>?> GetLaunchFeaturesAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlySet<string>?>(System.Collections.Frozen.FrozenSet<string>.Empty);
         public LaunchRequest? Last;
         public LaunchOutcome Next = new(true, LaunchedId, null);
         /// Runs while the call is in flight, before its outcome returns.
@@ -2680,8 +2680,8 @@ public class HomeViewModelTests {
     /// Pushes the failure before returning the launch Task, to exercise the race where a
     /// LaunchFailed arrives while StartAsync's invoke is still in flight.
     sealed class FailureBeforeReturnLaunchClient : ILaunchClient {
-        public Task<IReadOnlySet<string>> GetLaunchFeaturesAsync(CancellationToken ct) =>
-            Task.FromResult<IReadOnlySet<string>>(System.Collections.Frozen.FrozenSet<string>.Empty);
+        public Task<IReadOnlySet<string>?> GetLaunchFeaturesAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlySet<string>?>(System.Collections.Frozen.FrozenSet<string>.Empty);
         public required Subject<LaunchFailure> Failures { get; init; }
         public required string AgentId { get; init; }
         public required string Reason { get; init; }
@@ -2966,8 +2966,8 @@ public class HomeViewModelTests {
     /// Adds the directory row before the launch call returns, so it exists before RecordPendingLaunch
     /// ever runs — the race a directory-row Add event can never observe (nothing was pending yet).
     sealed class RowBeforeReturnLaunchClient : ILaunchClient {
-        public Task<IReadOnlySet<string>> GetLaunchFeaturesAsync(CancellationToken ct) =>
-            Task.FromResult<IReadOnlySet<string>>(System.Collections.Frozen.FrozenSet<string>.Empty);
+        public Task<IReadOnlySet<string>?> GetLaunchFeaturesAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlySet<string>?>(System.Collections.Frozen.FrozenSet<string>.Empty);
         public required FakeDaemonClientService Daemon { get; init; }
         public required string AgentId { get; init; }
 
@@ -3033,8 +3033,8 @@ public class HomeViewModelTests {
     /// invoke returns — RecordPendingLaunch must confirm the row and discard the buffered failure
     /// without ever rendering it, whichever order its own two checks run in.
     sealed class RowAndFailureBeforeReturnLaunchClient : ILaunchClient {
-        public Task<IReadOnlySet<string>> GetLaunchFeaturesAsync(CancellationToken ct) =>
-            Task.FromResult<IReadOnlySet<string>>(System.Collections.Frozen.FrozenSet<string>.Empty);
+        public Task<IReadOnlySet<string>?> GetLaunchFeaturesAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlySet<string>?>(System.Collections.Frozen.FrozenSet<string>.Empty);
         public required FakeDaemonClientService Daemon { get; init; }
         public required Subject<LaunchFailure> Failures { get; init; }
         public required string AgentId { get; init; }
@@ -3114,8 +3114,8 @@ public class HomeViewModelTests {
     /// SECOND row check of the launch that follows — the first is RecordPendingLaunch's leading
     /// check, the second its re-check after registering the pending entry.
     sealed class RowBetweenTheRowChecksLaunchClient : ILaunchClient {
-        public Task<IReadOnlySet<string>> GetLaunchFeaturesAsync(CancellationToken ct) =>
-            Task.FromResult<IReadOnlySet<string>>(System.Collections.Frozen.FrozenSet<string>.Empty);
+        public Task<IReadOnlySet<string>?> GetLaunchFeaturesAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlySet<string>?>(System.Collections.Frozen.FrozenSet<string>.Empty);
         public required ReadHookedDirectory Directory { get; init; }
         public required Subject<LaunchFailure> Failures { get; init; }
         public required string AgentId { get; init; }

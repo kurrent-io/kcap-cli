@@ -392,18 +392,25 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         }
     }
 
-    public async Task<IReadOnlySet<string>> GetLaunchFeaturesAsync(CancellationToken ct) {
+    public async Task<IReadOnlySet<string>?> GetLaunchFeaturesAsync(CancellationToken ct) {
         var hub = _hub;
-        if (hub is not { State: HubConnectionState.Connected }) return FrozenSet<string>.Empty;
+        if (hub is not { State: HubConnectionState.Connected }) return null;
         try {
             var features = await hub.InvokeAsync<string[]?>(HubMethods.GetLaunchFeatures, ct).ConfigureAwait(false);
             return features is { Length: > 0 } ? features.ToFrozenSet(StringComparer.Ordinal) : FrozenSet<string>.Empty;
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             throw;
-        } catch (Exception) {
+        } catch (HubException ex) when (IsMissingMethod(ex)) {
             return FrozenSet<string>.Empty;
+        } catch (Exception) {
+            return null;
         }
     }
+
+    /// An older server's answer to a method it lacks; any other failure is no answer.
+    static bool IsMissingMethod(HubException ex) =>
+        ex.Message.Contains("Unknown hub method", StringComparison.Ordinal)
+     || ex.Message.Contains("Method does not exist", StringComparison.Ordinal);
 
     public Task<HubCallOutcome> RequestStopAgentAsync(string agentId, CancellationToken ct) => InvokeAsync(HubMethods.RequestStopAgent, ct, agentId);
     public Task<HubCallOutcome> UnsubscribeFromChatAsync(string sessionId, CancellationToken ct) => InvokeAsync(HubMethods.UnsubscribeFromChat, ct, sessionId);
