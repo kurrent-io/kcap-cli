@@ -11,7 +11,7 @@ public sealed class HarnessPreflight : ReactiveObject {
     public const string Title = "Install a harness first";
 
     public static string Message { get; } =
-        $"kcap records the sessions of coding-agent harnesses such as Claude Code and Codex, and found none on " +
+        $"kcap stores the sessions of coding-agent harnesses such as Claude Code and Codex, and found none on " +
         $"this {(OperatingSystem.IsMacOS() ? "Mac" : "computer")}. Install a harness, then {SetupLocation.Relaunch}";
 
     readonly Func<CancellationToken, Task<IReadOnlyDictionary<HarnessId, DetectedAgent>>> _detect;

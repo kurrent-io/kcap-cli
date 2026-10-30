@@ -90,7 +90,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         HistoryState.NoHarness =>
             "No harnesses were connected in this setup. Go back to connect one, or run kcap import later.",
         HistoryState.NoHistory =>
-            $"No history on {MachineName} to import. New sessions will record as they happen.",
+            $"No history on {MachineName} to import. New sessions will be stored as they happen.",
         HistoryState.OnlyUnmatched =>
             $"Found {SessionCount(_unmatched)} on {MachineName}, but none matched a repository. Run kcap remap, then kcap import.",
         HistoryState.Unreadable =>
@@ -102,7 +102,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         HistoryState.NoHarness =>
             $"No harnesses were connected in this setup. Go back to connect one, or import later from {SetupLocation.Path}.",
         HistoryState.NoHistory =>
-            $"No history on {MachineName} to import. New sessions will record as they happen.",
+            $"No history on {MachineName} to import. New sessions will be stored as they happen.",
         HistoryState.OnlyUnmatched =>
             $"Found {SessionCount(_unmatched)} on {MachineName}, but none matched a repository. Those sessions stay on this Mac.",
         HistoryState.Unreadable =>
