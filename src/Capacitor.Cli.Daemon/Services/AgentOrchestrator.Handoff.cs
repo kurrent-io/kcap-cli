@@ -110,17 +110,12 @@ internal partial class AgentOrchestrator {
             _                                                  => null
         };
 
-    const int HandoffTitleCap = 120;
-
     /// <summary>A derived title naming the session handed off, by its title or else by the start of its id.</summary>
     internal static AgentStartTitle HandoffStartTitle(HandoffSourceContext source) {
         var id    = source.SessionId ?? "";
-        var named = string.IsNullOrWhiteSpace(source.Title) ? id[..Math.Min(8, id.Length)] : source.Title.Trim();
-        var text  = $"Hand-off of {named}";
-        if (text.Length > HandoffTitleCap)
-            text = text[..(char.IsHighSurrogate(text[HandoffTitleCap - 1]) ? HandoffTitleCap - 1 : HandoffTitleCap)];
+        var named = AgentStartTitle.Shorten(source.Title) ?? id[..Math.Min(8, id.Length)];
 
-        return new AgentStartTitle(text, Derived: true);
+        return AgentStartTitle.FromPrompt($"Hand-off of {named}")!.Value;
     }
 
     /// <summary>Creates the hand-off worktree at the launch's start and builds the prompt that replaces the

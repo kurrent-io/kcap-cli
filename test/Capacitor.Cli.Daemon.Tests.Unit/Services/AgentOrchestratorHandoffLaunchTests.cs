@@ -167,15 +167,16 @@ public class AgentOrchestratorHandoffLaunchTests {
     }
 
     [Test]
-    public async Task A_handoff_title_keeps_the_title_cap() {
+    public async Task A_handoff_title_is_shortened_like_a_derived_title() {
         await using var f = new Fixture();
-        var source = Source with { Title = new string('w', 200) };
+        var source = Source with { Title = "\n" + new string('w', 200) + "\nsecond line" };
 
         await f.Orch.HandleLaunchAgentForTest(Launch(f.Repo.Path, Start(f.Repo.Head, "CreateBranch"), "", source));
 
         var title = f.Orch.GetAgentForTest(AgentId)!.StartTitle!.Value.Text;
-        await Assert.That(title.Length).IsEqualTo(120);
+        await Assert.That(title.Length).IsEqualTo(AgentStartTitle.MaxDerivedLength);
         await Assert.That(title).StartsWith("Hand-off of www");
+        await Assert.That(title).EndsWith("…");
     }
 
     /// <summary>The worktree checks out the user's own branch, so the failed launch's cleanup must leave
