@@ -14,6 +14,7 @@ public sealed class SearchHitViewModel : ReactiveObject {
     public required string SessionId { get; init; }
     public required SearchMode Kind { get; init; }
     public required IReadOnlyList<SnippetRun> Title { get; init; }
+    public string TitleText => string.Concat(Title.Select(r => r.Text));
     public string? Speaker { get; init; }
     public IReadOnlyList<SnippetRun> Snippet { get; init; } = [];
     public required string Caption { get; init; }

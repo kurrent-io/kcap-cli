@@ -377,4 +377,47 @@ public class MainWindowSearchTests {
             await Assert.That(h.Sessions.PinnedSessionId).IsNull();
         });
     }
+
+    /// With no server to search, the cover still opens and closes, and the page is only the sign-in prompt.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Without_a_server_search_opens_the_cover_with_the_sign_in_prompt() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var vm = new MainWindowViewModel(new FakeDaemonClientService(), CancellationToken.None, TestActivity.New(), TimeProvider.System);
+            var focus = 0;
+            using var _ = vm.SearchFocusRequests.Subscribe(_ => focus++);
+
+            await vm.OpenSearchCommand.Execute().ToTask();
+            var opened = vm.IsSearchOpen;
+            await vm.OpenSearchCommand.Execute().ToTask();
+            await vm.DismissSearchCommand.Execute().ToTask();
+
+            await Assert.That(vm.Search).IsNull();
+            await Assert.That(opened).IsTrue();
+            await Assert.That(focus).IsEqualTo(1);
+            await Assert.That(vm.SearchShowsSignIn).IsTrue();
+            await Assert.That(vm.IsSearchOpen).IsFalse();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_401_on_the_page_shows_the_sign_in_prompt() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            await h.OpenSearch();
+            var before = h.Vm.SearchShowsSignIn;
+            var raised = 0;
+            h.Vm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(MainWindowViewModel.SearchShowsSignIn)) raised++; };
+
+            h.Sessions.PinResult = PinOutcome.Unauthorized;
+            var hit = h.TypeAndSettle("tee");
+            await h.Vm.Search!.OpenAsync(hit);
+            h.Scheduler.AdvanceBy(TimeSpan.FromMilliseconds(1));
+
+            await Assert.That(before).IsFalse();
+            await Assert.That(h.Vm.SearchShowsSignIn).IsTrue();
+            await Assert.That(raised).IsGreaterThan(0);
+        });
+    }
 }

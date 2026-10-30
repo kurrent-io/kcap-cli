@@ -286,6 +286,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// is open.
     public bool SignInVisible => _signInVisible?.Value ?? false;
 
+    /// The search page shows the sign-in prompt in place of the list, and takes no query: there is
+    /// no server to ask, the window already reads signed out, or the server answered 401.
+    public bool SearchShowsSignIn => Search is null || _searchSignedOut || Search.ListState == SearchListState.SignInRequired;
+    bool _searchSignedOut;
+
     string? _startMessage;
     // Cleared on every new start attempt and on Connected; set when a start attempt fails.
     public string? StartMessage {
@@ -405,7 +410,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         NewSessionCommand = ReactiveCommand.Create(NewSession);
         Search = sessions is null ? null : searchFactory?.Invoke(OpenSearchHitAsync);
         Search?.Closed.Subscribe(_ => IsSearchOpen = false);
-        OpenSearchCommand = ReactiveCommand.Create(OpenSearch, Observable.Return(Search is not null));
+        if (Search is { } page) page.WhenAnyValue(x => x.ListState).Subscribe(_ => this.RaisePropertyChanged(nameof(SearchShowsSignIn)));
+        OpenSearchCommand = ReactiveCommand.Create(OpenSearch);
         DismissSearchCommand = ReactiveCommand.Create(CloseSearch);
         var canRefreshWork = Observable.Switch(this.WhenAnyValue(x => x.CurrentWorkspace)
             .Select(CanRefreshOpenWork))
@@ -536,10 +542,16 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             var signedOut = signInExpired.CombineLatest(daemonSignIn, (app, daemon) => app || daemon.SignedOut)
                 .DistinctUntilChanged();
 
-            _signInVisible = signInExpired
-                .CombineLatest(daemonSignIn, (app, daemon) => (app || daemon is { SignedOut: true, OursToRepair: true }) && offersSignIn)
+            var signInVisible = signInExpired
+                .CombineLatest(daemonSignIn, (app, daemon) => (app || daemon is { SignedOut: true, OursToRepair: true }) && offersSignIn);
+            _signInVisible = signInVisible
                 .ToProperty(this, x => x.SignInVisible, false)
                 .DisposeWith(disposables);
+            // Its own copy: an OAPH notifies before its new value is readable.
+            signInVisible.Subscribe(visible => {
+                _searchSignedOut = visible;
+                this.RaisePropertyChanged(nameof(SearchShowsSignIn));
+            }).DisposeWith(disposables);
 
             _connectionDisplay = status.CombineLatest(daemonConnection, signedOut, ConnectionDisplayFor)
                 .ToProperty(this, x => x.ConnectionDisplay, "")
@@ -707,12 +719,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     }
 
     void OpenSearch() {
-        if (Search is null) return;
         if (IsSearchOpen) {
             _searchFocusRequests.OnNext(Unit.Default);
             return;
         }
-        Search.Reset();
+        Search?.Reset();
         IsSearchOpen = true;
         _navigation.Bump();
     }

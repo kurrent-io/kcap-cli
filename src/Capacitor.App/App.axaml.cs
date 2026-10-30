@@ -23,6 +23,7 @@ using Capacitor.App.Services.Update;
 using Capacitor.Cli.Core.Install;
 using Capacitor.App.ViewModels;
 using Capacitor.App.ViewModels.Onboarding;
+using ReactiveUI.Reactive;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
@@ -935,7 +936,7 @@ public partial class App : Application {
             onUnauthorized: serverLane.ParkSignedOut);
         var sessions = new ServerSessionsService(
             serverLane, ServerSessionsService.HttpFetch(sessionHttp, profiles), ServerSessionsService.HttpOwners(sessionHttp, profiles),
-            _time, onUnauthorized: serverLane.ParkSignedOut);
+            _time, onUnauthorized: serverLane.ParkSignedOut, fetchSummary: ServerSearchHttp.Summary(sessionHttp, profiles));
         var repoIdentity = new RepoIdentityResolver();
         var directory = new AgentDirectory(
             service, remoteAgents, serverLane, repoIdentity, GitRepository.ResolveMainRepoRoot,
@@ -1151,7 +1152,8 @@ public partial class App : Application {
                 movingToWindowsService: lifecycle.IsMovingToWindowsService,
                 repairDaemon: lifecycle.RepairStaleMarkerAsync, repairOffer: lifecycle.RepairOffer,
                 localServer: localServer, localStack: localStack, uiScale: _uiScale, usageNotice: _usageNotice,
-                web: webWorkspace, openLaunchApprovals: launchApprovals.Show)),
+                web: webWorkspace, openLaunchApprovals: launchApprovals.Show,
+                search: string.IsNullOrEmpty(profiles?.Resolution.ServerUrl) ? null : ServerSearchHttp.Search(sessionHttp, profiles))),
             // Both close paths release the workspace: hide-to-tray keeps the window (and its
             // attach) alive, a real close discards the window the next Show() would rebuild.
             releaseWorkspace: window => (window.DataContext as MainWindowViewModel)?.CloseWorkspace());
@@ -1956,7 +1958,7 @@ public partial class App : Application {
             Func<string, RemoteSessionViewModel?>? serverWorkspaceFactory = null, IServerSessionsService? sessions = null,
             RailPreferencesStore? railPreferences = null, AccountReadings? readings = null,
             Func<CancellationToken, Task>? repairDaemon = null, IObservable<string?>? repairOffer = null,
-            string? profileName = null) {
+            string? profileName = null, Func<SearchRequest, CancellationToken, Task<SearchFetch>>? search = null) {
         // Notifier is set on the WINDOW (the toast overlay), not the ViewModel — the toast
         // is a View-level concern (WindowNotificationManager lives on MainWindow) independent of
         // the VM's WhenActivated-scoped projections.
@@ -2025,6 +2027,13 @@ public partial class App : Application {
             openServerSession: sessionId => vm?.OpenSession(sessionId, AgentOrigin.Server),
             sessions: sessions, preferences: initialRail, persistPreferences: persistRail,
             scopeLocked: localServer?.IsLocalServer == true, shownRows: railShown, bindUserPreferences: bindRailUser);
+        // The page mutates on whatever thread its inputs arrive on, so every input lands on the UI thread.
+        Func<Func<string, PinPresentation, CancellationToken, Task<SearchOpenOutcome>>, SessionSearchViewModel>? searchFactory =
+            search is null || sessions is null ? null : open => new SessionSearchViewModel(
+                search,
+                sessions.Identity.ObserveOn(RxSchedulers.MainThreadScheduler),
+                (lane?.SessionAccessChanged ?? Observable.Never<string>()).ObserveOn(RxSchedulers.MainThreadScheduler),
+                time, RxSchedulers.MainThreadScheduler, open);
         vm = new MainWindowViewModel(
             service, shutdownToken, activity, time, startAction, lifecycleStatus, home: home,
             navigation: navigation, trackWorkspaceTeardown: trackWorkspaceTeardown, workspaceFactory: workspaceFactory,
@@ -2032,6 +2041,7 @@ public partial class App : Application {
             laneStatus: lane?.Status, restartPending: restartPending,
             originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory, directory: resolvedDirectory,
             serverWorkspaceFactory: serverWorkspaceFactory, sessions: sessions,
+            searchFactory: searchFactory,
             openFeedback: openFeedback, opener: new ShellUrlOpener(), requestSignIn: requestSignIn,
             settingsAction: settingsAction, uninstallAction: uninstallAction, requestSetup: requestSetup, historyImport: historyImport,
             backgroundPriority: backgroundPriority, reloadState: reloadState, isReloading: isReloading, reloadDaemon: reloadDaemon, openLaunchApprovals: openLaunchApprovals,
@@ -2041,6 +2051,7 @@ public partial class App : Application {
         };
         var window = adopt?.Window ?? new MainWindow();
         window.DataContext = vm;
+        window.Closed += (_, _) => vm.Search?.Dispose();
         window.Notifier = notifier;
         window.ContentScale = uiScale;
         window.Onboarding = null;
