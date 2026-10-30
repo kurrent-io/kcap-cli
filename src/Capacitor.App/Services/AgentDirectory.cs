@@ -500,10 +500,12 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
             if (serverEnded) _endedByDaemon.Remove(sid);
             var shown = hosted && _endedByDaemon.Contains(sid) ? dto with { Status = "ended" } : dto;
             var server = AgentRow.FromServer(shown, hosted) with { OwnerIsViewer = Ownership(dto, sid) };
+            // The daemon's checkout outranks what the listing's cwd implies; a registry row names
+            // no worktree, so the listing's stands in for it.
             if (_checkouts.TryGetValue(sid, out var checkout))
                 server = server with {
-                    RepoPath = checkout.RepoPath, WorktreePath = checkout.WorktreePath, WorkLocation = checkout.WorkLocation,
-                    BorrowedFrom = checkout.BorrowedFrom, Branch = server.Branch ?? checkout.Branch,
+                    RepoPath = checkout.RepoPath, WorktreePath = checkout.WorktreePath ?? server.WorktreePath,
+                    WorkLocation = checkout.WorkLocation, BorrowedFrom = checkout.BorrowedFrom, Branch = server.Branch ?? checkout.Branch,
                 };
             next.Add(server);
         }
