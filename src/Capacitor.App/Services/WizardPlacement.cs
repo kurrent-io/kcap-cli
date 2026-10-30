@@ -14,19 +14,12 @@ public static class WizardPlacement {
     public static (PixelPoint Position, Size Size) Place(double contentScale, ScreenArea screen) {
         var minimum = Minimum(contentScale, screen.WorkingArea.Size.ToSize(screen.Scaling));
         var preferred = new Size(Math.Max(PreferredWidth, minimum.Width), Math.Max(PreferredHeight, minimum.Height));
-        var area = screen.WorkingArea;
-        var width = (int)Math.Ceiling(preferred.Width * screen.Scaling);
-        var height = (int)Math.Ceiling(preferred.Height * screen.Scaling);
-        var centred = new PixelPoint(area.X + (area.Width - width) / 2, area.Y + (area.Height - height) / 2);
+        var centred = screen.Centre(preferred);
 
         return WindowRestore.FitOnScreen(centred, preferred, [screen]) ?? (centred, preferred);
     }
 
     /// Never larger than the work area: a minimum the screen cannot hold pushes the footer off it.
-    public static Size Minimum(double contentScale, Size? available) => new(
-        Bounded(WindowSizeMemory.OnboardingMinWidth, contentScale, available?.Width),
-        Bounded(WindowSizeMemory.OnboardingMinHeight, contentScale, available?.Height));
-
-    static double Bounded(double unscaled, double scale, double? available) =>
-        Math.Min(UiScale.Minimum(unscaled, scale, available), available ?? double.MaxValue);
+    public static Size Minimum(double contentScale, Size? available) => WindowSizeMemory.Minimum(
+        new Size(WindowSizeMemory.OnboardingMinWidth, WindowSizeMemory.OnboardingMinHeight), contentScale, available);
 }

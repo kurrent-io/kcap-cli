@@ -80,7 +80,7 @@ public sealed class WindowRestore {
     }
 
     // Primary first: a frame on no screen lands there.
-    static IReadOnlyList<ScreenArea> ScreenAreas(Window window) {
+    public static IReadOnlyList<ScreenArea> ScreenAreas(Window window) {
         if (window.Screens is not { All: { Count: > 0 } all } screens) return [];
         var areas = new List<ScreenArea>(all.Count);
         if (screens.Primary is { } primary) areas.Add(new ScreenArea(primary.Bounds, primary.WorkingArea, primary.Scaling));

@@ -127,25 +127,21 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
         Height = fit.Size.Height;
     }
 
-    // A closed window has no platform window to ask a screen about. Setup's minimum depends on the
+    // A closed window has no platform window to ask a screen about. The minimum depends on the
     // screen at any scale, since it never exceeds the work area.
     void RefreshMinimumSize() {
-        if ((_scale != UiScale.Default || Onboarding is not null) && PlatformImpl is not null) ApplyMinimumSize();
+        if (PlatformImpl is not null) ApplyMinimumSize();
     }
 
     // Bounded by the screen the window is on.
     void ApplyMinimumSize() {
         var area = Screens?.ScreenFromWindow(this) ?? Screens?.Primary;
         var available = area is null ? (Size?)null : area.WorkingArea.Size.ToSize(area.Scaling);
-        if (Onboarding is not null) {
-            var minimum = WizardPlacement.Minimum(_scale, available);
-            MinWidth  = minimum.Width;
-            MinHeight = minimum.Height;
-            return;
-        }
-
-        MinWidth  = UiScale.Minimum(WindowSizeMemory.MinWidth, _scale, available?.Width);
-        MinHeight = UiScale.Minimum(WindowSizeMemory.MinHeight, _scale, available?.Height);
+        var minimum = Onboarding is not null
+            ? WizardPlacement.Minimum(_scale, available)
+            : WindowSizeMemory.Minimum(new Size(WindowSizeMemory.MinWidth, WindowSizeMemory.MinHeight), _scale, available);
+        MinWidth  = minimum.Width;
+        MinHeight = minimum.Height;
     }
 
     /// Call before the first Show(): sizes setup to the work area of the screen it opens on and centres it there.

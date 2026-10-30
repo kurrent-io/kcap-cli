@@ -5,9 +5,6 @@ using Capacitor.App.Services;
 namespace Capacitor.App.Tests.Unit;
 
 public class WindowSizeMemoryTests {
-    static readonly PixelRect Screen = new(0, 0, 1920, 1080);
-    static readonly PixelSize Frame = new(1400, 760);
-
     [Test]
     public async Task Missing_size_uses_the_defaults() {
         var (width, height) = WindowSizeMemory.Resolve(null, null);
@@ -36,41 +33,81 @@ public class WindowSizeMemoryTests {
         await Assert.That(height).IsEqualTo(WindowSizeMemory.DefaultHeight);
     }
 
+    static ScreenArea ScreenOf(int width, int height, int taskbar, double scaling = 1, int x = 0) =>
+        new(new PixelRect(x, 0, width, height), new PixelRect(x, 0, width, height - taskbar), scaling);
+
+    static readonly ScreenArea Primary = ScreenOf(1920, 1080, 40);
+
     [Test]
-    public async Task Missing_position_is_left_unspecified() {
-        await Assert.That(WindowSizeMemory.ResolvePosition(null, null, Frame, [Screen])).IsNull();
+    public async Task With_no_remembered_position_the_default_is_centred_on_the_first_work_area() {
+        await Assert.That(WindowSizeMemory.Place(new AppState(), [Primary]))
+            .IsEqualTo(((PixelPoint?)new PixelPoint(260, 140), new Size(WindowSizeMemory.DefaultWidth, WindowSizeMemory.DefaultHeight)));
     }
 
     [Test]
-    public async Task Saved_position_on_a_screen_is_kept() {
-        await Assert.That(WindowSizeMemory.ResolvePosition(120, 80, Frame, [Screen])).IsEqualTo(new PixelPoint(120, 80));
+    public async Task A_remembered_frame_inside_its_work_area_is_kept() {
+        await Assert.That(WindowSizeMemory.Place(new AppState(WindowWidth: 1552, WindowHeight: 888, WindowX: 120, WindowY: 80), [Primary]))
+            .IsEqualTo(((PixelPoint?)new PixelPoint(120, 80), new Size(1552, 888)));
     }
 
-    /// A top-left on a screen stays put even when the frame runs past that screen's edge: that is
-    /// where a window straddling two monitors lives.
+    /// The default is taller than a 1280x800 screen's work area: the window takes that area rather
+    /// than opening with its bottom edge under the taskbar.
     [Test]
-    public async Task Saved_position_on_a_screen_is_kept_when_the_frame_overhangs_it() {
-        var right = new PixelRect(1920, 0, 1920, 1080);
-        await Assert.That(WindowSizeMemory.ResolvePosition(1500, 80, Frame, [Screen, right])).IsEqualTo(new PixelPoint(1500, 80));
+    public async Task The_default_shrinks_into_a_small_work_area() {
+        await Assert.That(WindowSizeMemory.Place(new AppState(), [ScreenOf(1280, 800, 48)]))
+            .IsEqualTo(((PixelPoint?)new PixelPoint(0, 0), new Size(1280, 752)));
+    }
+
+    [Test]
+    public async Task At_125_percent_on_a_768_line_laptop_both_sides_shrink_to_the_work_area() {
+        await Assert.That(WindowSizeMemory.Place(new AppState(), [ScreenOf(1366, 768, 40, 1.25)]))
+            .IsEqualTo(((PixelPoint?)new PixelPoint(0, 0), new Size(1366 / 1.25, 728 / 1.25)));
+    }
+
+    [Test]
+    public async Task A_remembered_frame_running_under_the_taskbar_moves_up_into_the_work_area() {
+        await Assert.That(WindowSizeMemory.Place(new AppState(WindowWidth: 1552, WindowHeight: 888, WindowX: 100, WindowY: 300), [Primary]))
+            .IsEqualTo(((PixelPoint?)new PixelPoint(100, 152), new Size(1552, 888)));
     }
 
     /// The whole frame comes back, not just its top-left pixel, so a window from a removed monitor
-    /// is fully on the first screen after the restore.
+    /// is fully on the first screen.
     [Test]
-    public async Task Saved_position_off_every_screen_brings_the_whole_frame_onto_the_first() {
-        await Assert.That(WindowSizeMemory.ResolvePosition(8000, -400, Frame, [Screen])).IsEqualTo(new PixelPoint(520, 0));
-        await Assert.That(WindowSizeMemory.ResolvePosition(-3000, 4000, Frame, [Screen])).IsEqualTo(new PixelPoint(0, 320));
+    public async Task A_remembered_position_off_every_screen_brings_the_whole_frame_onto_the_first() {
+        await Assert.That(WindowSizeMemory.Place(new AppState(WindowX: 8000, WindowY: -400), [Primary]))
+            .IsEqualTo(((PixelPoint?)new PixelPoint(520, 0), new Size(WindowSizeMemory.DefaultWidth, WindowSizeMemory.DefaultHeight)));
     }
 
     [Test]
-    public async Task Off_screen_clamp_respects_a_working_area_with_a_non_zero_origin() {
-        var area = new PixelRect(-1920, 40, 1920, 1040);
-        await Assert.That(WindowSizeMemory.ResolvePosition(5000, 5000, Frame, [area])).IsEqualTo(new PixelPoint(-1400, 320));
+    public async Task A_frame_across_two_monitors_lands_whole_on_the_one_holding_most_of_it() {
+        var right = ScreenOf(1920, 1080, 40, x: 1920);
+        await Assert.That(WindowSizeMemory.Place(new AppState(WindowX: 1500, WindowY: 80), [Primary, right]))
+            .IsEqualTo(((PixelPoint?)new PixelPoint(1920, 80), new Size(WindowSizeMemory.DefaultWidth, WindowSizeMemory.DefaultHeight)));
     }
 
     [Test]
-    public async Task A_frame_larger_than_the_screen_keeps_its_top_left_edge_on_it() {
-        await Assert.That(WindowSizeMemory.ResolvePosition(8000, 8000, new PixelSize(2600, 1400), [Screen])).IsEqualTo(new PixelPoint(0, 0));
+    public async Task With_no_screen_to_ask_the_remembered_position_is_used_as_saved() {
+        await Assert.That(WindowSizeMemory.Place(new AppState(WindowX: 120, WindowY: 80), []).Position).IsEqualTo(new PixelPoint(120, 80));
+        await Assert.That(WindowSizeMemory.Place(new AppState(), []).Position).IsNull();
+    }
+
+    static readonly Size Floor = new(WindowSizeMemory.MinWidth, WindowSizeMemory.MinHeight);
+
+    [Test]
+    public async Task The_minimum_is_the_floor_where_the_screen_holds_it() {
+        await Assert.That(WindowSizeMemory.Minimum(Floor, 1.0, new Size(1280, 752))).IsEqualTo(Floor);
+        await Assert.That(WindowSizeMemory.Minimum(Floor, 1.0, null)).IsEqualTo(Floor);
+    }
+
+    /// Otherwise the platform would hold the window wider than the work area it was fitted into.
+    [Test]
+    public async Task The_minimum_never_exceeds_the_work_area() {
+        await Assert.That(WindowSizeMemory.Minimum(Floor, 1.0, new Size(1024, 688))).IsEqualTo(new Size(1024, WindowSizeMemory.MinHeight));
+    }
+
+    [Test]
+    public async Task A_content_scale_raises_the_minimum_within_the_work_area() {
+        await Assert.That(WindowSizeMemory.Minimum(Floor, 1.5, new Size(1920, 1040))).IsEqualTo(new Size(1800, 840));
     }
 
     [Test]
