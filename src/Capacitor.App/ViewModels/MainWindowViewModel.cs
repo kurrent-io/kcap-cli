@@ -179,6 +179,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     readonly IServerSessionsService? _sessions;
     /// The session of the last pin search asked for; it may still be reading while nothing is held.
     string? _searchPin;
+    PinPresentation _searchPinPresentation = new(null, null, null);
     readonly IDisposable _onAppServer;
     /// A session id names a session only within one server: a hand-off to the server's row is
     /// sound only while the local daemon reports the app's server.
@@ -810,12 +811,17 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             // Set after Navigate, whose release of an earlier pin would otherwise clear it.
             if (!Navigate(listed.Id, listed.Origin, sessionId)) return SearchOpenOutcome.Failed;
             _searchPin = sessionId;
+            _searchPinPresentation = presentation;
             // A failed pin only costs the session its exemption from the rail's filters later.
             _ = _sessions?.PinAsync(sessionId, presentation, CancellationToken.None);
             return SearchOpenOutcome.Opened;
         }
         if (_sessions is null) return SearchOpenOutcome.Failed;
+        // A pin that lands replaces the selected session's; abandoning the open puts that one back.
+        (string Id, PinPresentation Presentation)? restore =
+            _sessions.PinnedSessionId is { } held ? (held, _searchPinPresentation) : null;
         _searchPin = sessionId;
+        _searchPinPresentation = presentation;
         var pinned = await _sessions.PinAsync(sessionId, presentation, ct);
         switch (pinned) {
             case PinOutcome.Unauthorized: return SearchOpenOutcome.SignInRequired;
@@ -825,17 +831,25 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         }
         var current = !ct.IsCancellationRequested && IsSearchOpen;
         if (!current || _directory.RowForSession(sessionId) is not { } found) {
-            ReleaseUnopenedPin(sessionId);
+            ReleaseUnopenedPin(sessionId, restore);
             return current ? SearchOpenOutcome.Failed : SearchOpenOutcome.Superseded;
         }
-        return Navigate(found.Id, found.Origin, sessionId) ? SearchOpenOutcome.Opened : SearchOpenOutcome.Failed;
+        if (Navigate(found.Id, found.Origin, sessionId)) return SearchOpenOutcome.Opened;
+        ReleaseUnopenedPin(sessionId, restore);
+        return SearchOpenOutcome.Failed;
     }
 
     /// A pin that landed for a session nothing opened would keep a rail row for it.
-    void ReleaseUnopenedPin(string sessionId) {
-        if (_sessions?.PinnedSessionId is not { } pinned || pinned != sessionId) return;
-        if (SessionOfOpen() is { } open && SessionIds.SameSession(pinned, open)) return;
+    void ReleaseUnopenedPin(string sessionId, (string Id, PinPresentation Presentation)? restore) {
+        if (_sessions?.PinnedSessionId is not { } pinned || !SessionIds.SameSession(pinned, sessionId)) return;
+        var open = SessionOfOpen();
+        if (open is not null && SessionIds.SameSession(pinned, open)) return;
+        _searchPin = null;
         _sessions.Unpin();
+        if (restore is not { } previous || open is null || !SessionIds.SameSession(previous.Id, open)) return;
+        _searchPin = previous.Id;
+        _searchPinPresentation = previous.Presentation;
+        _ = _sessions.PinAsync(previous.Id, previous.Presentation, CancellationToken.None);
     }
 
     bool OpenSessionCore(string agentId, AgentOrigin? origin, bool revealInRail) {

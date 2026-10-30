@@ -184,6 +184,50 @@ public class MainWindowSearchTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task A_pin_landing_after_escape_gives_the_selected_session_its_pin_back() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            h.ListServer("P");
+            var owner = new PinPresentation("bob", "Bob", null);
+            await Assert.That(await h.Vm.OpenSearchHitAsync("P", owner, CancellationToken.None)).IsEqualTo(SearchOpenOutcome.Opened);
+            h.Sessions.PinnedIdSubject.OnNext("P");
+            await h.OpenSearch();
+            var gate = new TaskCompletionSource<PinOutcome>();
+            h.Sessions.PinGate = gate;
+
+            var opening = h.Vm.OpenSearchHitAsync("T", NoPresentation, CancellationToken.None);
+            await h.Vm.DismissSearchCommand.Execute().ToTask();
+            h.Sessions.PinGate = null;
+            gate.SetResult(PinOutcome.Pinned);
+
+            await Assert.That(await opening).IsEqualTo(SearchOpenOutcome.Superseded);
+            await Assert.That(h.Vm.CurrentWorkspace!.AgentId).IsEqualTo("P");
+            await Assert.That(h.Sessions.PinCalls[^1]).IsEqualTo(("P", owner));
+            await Assert.That(h.Sessions.PinnedSessionId).IsEqualTo("P");
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_pin_that_lands_when_the_open_cannot_navigate_is_released() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            await h.OpenSearch();
+            var gate = new TaskCompletionSource<PinOutcome>();
+            h.Sessions.PinGate = gate;
+
+            var opening = h.Vm.OpenSearchHitAsync("T", NoPresentation, CancellationToken.None);
+            h.Vm.LatchShutdown();
+            h.ListServer("T");
+            gate.SetResult(PinOutcome.Pinned);
+
+            await Assert.That(await opening).IsEqualTo(SearchOpenOutcome.Failed);
+            await Assert.That(h.Sessions.PinnedSessionId).IsNull();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task A_listed_session_opened_from_search_asks_for_a_pin_and_a_scope_switch_does_not_unpin_it() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var h = new Harness();
