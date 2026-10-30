@@ -66,7 +66,7 @@ sealed class FakePageSource : IPageSource {
 
     public async Task<PageContentRead> ReadContentAsync(string artefactId, int? version, CancellationToken ct) {
         ContentRequested.Add((artefactId, version));
-        if (_contentGates.Count > 0) return await _contentGates.Dequeue().Task;
+        if (_contentGates.Count > 0) return await _contentGates.Dequeue().Task.WaitAsync(ct);
         await Task.Yield();
         return _contents.Count > 0 ? _contents.Dequeue() : DefaultContent;
     }

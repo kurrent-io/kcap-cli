@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Platform;
 using Capacitor.App.ViewModels;
@@ -11,10 +12,26 @@ namespace Capacitor.App.Views;
 public partial class PageViewer : UserControl {
     PageViewerViewModel? _vm;
     NativeWebView? _webView;
+    bool _attached;
 
     public PageViewer() {
         InitializeComponent();
-        DataContextChanged += (_, _) => Attach(DataContext as PageViewerViewModel);
+        DataContextChanged += (_, _) => {
+            if (_attached) Attach(DataContext as PageViewerViewModel);
+        };
+    }
+
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e) {
+        base.OnAttachedToVisualTree(e);
+        _attached = true;
+        Attach(DataContext as PageViewerViewModel);
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e) {
+        base.OnDetachedFromVisualTree(e);
+        _attached = false;
+        if (_vm is not null) _vm.PropertyChanged -= OnViewModelChanged;
+        _vm = null;
     }
 
     void Attach(PageViewerViewModel? vm) {

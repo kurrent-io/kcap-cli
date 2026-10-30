@@ -127,24 +127,127 @@ public class PageViewerViewModelTests {
     }
 
     [Test]
-    public async Task Any_other_navigation_is_cancelled_and_offered_to_the_browser() {
+    public async Task A_cancelled_navigation_opens_nothing_and_waits_for_a_click() {
         var h = new Harness();
 
         await Assert.That(h.Vm.CancelNavigation(new Uri("https://example.test/a"))).IsTrue();
-        await Assert.That(h.Vm.CancelNavigation(new Uri("http://localhost:12345/"))).IsTrue();
-        await Assert.That(h.Vm.CancelNavigation(new Uri("file:///etc/passwd"))).IsTrue();
-        await Assert.That(h.Vm.CancelNavigation(null)).IsTrue();
 
-        await Assert.That(h.Opener.Opened).IsEquivalentTo(new[] { "https://example.test/a", "http://localhost:12345/" });
+        await Assert.That(h.Opener.Opened).IsEmpty();
+        await Assert.That(h.Vm.PendingExternalUrl).IsEqualTo("https://example.test/a");
+        await Assert.That(h.Vm.PendingPrompt).IsEqualTo("This page wants to open example.test");
     }
 
     [Test]
-    public async Task A_new_window_never_opens_in_app_and_goes_to_the_browser() {
+    public async Task The_latest_navigation_is_the_pending_one() {
+        var h = new Harness();
+
+        h.Vm.CancelNavigation(new Uri("https://example.test/a"));
+        h.Vm.CancelNavigation(new Uri("https://other.test/b"));
+
+        await Assert.That(h.Vm.PendingExternalUrl).IsEqualTo("https://other.test/b");
+    }
+
+    [Test]
+    public async Task Unopenable_targets_never_become_pending() {
+        var h = new Harness();
+
+        await Assert.That(h.Vm.CancelNavigation(new Uri("javascript:alert(1)"))).IsTrue();
+        await Assert.That(h.Vm.CancelNavigation(new Uri("file:///etc/passwd"))).IsTrue();
+        await Assert.That(h.Vm.CancelNavigation(null)).IsTrue();
+        h.Vm.OpenNewWindow(new Uri("data:text/html,x"));
+
+        await Assert.That(h.Vm.PendingExternalUrl).IsNull();
+        await Assert.That(h.Opener.Opened).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_new_window_request_is_held_like_a_navigation() {
         var h = new Harness();
 
         h.Vm.OpenNewWindow(new Uri("https://example.test/popup"));
-        h.Vm.OpenNewWindow(new Uri("javascript:alert(1)"));
 
-        await Assert.That(h.Opener.Opened).IsEquivalentTo(new[] { "https://example.test/popup" });
+        await Assert.That(h.Opener.Opened).IsEmpty();
+        await Assert.That(h.Vm.PendingExternalUrl).IsEqualTo("https://example.test/popup");
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Open_sends_the_pending_link_once_and_clears_it() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Vm.CancelNavigation(new Uri("https://example.test/a"));
+
+            await h.Vm.OpenPendingCommand.Execute();
+            await h.Vm.OpenPendingCommand.Execute();
+
+            await Assert.That(h.Opener.Opened).IsEquivalentTo(new[] { "https://example.test/a" });
+            await Assert.That(h.Vm.PendingExternalUrl).IsNull();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Dismiss_clears_the_pending_link_without_opening_it() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Vm.CancelNavigation(new Uri("https://example.test/a"));
+
+            await h.Vm.DismissPendingCommand.Execute();
+
+            await Assert.That(h.Opener.Opened).IsEmpty();
+            await Assert.That(h.Vm.PendingExternalUrl).IsNull();
+        });
+    }
+
+    [Test]
+    public async Task A_new_load_clears_the_pending_link() {
+        var h = new Harness();
+        h.Vm.CancelNavigation(new Uri("https://example.test/a"));
+
+        await h.Vm.LoadAsync(CancellationToken.None);
+
+        await Assert.That(h.Vm.PendingExternalUrl).IsNull();
+    }
+
+    [Test]
+    public async Task A_cancelled_first_load_does_not_stay_loading() {
+        var h = new Harness();
+        h.Source.ContentGate();
+        using var cts = new CancellationTokenSource();
+
+        var load = h.Vm.LoadAsync(cts.Token);
+        cts.Cancel();
+        await load;
+
+        await Assert.That(h.Vm.State).IsEqualTo(PageViewerState.Unreachable);
+    }
+
+    [Test]
+    public async Task A_cancelled_reload_keeps_the_page_already_shown() {
+        var h = new Harness();
+        h.Source.EnqueueContent(new PageContentRead.Found(Page(), 3, "<p>v3</p>"));
+        await h.Vm.LoadAsync(CancellationToken.None);
+        h.Source.ContentGate();
+        using var cts = new CancellationTokenSource();
+
+        var load = h.Vm.LoadAsync(cts.Token);
+        cts.Cancel();
+        await load;
+
+        await Assert.That(h.Vm.State).IsEqualTo(PageViewerState.Ready);
+        await Assert.That(h.Vm.Html).Contains("v3");
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_failing_reload_lands_in_unreachable() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.ContentGate().SetException(new InvalidOperationException("boom"));
+
+            await h.Vm.ReloadCommand.Execute();
+
+            await Assert.That(h.Vm.State).IsEqualTo(PageViewerState.Unreachable);
+        });
     }
 }

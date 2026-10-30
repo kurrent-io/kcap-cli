@@ -28,7 +28,13 @@ public sealed class PageViewerViewModel : ReactiveObject {
         _webViewAvailable = webViewAvailable;
         _state = webViewAvailable ? PageViewerState.Loading : PageViewerState.NoWebView;
         OpenInBrowserCommand = ReactiveCommand.Create(() => LinkPolicy.Open(_opener, BrowserUrl));
+        OpenPendingCommand = ReactiveCommand.Create(OpenPending);
+        DismissPendingCommand = ReactiveCommand.Create(() => { PendingExternalUrl = null; });
         ReloadCommand = ReactiveCommand.CreateFromTask(LoadAsync);
+        ReloadCommand.ThrownExceptions.Subscribe(ex => {
+            Console.Error.WriteLine($"kcap: page reload failed: {ex.Message}");
+            State = PageViewerState.Unreachable;
+        });
     }
 
     public string ArtefactId { get; }
@@ -67,7 +73,28 @@ public sealed class PageViewerViewModel : ReactiveObject {
     public ArtefactDto? Page { get; private set; }
     public int Version { get; private set; }
 
+    /// A link the page tried to follow, held until the user opens or dismisses it: a page's script
+    /// must never reach the browser without a click in the app.
+    string? _pendingExternalUrl;
+    public string? PendingExternalUrl {
+        get => _pendingExternalUrl;
+        private set {
+            if (_pendingExternalUrl == value) return;
+            this.RaiseAndSetIfChanged(ref _pendingExternalUrl, value);
+            this.RaisePropertyChanged(nameof(PendingPrompt));
+            this.RaisePropertyChanged(nameof(HasPending));
+        }
+    }
+
+    public bool HasPending => PendingExternalUrl is not null;
+
+    public string? PendingPrompt => PendingExternalUrl is { } url
+        ? $"This page wants to open {(Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Host.Length > 0 ? uri.Host : url)}"
+        : null;
+
     public ReactiveCommand<Unit, Unit> OpenInBrowserCommand { get; }
+    public ReactiveCommand<Unit, Unit> OpenPendingCommand { get; }
+    public ReactiveCommand<Unit, Unit> DismissPendingCommand { get; }
     public ReactiveCommand<Unit, Unit> ReloadCommand { get; }
 
     /// Reads the page and applies the result only if no later load has started meanwhile.
@@ -77,8 +104,21 @@ public sealed class PageViewerViewModel : ReactiveObject {
             return;
         }
         var generation = ++_generation;
+        var previous = State;
+        PendingExternalUrl = null;
         State = PageViewerState.Loading;
-        var read = await _source.ReadContentAsync(ArtefactId, null, ct);
+        PageContentRead read;
+        try {
+            read = await _source.ReadContentAsync(ArtefactId, null, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            if (generation == _generation) State = previous == PageViewerState.Loading ? PageViewerState.Unreachable : previous;
+            return;
+        }
+        catch (Exception ex) {
+            Console.Error.WriteLine($"kcap: page read failed: {ex.Message}");
+            read = new PageContentRead.Unreachable();
+        }
         if (generation != _generation) return;
 
         if (read is PageContentRead.Found found) {
@@ -98,7 +138,7 @@ public sealed class PageViewerViewModel : ReactiveObject {
     }
 
     /// True when the WebView must not perform this navigation. Only the host document and its
-    /// frames' srcdoc load in place; every other target, in any frame, goes to the browser instead.
+    /// frames' srcdoc load in place; any other target, in any frame, is offered for the browser.
     public bool CancelNavigation(Uri? request) {
         var url = request?.OriginalString;
         if (url == HostBase.OriginalString || url == SrcdocUrl) return false;
@@ -106,6 +146,14 @@ public sealed class PageViewerViewModel : ReactiveObject {
         return true;
     }
 
-    public void OpenNewWindow(Uri? request) =>
-        LinkPolicy.Open(_opener, request is { IsAbsoluteUri: true } ? request.AbsoluteUri : null);
+    public void OpenNewWindow(Uri? request) {
+        var url = request is { IsAbsoluteUri: true } ? request.AbsoluteUri : null;
+        if (LinkPolicy.IsOpenable(url)) PendingExternalUrl = url;
+    }
+
+    void OpenPending() {
+        var url = PendingExternalUrl;
+        PendingExternalUrl = null;
+        LinkPolicy.Open(_opener, url);
+    }
 }
