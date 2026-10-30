@@ -64,7 +64,9 @@ public record ErrorEntry(
         string?        ToolName,
         string         Error,
         DateTimeOffset Timestamp
-    );
+    ) {
+    public JsonElement? ToolInput { get; init; }
+}
 
 public record RecapEntry(
         string         Type,
@@ -188,8 +190,8 @@ class WatchState {
     public bool?                ServerRecordsHarnessTitles  { get; set; }
     public DateTimeOffset       LastHarnessTitleProbe       { get; set; }
 
-    // Buffering: hold transcript lines until threshold is reached to avoid polluting
-    // the server with short-lived sessions (e.g. <local-command-caveat> prompts)
+    // A session watcher holds its lines back until they contain a real turn or reach the threshold,
+    // so a session nobody took a turn in (e.g. only <local-command-caveat> commands) sends none.
     public List<string> BufferedLines       { get; } = [];
     public List<int>    BufferedLineNumbers { get; } = [];
     public int          LinesReadAhead      { get; set; } // file position while buffering
