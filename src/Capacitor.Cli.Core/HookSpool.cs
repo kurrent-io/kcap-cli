@@ -373,7 +373,7 @@ public sealed partial class HookSpool(string spoolDir, TimeProvider time, int ca
     /// <summary>Durably marks a session as ended (see <see cref="IsMarkedEnded"/>). The marker's
     /// filename is dot-prefixed so it is invisible to <see cref="SessionIdOf"/> / the session-id-keyed
     /// enumerations (matching the existing <c>.last-drain</c> throttle-stamp convention) — it is swept
-    /// only by <see cref="ReapOlderThan"/>'s unconditional file-age sweep.</summary>
+    /// only by <see cref="DeleteExpired"/>'s unconditional file-age sweep.</summary>
     public void MarkEnded(string sessionId) {
         if (!SafeSessionId.IsMatch(sessionId)) return;
         try {
@@ -442,7 +442,7 @@ public sealed partial class HookSpool(string spoolDir, TimeProvider time, int ca
     }
 
     /// <summary>Sweeps every server's directory, so one no longer configured is reaped too.</summary>
-    public void ReapOlderThan(TimeSpan age) => SpoolPartition.Reap(root ?? spoolDir, (time.GetUtcNow() - age).UtcDateTime);
+    public void DeleteExpired() => SpoolPartition.Reap(root ?? spoolDir, (time.GetUtcNow() - SpoolPartition.Retention).UtcDateTime);
 
     // Filename-safe superset of the old dashless-GUID form. The filename IS the session id --
     // LifecycleSpoolDrain posts it verbatim as session_id for session-needs-import -- so the key may

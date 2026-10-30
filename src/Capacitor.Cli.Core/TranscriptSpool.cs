@@ -210,7 +210,7 @@ public sealed partial class TranscriptSpool(string spoolDir, TimeProvider time, 
         return true;
     }
 
-    public void ReapOlderThan(TimeSpan age) => SpoolPartition.Reap(root ?? spoolDir, (time.GetUtcNow() - age).UtcDateTime);
+    public void DeleteExpired() => SpoolPartition.Reap(root ?? spoolDir, (time.GetUtcNow() - SpoolPartition.Retention).UtcDateTime);
 
     // Filename-safe superset of the old dashless-GUID form. The filename IS the session id --
     // LifecycleSpoolDrain posts it verbatim as session_id for session-needs-import -- so the key may

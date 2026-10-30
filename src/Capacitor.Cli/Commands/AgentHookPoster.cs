@@ -264,9 +264,9 @@ internal sealed class AgentHookPoster(
         // Retention runs even when delivery cannot: the reap lives here, and Program.cs skips this
         // whole call while the URL is unacceptable, so an indefinitely broken config would otherwise
         // never reap anything.
-        lifecycle.ReapOlderThan(TimeSpan.FromDays(30));
-        transcript.ReapOlderThan(TimeSpan.FromDays(30));
-        SessionCommits.ReapOlderThan(config, TimeSpan.FromDays(30), time);
+        lifecycle.DeleteExpired();
+        transcript.DeleteExpired();
+        SessionCommits.DeleteExpired(config, time);
         SpoolEnds(AgentSessions.OnThisMachine(config).ReapExited(Url), Url, lifecycle, time);
 
         // Distinct from the POST guards' diagnostic: a reader must be able to tell which guard fired,

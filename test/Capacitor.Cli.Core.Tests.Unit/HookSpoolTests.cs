@@ -194,7 +194,7 @@ public class HookSpoolTests {
         var f = tmp.PathTo($"{SidA}.jsonl");
         await File.WriteAllTextAsync(f, "{\"route\":\"x\",\"body\":\"y\"}\n");
         File.SetLastWriteTimeUtc(f, DateTime.UtcNow.AddDays(-40));
-        new HookSpool(tmp.Path, time: TimeProvider.System).ReapOlderThan(TimeSpan.FromDays(30));
+        new HookSpool(tmp.Path, time: TimeProvider.System).DeleteExpired();
         await Assert.That(File.Exists(f)).IsFalse();
     }
 

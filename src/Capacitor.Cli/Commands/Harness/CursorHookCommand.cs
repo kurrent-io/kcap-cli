@@ -83,7 +83,7 @@ public sealed class CursorHookCommand(
             () => {
                 var s = new HookSpool(config, clock.Time, Url);
                 MigrateLegacyCursorSpool(s, harnesses.Of<CursorHarness>().Paths.SpoolDir);
-                s.ReapOlderThan(TimeSpan.FromDays(30));
+                s.DeleteExpired();
                 return s;
             });
 

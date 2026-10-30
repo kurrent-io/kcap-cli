@@ -11,18 +11,19 @@ namespace Capacitor.Cli.Core;
 /// </summary>
 public sealed class SessionCommits(string path) {
     const FileShare Shared = FileShare.ReadWrite | FileShare.Delete;
+    static readonly TimeSpan Retention = TimeSpan.FromDays(30);
 
     public static SessionCommits Of(ConfigRoot config, SessionId session) => new(config.Path("commits", $"{session}.jsonl"));
 
     /// <summary>
     /// Not deleted when the session ends: a resumed session's watcher reads it again.
     /// </summary>
-    public static void ReapOlderThan(ConfigRoot config, TimeSpan age, TimeProvider time) {
+    public static void DeleteExpired(ConfigRoot config, TimeProvider time) {
         try {
             var dir = config.Path("commits");
             if (!Directory.Exists(dir)) return;
 
-            var cutoff = (time.GetUtcNow() - age).UtcDateTime;
+            var cutoff = (time.GetUtcNow() - Retention).UtcDateTime;
 
             foreach (var file in Directory.EnumerateFiles(dir)) {
                 try { if (File.GetLastWriteTimeUtc(file) < cutoff) File.Delete(file); } catch { }

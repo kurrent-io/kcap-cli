@@ -66,7 +66,7 @@ public sealed class ClaudeHookCommand(
 
     public Task<int> Handle(TextReader stdin, TextWriter? stdout = null) {
         var spool = new HookSpool(config, clock.Time, Url);
-        spool.ReapOlderThan(TimeSpan.FromDays(30));
+        spool.DeleteExpired();
 
         return HandleWithDeps(
             spool,

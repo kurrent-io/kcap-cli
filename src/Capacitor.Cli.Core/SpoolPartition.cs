@@ -10,6 +10,8 @@ namespace Capacitor.Cli.Core;
 /// partition existed, and the first drain to run adopts them for its own server.
 /// </summary>
 static class SpoolPartition {
+    public static readonly TimeSpan Retention = TimeSpan.FromDays(30);
+
     public static string DirFor(string root, string? server) =>
         Path.Combine(root, server is null
             ? "none"
