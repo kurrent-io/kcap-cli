@@ -12,12 +12,18 @@ namespace Capacitor.App.Services;
 public sealed class ServerPageSource : IPageSource, IAsyncDisposable {
     readonly AuthenticatedServerReads<PagesClient> _reads;
     readonly LastReads<SessionPagesRead> _last = new(capacity: 32);
+    readonly Func<CancellationToken, Task<string?>>? _viewerName;
 
     public ServerPageSource(ConfigRoot config, ProfileContext? profiles, ProfileOverrides env,
             MachineAuth machine, AuthenticatedServerReads<PagesClient>.ClientFactory? factory = null,
-            LocalRoot? localRoot = null) {
+            LocalRoot? localRoot = null, Func<CancellationToken, Task<string?>>? viewerName = null) {
         _reads = new(config, profiles, env, machine, (http, url) => new PagesClient(http, url), factory, localRoot: localRoot);
+        _viewerName = viewerName;
     }
+
+    /// The name the stored sign-in carries for this profile, which is the one the app shows.
+    public static Func<CancellationToken, Task<string?>> StoredSignInName(TokenStore tokens, ProfileContext? profiles) =>
+        async ct => profiles is null ? null : (await tokens.LoadForProfileAsync(profiles.Name, ct).ConfigureAwait(false))?.GitHubUsername;
 
     public async Task<SessionPagesRead> ReadAsync(string sessionId, CancellationToken ct) {
         var read = await _last.RecordAsync(sessionId, () => _reads.ReadAsync(
@@ -43,8 +49,18 @@ public sealed class ServerPageSource : IPageSource, IAsyncDisposable {
         Bridge((channel, token) => channel.ResultsAsync(artefactId, version, token), ct);
 
     public Task<PageResultsAccess> ResultsAccessAsync(string artefactId, ArtefactDto page, CancellationToken ct) =>
-        _reads.ReadAsync((channel, token) => channel.ResultsAccessAsync(artefactId, page, token), _ => false,
-            PageResultsAccess.Unknown, PageResultsAccess.Unknown, ct);
+        Uncached((channel, token) => channel.ResultsAccessAsync(artefactId, page, token), access => access == PageResultsAccess.SignedOut,
+            PageResultsAccess.SignedOut, PageResultsAccess.Unknown, ct);
+
+    public async Task<string> ViewerNameAsync(CancellationToken ct) {
+        if (_viewerName is null) return "";
+        try {
+            return await _viewerName(ct).ConfigureAwait(false) ?? "";
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            Console.Error.WriteLine($"kcap: could not read the signed-in name: {ex.Message}");
+            return "";
+        }
+    }
 
     Task<PageBridgeReply> Bridge(Func<PagesClient, CancellationToken, Task<PageBridgeReply>> call, CancellationToken ct) =>
         Uncached(call, reply => reply.Status == 401, new PageBridgeReply(401, null), new PageBridgeReply(0, null), ct);

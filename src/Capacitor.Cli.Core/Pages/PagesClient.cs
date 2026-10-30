@@ -78,6 +78,7 @@ public sealed class PagesClient(HttpClient http, string serverUrl) {
                      && body.TryGetProperty("mode", out var mode) && mode.ValueKind == JsonValueKind.String && mode.GetString() == "owner"
                 => PageResultsAccess.Hidden,
             200        => PageResultsAccess.Visible,
+            401        => PageResultsAccess.SignedOut,
             403 or 404 => PageResultsAccess.Hidden,
             _          => PageResultsAccess.Unknown,
         };

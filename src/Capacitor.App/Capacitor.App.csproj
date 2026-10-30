@@ -52,6 +52,7 @@
         <!-- Embed icon licenses so they also travel with the single-file macOS bundle. -->
         <AvaloniaResource Include="Assets\Lucide*-LICENSE.txt" />
         <AvaloniaResource Include="Assets\LobeHub-Icons-LICENSE.txt" />
+        <EmbeddedResource Include="Assets\page-host.js" LogicalName="Capacitor.App.Assets.page-host.js" />
     </ItemGroup>
     <!-- Loaded by PatchedAvaloniaNative in place of the package's library on macOS, and a file of
          its own so codesign can sign it. Native/AvaloniaNative/build.sh rebuilds it on an Avalonia bump.

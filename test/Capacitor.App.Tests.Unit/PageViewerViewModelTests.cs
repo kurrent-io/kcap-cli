@@ -35,8 +35,73 @@ public class PageViewerViewModelTests {
         await Assert.That(h.Vm.State).IsEqualTo(PageViewerState.Ready);
         await Assert.That(h.Vm.Title).IsEqualTo("Release checklist");
         await Assert.That(h.Vm.Html).Contains("sandbox=\"allow-scripts allow-popups\"");
-        await Assert.That(h.Vm.Html).Contains("srcdoc=\"&lt;p class=&quot;x&quot;&gt;Tom &amp; Jerry&lt;/p&gt;\"");
+        await Assert.That(h.Vm.Html).Contains("&lt;p class=&quot;x&quot;&gt;Tom &amp; Jerry&lt;/p&gt;\"");
         await Assert.That(h.Source.ContentRequested).IsEquivalentTo(new[] { (Id, (int?)null) });
+    }
+
+    [Test]
+    public async Task Every_load_binds_a_fresh_nonce_into_its_host_document() {
+        var h = new Harness();
+        h.Source.EnqueueContent(new PageContentRead.Found(Page(), 3, "<p>a</p>"), new PageContentRead.Found(Page(), 3, "<p>a</p>"));
+
+        await h.Vm.LoadAsync(CancellationToken.None);
+        var first = h.Vm.Nonce;
+        await Assert.That(first).IsNotNull();
+        await Assert.That(h.Vm.Html).Contains(first!);
+
+        await h.Vm.LoadAsync(CancellationToken.None);
+        await Assert.That(h.Vm.Nonce).IsNotEqualTo(first);
+        await Assert.That(h.Vm.Html).Contains(h.Vm.Nonce!);
+        await Assert.That(h.Vm.Html).DoesNotContain(first!);
+    }
+
+    [Test]
+    public async Task A_found_page_reads_results_access_before_it_is_ready() {
+        var h = new Harness();
+        h.Source.Access = PageResultsAccess.Hidden;
+        h.Source.EnqueueContent(new PageContentRead.Found(Page(), 3, "<p>a</p>"));
+
+        await h.Vm.LoadAsync(CancellationToken.None);
+
+        await Assert.That(h.Source.AccessChecks).IsEqualTo(1);
+        await Assert.That(h.Vm.Access).IsEqualTo(PageResultsAccess.Hidden);
+    }
+
+    [Test]
+    public async Task The_bridge_answers_for_the_loaded_page_and_nonce() {
+        var h = new Harness();
+        h.Source.EnqueueContent(new PageContentRead.Found(Page(), 3, "<p>a</p>"));
+        await h.Vm.LoadAsync(CancellationToken.None);
+        var posts = new List<string>();
+
+        await using var bridge = h.Vm.CreateBridge(json => { posts.Add(json); return Task.CompletedTask; })!;
+        await bridge.OnNativeMessageAsync($$$"""{"nonce":"{{{h.Vm.Nonce}}}","data":{"kcap":"v1","type":"ready"}}""");
+
+        await Assert.That(posts.Count).IsGreaterThan(0);
+        await Assert.That(h.Source.BridgeRequested[0]).IsEqualTo(("mine", Id, 3, (System.Text.Json.JsonElement?)null));
+    }
+
+    [Test]
+    public async Task No_bridge_exists_without_a_loaded_page() {
+        var h = new Harness();
+        h.Source.EnqueueContent(new PageContentRead.NotFound());
+        await h.Vm.LoadAsync(CancellationToken.None);
+
+        await Assert.That(h.Vm.CreateBridge(_ => Task.CompletedTask)).IsNull();
+        await Assert.That(h.Vm.Nonce).IsNull();
+    }
+
+    [Test]
+    public async Task An_unusable_webview_drops_the_page_and_falls_back_to_the_browser() {
+        var h = new Harness();
+        h.Source.EnqueueContent(new PageContentRead.Found(Page(), 3, "<p>a</p>"));
+        await h.Vm.LoadAsync(CancellationToken.None);
+
+        h.Vm.WebViewUnusable();
+
+        await Assert.That(h.Vm.State).IsEqualTo(PageViewerState.NoWebView);
+        await Assert.That(h.Vm.Html).IsNull();
+        await Assert.That(h.Vm.CreateBridge(_ => Task.CompletedTask)).IsNull();
     }
 
     [Test]

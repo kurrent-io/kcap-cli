@@ -42,10 +42,13 @@ sealed class FakePageSource : IPageSource {
     public readonly List<(string Id, int? Version)> ContentRequested = [];
     public readonly List<(string Call, string Id, int Version, JsonElement? Payload)> BridgeRequested = [];
     readonly Queue<PageContentRead> _contents = new();
-    readonly Queue<PageBridgeReply> _replies = new();
+    readonly Dictionary<string, Queue<PageBridgeReply>> _replies = new();
+    readonly Queue<PageResultsAccess> _accesses = new();
     public PageContentRead DefaultContent = new PageContentRead.NotFound();
     public PageBridgeReply DefaultReply = new(200, null);
     public PageResultsAccess Access = PageResultsAccess.Visible;
+    public int AccessChecks;
+    public string ViewerName = "";
 
     public void EnqueueContent(params PageContentRead[] reads) {
         foreach (var read in reads) _contents.Enqueue(read);
@@ -60,8 +63,14 @@ sealed class FakePageSource : IPageSource {
         return gate;
     }
 
-    public void EnqueueReply(params PageBridgeReply[] replies) {
-        foreach (var reply in replies) _replies.Enqueue(reply);
+    /// Replies for one call ("submit", "mine" or "results"), answered in order before DefaultReply.
+    public void EnqueueReply(string call, params PageBridgeReply[] replies) {
+        if (!_replies.TryGetValue(call, out var queue)) _replies[call] = queue = new();
+        foreach (var reply in replies) queue.Enqueue(reply);
+    }
+
+    public void EnqueueAccess(params PageResultsAccess[] accesses) {
+        foreach (var access in accesses) _accesses.Enqueue(access);
     }
 
     public async Task<PageContentRead> ReadContentAsync(string artefactId, int? version, CancellationToken ct) {
@@ -75,11 +84,17 @@ sealed class FakePageSource : IPageSource {
     public Task<PageBridgeReply> MineAsync(string artefactId, int version, CancellationToken ct) => Reply("mine", artefactId, version, null);
     public Task<PageBridgeReply> ResultsAsync(string artefactId, int version, CancellationToken ct) => Reply("results", artefactId, version, null);
 
-    public Task<PageResultsAccess> ResultsAccessAsync(string artefactId, ArtefactDto page, CancellationToken ct) => Task.FromResult(Access);
+    public async Task<PageResultsAccess> ResultsAccessAsync(string artefactId, ArtefactDto page, CancellationToken ct) {
+        AccessChecks++;
+        await Task.Yield();
+        return _accesses.Count > 0 ? _accesses.Dequeue() : Access;
+    }
+
+    public Task<string> ViewerNameAsync(CancellationToken ct) => Task.FromResult(ViewerName);
 
     async Task<PageBridgeReply> Reply(string call, string artefactId, int version, JsonElement? payload) {
         BridgeRequested.Add((call, artefactId, version, payload));
         await Task.Yield();
-        return _replies.Count > 0 ? _replies.Dequeue() : DefaultReply;
+        return _replies.TryGetValue(call, out var queue) && queue.Count > 0 ? queue.Dequeue() : DefaultReply;
     }
 }

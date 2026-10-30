@@ -16,4 +16,6 @@ public interface IPageSource {
     Task<PageBridgeReply> MineAsync(string artefactId, int version, CancellationToken ct);
     Task<PageBridgeReply> ResultsAsync(string artefactId, int version, CancellationToken ct);
     Task<PageResultsAccess> ResultsAccessAsync(string artefactId, ArtefactDto page, CancellationToken ct);
+    /// The signed-in viewer's display name, empty when there is none.
+    Task<string> ViewerNameAsync(CancellationToken ct);
 }

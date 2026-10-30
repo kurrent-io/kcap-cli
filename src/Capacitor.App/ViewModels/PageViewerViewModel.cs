@@ -72,6 +72,9 @@ public sealed class PageViewerViewModel : ReactiveObject {
 
     public ArtefactDto? Page { get; private set; }
     public int Version { get; private set; }
+    /// This load's proof for the bridge, bound into Html's host script; null without a page.
+    public string? Nonce { get; private set; }
+    public PageResultsAccess Access { get; private set; } = PageResultsAccess.Unknown;
 
     /// A link the page tried to follow, held until the user opens or dismisses it: a page's script
     /// must never reach the browser without a click in the app.
@@ -112,7 +115,7 @@ public sealed class PageViewerViewModel : ReactiveObject {
             read = await _source.ReadContentAsync(ArtefactId, null, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) {
-            if (generation == _generation) State = previous == PageViewerState.Loading ? PageViewerState.Unreachable : previous;
+            Abandon();
             return;
         }
         catch (Exception ex) {
@@ -122,20 +125,61 @@ public sealed class PageViewerViewModel : ReactiveObject {
         if (generation != _generation) return;
 
         if (read is PageContentRead.Found found) {
+            // Read before the page loads: its bridge must exist by the time the page says ready.
+            PageResultsAccess access;
+            try {
+                access = await ReadAccessAsync(found.Page, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+                Abandon();
+                return;
+            }
+            if (generation != _generation) return;
             Page = found.Page;
             Version = found.Version;
+            Access = access;
+            Nonce = PageHostDocument.NewNonce();
             Title = found.Page.Title;
-            Html = PageHostDocument.Build(found.Html);
+            Html = PageHostDocument.Build(found.Html, Nonce);
             State = PageViewerState.Ready;
             return;
         }
+        Nonce = null;
         Html = null;
         State = read switch {
             PageContentRead.NotFound  => PageViewerState.NotFound,
             PageContentRead.SignedOut => PageViewerState.SignedOut,
             _                         => PageViewerState.Unreachable,
         };
+
+        void Abandon() {
+            if (generation == _generation) State = previous == PageViewerState.Loading ? PageViewerState.Unreachable : previous;
+        }
     }
+
+    async Task<PageResultsAccess> ReadAccessAsync(ArtefactDto page, CancellationToken ct) {
+        try {
+            return await _source.ResultsAccessAsync(ArtefactId, page, ct);
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            Console.Error.WriteLine($"kcap: page results access read failed: {ex.Message}");
+            return PageResultsAccess.Unknown;
+        }
+    }
+
+    /// The WebView cannot be made safe for a page here, so the page is offered in the browser.
+    public void WebViewUnusable() {
+        _generation++;
+        Nonce = null;
+        Html = null;
+        State = PageViewerState.NoWebView;
+    }
+
+    /// The bridge for the page this load found, answering only messages carrying its nonce; null
+    /// when no page is loaded. The caller starts and disposes it.
+    public PageBridge? CreateBridge(Func<string, Task> postToPage) =>
+        Page is { } page && Nonce is { } nonce
+            ? new PageBridge(_source, page, Version, Access, nonce, postToPage, Time)
+            : null;
 
     /// True when the WebView must not perform this navigation. Only the host document and its
     /// frames' srcdoc load in place; any other target, in any frame, is offered for the browser.

@@ -156,7 +156,7 @@ public class PagesClientBridgeTests {
     [Arguments(HttpStatusCode.NotFound, PageResultsAccess.Hidden)]
     [Arguments(HttpStatusCode.Forbidden, PageResultsAccess.Hidden)]
     [Arguments(HttpStatusCode.ServiceUnavailable, PageResultsAccess.Unknown)]
-    [Arguments(HttpStatusCode.Unauthorized, PageResultsAccess.Unknown)]
+    [Arguments(HttpStatusCode.Unauthorized, PageResultsAccess.SignedOut)]
     [Arguments(HttpStatusCode.TooManyRequests, PageResultsAccess.Unknown)]
     public async Task Results_statuses_map_to_access(HttpStatusCode status, PageResultsAccess expected) {
         var (access, _) = await Access(Detail, status, "{}");

@@ -1015,7 +1015,8 @@ public partial class App : Application {
         var pullRequests = new ServerPullRequestSource(_config, profiles, _serverEnv, _machineEnv, _time, localRoot: _localRoot);
         var plans = new ServerPlanSource(_config, profiles, _serverEnv, _machineEnv, localRoot: _localRoot);
         var planArtifacts = new ServerPlanArtifactSource(_config, profiles, _serverEnv, _machineEnv, localRoot: _localRoot);
-        var pages = new ServerPageSource(_config, profiles, _serverEnv, _machineEnv, localRoot: _localRoot);
+        var pages = new ServerPageSource(_config, profiles, _serverEnv, _machineEnv, localRoot: _localRoot,
+            viewerName: ServerPageSource.StoredSignInName(_foreignHttp.GetRequiredService<TokenStore>(), profiles));
         var senders = new ServerMessageSenderSource(_config, profiles, _serverEnv, _machineEnv, localRoot: _localRoot);
         var ghRunner = new ProcessRunner(_time);
         var gh = new GitHubCliRunner(ghRunner, OperatingSystem.IsWindows() ? null : new LoginShellProbe(ghRunner, Environment.GetEnvironmentVariable), Environment.GetEnvironmentVariable);
