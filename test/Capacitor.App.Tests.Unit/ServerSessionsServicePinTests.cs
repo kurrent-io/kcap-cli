@@ -246,6 +246,41 @@ public class ServerSessionsServicePinTests {
     }
 
     [Test]
+    public async Task Deleted_push_for_a_held_unlisted_pin_drops_the_row_and_keeps_the_pin_id() {
+        using var rig = new Rig();
+        var dropped = ImmutableList<string>.Empty;
+        using var sub = rig.Service.Dropped.Subscribe(id => ImmutableInterlocked.Update(ref dropped, l => l.Add(id)));
+        rig.Connect();
+        await rig.PinUnlistedAsync("x", Summary("x"));
+        await Assert.That(rig.Latest.Pinned).IsNotNull();
+
+        rig.Push(SessionPushKind.Deleted, "x");
+
+        await Assert.That(dropped).IsEquivalentTo(["x"]);
+        await Assert.That(rig.Latest.Pinned).IsNull();
+        await Assert.That(rig.Latest.PinnedSessionId).IsEqualTo("x");
+        await Assert.That(rig.Service.PinnedSessionId).IsEqualTo("x");
+    }
+
+    [Test]
+    public async Task A_reconnect_refreshes_a_held_pin() {
+        using var rig = new Rig();
+        rig.Connect();
+        await rig.PinUnlistedAsync("x", Summary("x", title: "before"));
+        var calls = rig.Summaries.Calls.Count;
+
+        rig.Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
+        rig.Connect(epoch: 2);
+        await Eventually(() => rig.Summaries.Calls.Count == calls + 1, "refresh on reconnect");
+        rig.Summaries.Answer(calls, Summary("x", title: "after"));
+
+        await Eventually(() => rig.Latest.Pinned?.Title == "after", "refreshed row published");
+        await Task.Delay(100);
+        await Assert.That(rig.Summaries.Calls.Count).IsEqualTo(calls + 1);
+        await Assert.That(rig.Summaries.Calls[calls].Id).IsEqualTo("x");
+    }
+
+    [Test]
     public async Task Listing_row_wins_while_present_and_the_pin_rehydrates_after_it_leaves() {
         using var rig = new Rig();
         var listed = Row("x", owner: "teammate");

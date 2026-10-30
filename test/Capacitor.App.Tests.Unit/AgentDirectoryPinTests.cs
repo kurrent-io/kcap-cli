@@ -145,4 +145,90 @@ public class AgentDirectoryPinTests {
         await Assert.That(dir.RowForSession("S")).IsEqualTo(("S", AgentOrigin.Server));
         await Assert.That(dir.RowForSession("unknown")).IsNull();
     }
+    /// What the real service publishes for one pinned session under a scope: live rows in the
+    /// unscoped listing, the viewer's own also in the scoped one, ended rows only where the scope
+    /// lists them, and the pinned row only while no listing carries it.
+    static void PublishPinned(FakeServerSessionsService sessions, RailScope scope, RepoSessionDto dto, bool viewerOwns) {
+        sessions.LiveCache.Clear();
+        sessions.MineLiveCache.Clear();
+        sessions.EndedCache.Clear();
+        var listed = false;
+        if (dto.Status == "active") {
+            sessions.LiveCache.AddOrUpdate(dto);
+            if (scope == RailScope.Mine && viewerOwns) sessions.MineLiveCache.AddOrUpdate(dto);
+            listed = true;
+        } else if (scope == RailScope.Team || viewerOwns) {
+            sessions.EndedCache.AddOrUpdate(dto);
+            listed = true;
+        }
+        Pin(sessions, listed ? null : dto, dto.SessionId);
+    }
+
+    /// A search-opened session resolves to the same row under either scope, and a daemon row that
+    /// survives the merge never has the server row standing beside it.
+    [Test]
+    [Arguments("hosted-local", "a1", AgentOrigin.Local)]
+    [Arguments("hosted-remote", "b1", AgentOrigin.Remote)]
+    [Arguments("failed-local", "a1", AgentOrigin.Local)]
+    [Arguments("interrupted-local", "a1", AgentOrigin.Local)]
+    [Arguments("unproven-twin", "a1", AgentOrigin.Local)]
+    [Arguments("session-only", "S", AgentOrigin.Server)]
+    [Arguments("teammate-live-only", "S", AgentOrigin.Server)]
+    public async Task A_pinned_session_resolves_to_the_same_row_under_mine_and_team(string scenario, string expectedId, AgentOrigin expectedOrigin) {
+        var (local, remote, sessions, dir) = Build();
+        using var _d = dir;
+        using var _s = sessions;
+        using var _r = remote;
+        sessions.ViewerIdsSubject.OnNext(new HashSet<string>(StringComparer.Ordinal) { "me" });
+        LocalConnected(local);
+        RepoSessionDto dto;
+        var viewerOwns = true;
+        switch (scenario) {
+            case "hosted-local":
+                local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "S"));
+                dto = Listed("S", "active");
+                break;
+            case "hosted-remote":
+                remote.Cache.AddOrUpdate(Remote("b1", daemon: "home-pc", owner: "other", sessionId: "S"));
+                dto = Listed("S", "active", owner: "other", ownerName: "Tony Young", access: "");
+                viewerOwns = false;
+                break;
+            case "failed-local":
+                local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "S", status: "Failed"));
+                dto = Listed("S");
+                break;
+            case "interrupted-local":
+                local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "S", status: "Interrupted"));
+                dto = Listed("S");
+                break;
+            case "unproven-twin":
+                local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "S"));
+                remote.Cache.AddOrUpdate(Remote("b1", daemon: "home-pc", owner: "me", sessionId: "S"));
+                dto = Listed("S", "active");
+                break;
+            case "session-only":
+                dto = Listed("S", owner: "other", ownerName: "Tony Young", access: "");
+                viewerOwns = false;
+                break;
+            case "teammate-live-only":
+                dto = Listed("S", "active", owner: "other", ownerName: "Tony Young", access: "");
+                viewerOwns = false;
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
+        }
+
+        var resolved = new List<(string Id, AgentOrigin Origin)?>();
+        var serverBesideDaemon = new List<bool>();
+        foreach (var scope in new[] { RailScope.Team, RailScope.Mine }) {
+            sessions.Scope = scope;
+            PublishPinned(sessions, scope, dto, viewerOwns);
+            resolved.Add(dir.RowForSession("S"));
+            var rows = dir.Rows.Items.Where(r => r.SessionId == "S" || r.Key == "server:S").ToList();
+            serverBesideDaemon.Add(rows.Any(r => r.Origin == AgentOrigin.Server) && rows.Any(r => r.Origin != AgentOrigin.Server));
+        }
+
+        await Assert.That(resolved).IsEquivalentTo(new (string, AgentOrigin)?[] { (expectedId, expectedOrigin), (expectedId, expectedOrigin) });
+        await Assert.That(serverBesideDaemon).IsEquivalentTo([false, false]);
+    }
 }
