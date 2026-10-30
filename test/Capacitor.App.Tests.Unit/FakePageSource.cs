@@ -51,12 +51,22 @@ sealed class FakePageSource : IPageSource {
         foreach (var read in reads) _contents.Enqueue(read);
     }
 
+    readonly Queue<TaskCompletionSource<PageContentRead>> _contentGates = new();
+
+    /// The next content read awaits the returned source instead of answering from the queue.
+    public TaskCompletionSource<PageContentRead> ContentGate() {
+        var gate = new TaskCompletionSource<PageContentRead>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _contentGates.Enqueue(gate);
+        return gate;
+    }
+
     public void EnqueueReply(params PageBridgeReply[] replies) {
         foreach (var reply in replies) _replies.Enqueue(reply);
     }
 
     public async Task<PageContentRead> ReadContentAsync(string artefactId, int? version, CancellationToken ct) {
         ContentRequested.Add((artefactId, version));
+        if (_contentGates.Count > 0) return await _contentGates.Dequeue().Task;
         await Task.Yield();
         return _contents.Count > 0 ? _contents.Dequeue() : DefaultContent;
     }
