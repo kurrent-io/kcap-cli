@@ -33,8 +33,13 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
-        // Elevated first, so the install below already finds the service and enrolls with it.
+        var serviceId = DaemonStore.Sanitize(DaemonNameResolver.Resolve(rest, profiles.DaemonName));
+
+        // Elevated first, so the install below already finds the service and enrolls with it. The elevated step
+        // changes the machine's service, so a hosted caller is refused ahead of it.
         if (system && action == "install" && OperatingSystem.IsWindows()) {
+            if (await RefuseHostedCallerAsync(HostsCallerOf(store), serviceId, RetireTarget(rest), rest)) return 1;
+
             var elevated = WindowsServiceElevation.Run("install");
             if (elevated != 0) return await ElevationFailedAsync(elevated, "install");
         }
@@ -47,7 +52,6 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
-        var serviceId = DaemonStore.Sanitize(DaemonNameResolver.Resolve(rest, profiles.DaemonName));
         var verbs = new DaemonServiceCommands(store, root, profiles, manager, serviceId, home, time);
 
         // An update of the service binary: when the daemon is already enrolled as asked, the elevated step was the
@@ -270,6 +274,30 @@ sealed class DaemonServiceCommands(
 
     /// <summary>Whether the daemon of a service id hosts this process. Test seam; production asks <see cref="HostedCaller"/>.</summary>
     internal Func<string, bool>? HostsCaller { get; init; }
+
+    static Func<string, bool> HostsCallerOf(DaemonStore store) => serviceId => HostedCaller.HostedBy(store, serviceId);
+
+    /// <summary>Refuses an install whose service <paramref name="id"/> or retired daemon hosts this process, naming
+    /// the command to run elsewhere: replacing that daemon would end this command with it.</summary>
+    static async Task<bool> RefuseHostedCallerAsync(Func<string, bool> hostsCaller, string id, string? retireId, string[] args) {
+        if (new[] { id, retireId }.FirstOrDefault(target => target is not null && hostsCaller(target)) is not { } host) return false;
+
+        List<string> words = ["kcap", "daemon", "service", "install", .. args];
+        if (!args.Contains("--name")) words.AddRange(["--name", id]);
+        await Console.Error.WriteLineAsync(HostedCaller.Refusal(host, $"`{string.Join(' ', words)}`"));
+
+        return true;
+    }
+
+    /// <summary>The sanitized <c>--retire</c> target, or null when there is none or it does not parse; the install
+    /// reports a malformed one itself.</summary>
+    static string? RetireTarget(string[] args) {
+        try {
+            return DaemonCommands.ExtractFlagValue(args, "--retire") is { } retire ? DaemonStore.Sanitize(retire) : null;
+        } catch (ArgumentException) {
+            return null;
+        }
+    }
 
     static readonly TimeSpan ForcedLockWait = TimeSpan.FromSeconds(10);
 
@@ -503,14 +531,7 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
-        var hostsCaller = HostsCaller ?? (serviceId => HostedCaller.HostedBy(store, serviceId));
-        if (new[] { id, retireId }.FirstOrDefault(target => target is not null && hostsCaller(target)) is { } host) {
-            List<string> words = ["kcap", "daemon", "service", "install", .. args];
-            if (!args.Contains("--name")) words.AddRange(["--name", id]);
-            var command = $"`{string.Join(' ', words)}`";
-            await Console.Error.WriteLineAsync(HostedCaller.Refusal(host, command));
-            return 1;
-        }
+        if (await RefuseHostedCallerAsync(HostsCaller ?? HostsCallerOf(store), id, retireId, args)) return 1;
 
         var daemonPath = UnitIdentity.ResolveDaemonBinary();
         if (daemonPath is null) { await Console.Error.WriteLineAsync(DaemonCommands.DaemonNotFoundMessage()); return 1; }
