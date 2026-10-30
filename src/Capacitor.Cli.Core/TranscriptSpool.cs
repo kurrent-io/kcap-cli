@@ -140,10 +140,17 @@ public sealed partial class TranscriptSpool(SpoolPartition partition, TimeProvid
             : null);
 
     /// <summary>True if this session still has undelivered spool entries (live .jsonl or .draining temp).</summary>
-    public bool HasBacklog(string sessionId) =>
-        SafeSessionId.IsMatch(sessionId) && Directory.Exists(DirectoryPath)
-        && (File.Exists(Path.Combine(DirectoryPath, $"{EncodeKey(sessionId)}.transcript.jsonl"))
-            || Directory.EnumerateFiles(DirectoryPath, $"{EncodeKey(sessionId)}.*.transcript.draining").Any());
+    public bool HasBacklog(string sessionId) {
+        if (!SafeSessionId.IsMatch(sessionId)) return false;
+
+        var key             = EncodeKey(sessionId);
+        var hasLiveFile     = HasFile($"{key}.transcript.jsonl");
+        var hasDrainingTemp = HasFile($"{key}.*.transcript.draining");
+
+        return hasLiveFile || hasDrainingTemp;
+    }
+
+    bool HasFile(string pattern) => Directory.Exists(DirectoryPath) && Directory.EnumerateFiles(DirectoryPath, pattern).Any();
 
     /// <summary>Every distinct session id with a live .jsonl, a recovered .draining temp, or a
     /// needs-import marker (a marker can outlive its transcript file if a prior pass ran out of

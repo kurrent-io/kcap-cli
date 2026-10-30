@@ -242,11 +242,18 @@ public sealed partial class HookSpool(SpoolPartition partition, TimeProvider tim
     /// Callers use this as an ordering guard (e.g. "don't post my fresh session-end directly — a
     /// withheld ordered-drain phase is still in flight for this session") so both temp namespaces
     /// must be visible here even though only the ordered drain ever creates/consumes the latter.</summary>
-    public bool HasBacklog(string sessionId) =>
-        SafeSessionId.IsMatch(sessionId) && Directory.Exists(DirectoryPath)
-        && (File.Exists(Path.Combine(DirectoryPath, $"{EncodeKey(sessionId)}.jsonl"))
-            || Directory.EnumerateFiles(DirectoryPath, $"{EncodeKey(sessionId)}.*.draining").Any()
-            || Directory.EnumerateFiles(DirectoryPath, $"{EncodeKey(sessionId)}.ordered-*").Any());
+    public bool HasBacklog(string sessionId) {
+        if (!SafeSessionId.IsMatch(sessionId)) return false;
+
+        var key            = EncodeKey(sessionId);
+        var hasLiveFile    = HasFile($"{key}.jsonl");
+        var hasFifoTemp    = HasFile($"{key}.*.draining");
+        var hasOrderedTemp = HasFile($"{key}.ordered-*");
+
+        return hasLiveFile || hasFifoTemp || hasOrderedTemp;
+    }
+
+    bool HasFile(string pattern) => Directory.Exists(DirectoryPath) && Directory.EnumerateFiles(DirectoryPath, pattern).Any();
 
     /// <summary>Every distinct session id with a live .jsonl or recovered .draining/.ordered-* temp,
     /// in no particular order (callers that need current-session-first ordering add it themselves).</summary>
