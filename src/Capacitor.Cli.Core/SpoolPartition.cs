@@ -12,13 +12,13 @@ namespace Capacitor.Cli.Core;
 public sealed class SpoolPartition {
     static TimeSpan Retention { get; } = TimeSpan.FromDays(30);
 
-    public string Dir { get; }
+    public string DirectoryPath { get; }
 
     string? Root { get; }
 
     SpoolPartition(string dir, string? root) {
-        Dir  = dir;
-        Root = root;
+        DirectoryPath = dir;
+        Root          = root;
     }
 
     public static SpoolPartition Partitioned(string root, string? server) => new(Path.Combine(root, Key(server)), root);
@@ -33,26 +33,36 @@ public sealed class SpoolPartition {
         try {
             foreach (var file in Directory.EnumerateFiles(Root)) {
                 try {
-                    Directory.CreateDirectory(Dir);
+                    Directory.CreateDirectory(DirectoryPath);
                     var name   = Path.GetFileName(file);
-                    var target = Path.Combine(Dir, name);
-                    if (File.Exists(target) && collisionName(name) is { } other) target = Path.Combine(Dir, other);
+                    var target = Path.Combine(DirectoryPath, name);
+                    if (File.Exists(target) && collisionName(name) is { } other) target = Path.Combine(DirectoryPath, other);
                     File.Move(file, target);
-                } catch { }
+                } catch {
+                    // Ignore: left in the root for the next drain or the reap
+                }
             }
-        } catch { }
+        } catch {
+            // Ignore: the next drain adopts what is left
+        }
     }
 
     /// <summary>Sweeps every server's directory, so one no longer configured is reaped too.</summary>
     public void DeleteExpired(TimeProvider time) {
-        var top = Root ?? Dir;
+        var top = Root ?? DirectoryPath;
         if (!Directory.Exists(top)) return;
         var cutoff = (time.GetUtcNow() - Retention).UtcDateTime;
         try {
             foreach (var file in Directory.EnumerateFiles(top, "*", SearchOption.AllDirectories)) {
-                try { if (File.GetLastWriteTimeUtc(file) < cutoff) File.Delete(file); } catch { }
+                try {
+                    if (File.GetLastWriteTimeUtc(file) < cutoff) File.Delete(file);
+                } catch {
+                    // Ignore: the next sweep retries it
+                }
             }
-        } catch { }
+        } catch {
+            // Ignore: the next sweep retries
+        }
     }
 
     static string Key(string? server) => server is null

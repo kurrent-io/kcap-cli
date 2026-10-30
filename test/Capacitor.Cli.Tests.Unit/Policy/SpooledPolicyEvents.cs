@@ -13,7 +13,7 @@ static class SpooledPolicyEvents {
     /// <summary>The parsed bodies of a session's spooled entries for one route, in arrival order.</summary>
     public static List<JsonNode> For(ConfigRoot config, string? server, string sessionId, string route) {
         var bodies = new List<JsonNode>();
-        var path = Path.Combine(new HookSpool(config, TimeProvider.System, server).Dir, $"{sessionId}.jsonl");
+        var path = Path.Combine(new HookSpool(config, TimeProvider.System, server).DirectoryPath, $"{sessionId}.jsonl");
         if (!File.Exists(path)) return bodies;
 
         foreach (var line in File.ReadAllLines(path)) {

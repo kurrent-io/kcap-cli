@@ -259,7 +259,7 @@ internal sealed class AgentHookPoster(
     internal async Task DrainSpoolsCoreAsync(
             HookSpool lifecycle, TranscriptSpool transcript, string? sessionId,
             Func<CancellationToken, Task<AuthAttempt>> clientFactory) {
-        if (!TryClaimDrainAttempt(lifecycle.Dir)) return; // throttled — a recent attempt already ran
+        if (!TryClaimDrainAttempt(lifecycle.DirectoryPath)) return; // throttled — a recent attempt already ran
 
         // Retention runs even when delivery cannot: the reap lives here, and Program.cs skips this
         // whole call while the URL is unacceptable, so an indefinitely broken config would otherwise

@@ -13,7 +13,7 @@ public enum DrainOutcome {
 
 /// <summary>
 /// Vendor-neutral on-disk spool for lifecycle hook POSTs whose delivery failed.
-/// Per-session JSONL (<c>{Dir}/&lt;dashless-sid&gt;.jsonl</c>), one
+/// Per-session JSONL (<c>{DirectoryPath}/&lt;dashless-sid&gt;.jsonl</c>), one
 /// <c>{"route","body"}</c> object per line in arrival order. Drains are
 /// rotate-on-drain: the live file is atomically renamed to a private
 /// <c>.draining</c> temp before reading, so concurrent appends never collide
@@ -56,10 +56,10 @@ public sealed partial class HookSpool(SpoolPartition partition, TimeProvider tim
     static          int   seqCounter;
 
     /// <summary>The directory where spool files are stored.</summary>
-    internal string Dir => partition.Dir;
+    internal string DirectoryPath => partition.DirectoryPath;
 
     string? LivePathFor(string sessionId) =>
-        SafeSessionId.IsMatch(sessionId) ? Path.Combine(Dir, $"{EncodeKey(sessionId)}.jsonl") : null;
+        SafeSessionId.IsMatch(sessionId) ? Path.Combine(DirectoryPath, $"{EncodeKey(sessionId)}.jsonl") : null;
 
     /// <summary>
     /// Appends one payload for a later drain pass. Returns whether it was actually persisted, so a
@@ -69,7 +69,7 @@ public sealed partial class HookSpool(SpoolPartition partition, TimeProvider tim
         var path = LivePathFor(sessionId);
         if (path is null) return false;
         try {
-            Directory.CreateDirectory(Dir);
+            Directory.CreateDirectory(DirectoryPath);
             var line = new JsonObject { ["route"] = route, ["body"] = rawPayloadJson }.ToJsonString();
             EnsureUnderCap(path, Encoding.UTF8.GetByteCount(line) + 1);
             File.AppendAllText(path, $"{line}\n");
@@ -131,7 +131,9 @@ public sealed partial class HookSpool(SpoolPartition partition, TimeProvider tim
             while (lines.Count > 0 && lines.Sum(l => Encoding.UTF8.GetByteCount(l) + 1) + incomingBytes > capBytes)
                 lines.RemoveAt(0);
             File.WriteAllText(path, lines.Count > 0 ? string.Join('\n', lines) + "\n" : "");
-        } catch { }
+        } catch {
+            // Ignore: trimming is best-effort, the next append trims again
+        }
     }
 
     public async Task DrainAllAsync(
@@ -140,27 +142,17 @@ public sealed partial class HookSpool(SpoolPartition partition, TimeProvider tim
             TimeSpan                                  budget,
             CancellationToken                         ct) {
         AdoptUnpartitioned(FifoTemp);
-        if (!Directory.Exists(Dir)) return;
         poster = RecordingDeliveries(poster);
         var started = time.GetTimestamp();
         bool Expired() => time.GetElapsedTime(started) >= budget;
 
-        foreach (var sid in OrderedSessionIds(currentSessionId)) {
+        var sessions = SessionIdsWithBacklog().ToList();
+        if (currentSessionId is not null && sessions.Remove(currentSessionId)) sessions.Insert(0, currentSessionId);
+
+        foreach (var sid in sessions) {
             if (Expired() || ct.IsCancellationRequested) return;
             if (await DrainSessionAsync(sid, poster, Expired, ct)) return; // transient → stop the pass
         }
-    }
-
-    // Current session first (if it has anything), then every other session once.
-    IEnumerable<string> OrderedSessionIds(string? currentSessionId) {
-        var ids = new List<string>();
-        if (currentSessionId is not null && SafeSessionId.IsMatch(currentSessionId) && HasAny(currentSessionId))
-            ids.Add(currentSessionId);
-        foreach (var f in Directory.EnumerateFiles(Dir)) {
-            var sid = SessionIdOf(f);
-            if (sid is not null && !ids.Contains(sid)) ids.Add(sid);
-        }
-        return ids;
     }
 
     /// <summary>For the ordered drain. Each drain reads only its own temps, so a colliding live file
@@ -169,10 +161,6 @@ public sealed partial class HookSpool(SpoolPartition partition, TimeProvider tim
 
     void AdoptUnpartitioned(Func<string, string> temp) =>
         partition.AdoptUnpartitioned(name => name.EndsWith(".jsonl", StringComparison.Ordinal) ? temp(name[..^".jsonl".Length]) : null);
-
-    bool HasAny(string sid) =>
-        File.Exists(Path.Combine(Dir, $"{EncodeKey(sid)}.jsonl"))
-     || Directory.EnumerateFiles(Dir, $"{EncodeKey(sid)}.*.draining").Any();
 
     static string? SessionIdOf(string filePath) {
         var name = Path.GetFileName(filePath);
@@ -192,15 +180,15 @@ public sealed partial class HookSpool(SpoolPartition partition, TimeProvider tim
     // the two drains from ever cross-consuming each other's in-flight files.
     async Task<bool> DrainSessionAsync(
             string sid, Func<string, string, Task<DrainOutcome>> poster, Func<bool> expired, CancellationToken ct) {
-        foreach (var temp in Directory.EnumerateFiles(Dir, $"{EncodeKey(sid)}.*.draining").OrderBy(File.GetCreationTimeUtc)) {
+        foreach (var temp in Directory.EnumerateFiles(DirectoryPath, $"{EncodeKey(sid)}.*.draining").OrderBy(File.GetCreationTimeUtc)) {
             if (expired() || ct.IsCancellationRequested) return false;
             if (await DrainFileAsync(temp, poster, expired, ct)) return true;
         }
 
-        var live = Path.Combine(Dir, $"{EncodeKey(sid)}.jsonl");
+        var live = Path.Combine(DirectoryPath, $"{EncodeKey(sid)}.jsonl");
         if (!File.Exists(live) || expired() || ct.IsCancellationRequested) return false;
 
-        var rotated = Path.Combine(Dir, FifoTemp(EncodeKey(sid)));
+        var rotated = Path.Combine(DirectoryPath, FifoTemp(EncodeKey(sid)));
         try { File.Move(live, rotated); }
         catch { return false; } // lost the atomic-rename race (or vanished) — the winner handles it
         return await DrainFileAsync(rotated, poster, expired, ct);
@@ -234,10 +222,18 @@ public sealed partial class HookSpool(SpoolPartition partition, TimeProvider tim
         }
 
         if (i >= lines.Length) {
-            try { File.Delete(path); } catch { }
+            try {
+                File.Delete(path);
+            } catch {
+                // Ignore: a leftover temp drains again on the next pass
+            }
             return false;
         }
-        try { await File.WriteAllLinesAsync(path, lines.Skip(i), ct); } catch { }
+        try {
+            await File.WriteAllLinesAsync(path, lines.Skip(i), ct);
+        } catch {
+            // Ignore: the temp still holds the remainder
+        }
         return true;
     }
 
@@ -247,21 +243,16 @@ public sealed partial class HookSpool(SpoolPartition partition, TimeProvider tim
     /// withheld ordered-drain phase is still in flight for this session") so both temp namespaces
     /// must be visible here even though only the ordered drain ever creates/consumes the latter.</summary>
     public bool HasBacklog(string sessionId) =>
-        SafeSessionId.IsMatch(sessionId) && Directory.Exists(Dir)
-        && (File.Exists(Path.Combine(Dir, $"{EncodeKey(sessionId)}.jsonl"))
-            || Directory.EnumerateFiles(Dir, $"{EncodeKey(sessionId)}.*.draining").Any()
-            || Directory.EnumerateFiles(Dir, $"{EncodeKey(sessionId)}.ordered-*").Any());
+        SafeSessionId.IsMatch(sessionId) && Directory.Exists(DirectoryPath)
+        && (File.Exists(Path.Combine(DirectoryPath, $"{EncodeKey(sessionId)}.jsonl"))
+            || Directory.EnumerateFiles(DirectoryPath, $"{EncodeKey(sessionId)}.*.draining").Any()
+            || Directory.EnumerateFiles(DirectoryPath, $"{EncodeKey(sessionId)}.ordered-*").Any());
 
     /// <summary>Every distinct session id with a live .jsonl or recovered .draining/.ordered-* temp,
     /// in no particular order (callers that need current-session-first ordering add it themselves).</summary>
     public IEnumerable<string> SessionIdsWithBacklog() {
-        if (!Directory.Exists(Dir)) return [];
-        var ids = new List<string>();
-        foreach (var f in Directory.EnumerateFiles(Dir)) {
-            var sid = SessionIdOf(f);
-            if (sid is not null && !ids.Contains(sid)) ids.Add(sid);
-        }
-        return ids;
+        if (!Directory.Exists(DirectoryPath)) return [];
+        return [.. Directory.EnumerateFiles(DirectoryPath).Select(SessionIdOf).OfType<string>().Distinct()];
     }
 
     /// <summary>
@@ -287,22 +278,22 @@ public sealed partial class HookSpool(SpoolPartition partition, TimeProvider tim
     public async Task<int> DrainRoutesAsync(
             string sid, bool isTerminal, Func<string, string, Task<DrainOutcome>> poster,
             Func<bool> expired, CancellationToken ct) {
-        if (!SafeSessionId.IsMatch(sid) || !Directory.Exists(Dir)) return 0;
+        if (!SafeSessionId.IsMatch(sid) || !Directory.Exists(DirectoryPath)) return 0;
         poster = RecordingDeliveries(poster);
 
         var consumed = 0;
 
-        foreach (var temp in Directory.EnumerateFiles(Dir, $"{EncodeKey(sid)}.ordered-*").OrderBy(File.GetCreationTimeUtc)) {
+        foreach (var temp in Directory.EnumerateFiles(DirectoryPath, $"{EncodeKey(sid)}.ordered-*").OrderBy(File.GetCreationTimeUtc)) {
             if (expired() || ct.IsCancellationRequested) return consumed;
             var (stopped, n) = await DrainFileRoutesAsync(temp, isTerminal, poster, expired, ct);
             consumed += n;
             if (stopped) return consumed; // stopped — remainder kept
         }
 
-        var live = Path.Combine(Dir, $"{EncodeKey(sid)}.jsonl");
+        var live = Path.Combine(DirectoryPath, $"{EncodeKey(sid)}.jsonl");
         if (!File.Exists(live) || expired() || ct.IsCancellationRequested) return consumed;
 
-        var rotated = Path.Combine(Dir, OrderedTemp(EncodeKey(sid)));
+        var rotated = Path.Combine(DirectoryPath, OrderedTemp(EncodeKey(sid)));
         try { File.Move(live, rotated); }
         catch { return consumed; } // lost the atomic-rename race (or vanished) — the winner handles it
         var (_, more) = await DrainFileRoutesAsync(rotated, isTerminal, poster, expired, ct);
@@ -350,10 +341,18 @@ public sealed partial class HookSpool(SpoolPartition partition, TimeProvider tim
         }
 
         if (i >= lines.Length) {
-            try { File.Delete(path); } catch { }
+            try {
+                File.Delete(path);
+            } catch {
+                // Ignore: a leftover temp drains again on the next pass
+            }
             return (false, consumed);
         }
-        try { await File.WriteAllLinesAsync(path, lines.Skip(i), ct); } catch { }
+        try {
+            await File.WriteAllLinesAsync(path, lines.Skip(i), ct);
+        } catch {
+            // Ignore: the temp still holds the remainder
+        }
         return (true, consumed);
     }
 
@@ -376,16 +375,22 @@ public sealed partial class HookSpool(SpoolPartition partition, TimeProvider tim
     public void MarkEnded(string sessionId) {
         if (!SafeSessionId.IsMatch(sessionId)) return;
         try {
-            Directory.CreateDirectory(Dir);
+            Directory.CreateDirectory(DirectoryPath);
             File.WriteAllText(EndedMarkerPath(sessionId), "");
-        } catch { }
+        } catch {
+            // Ignore: unmarked, a straggler can still post after the end
+        }
     }
 
     /// <summary>Lifts <see cref="MarkEnded"/> for a session known to have run again, so its next end is
     /// delivered rather than discarded as a straggler.</summary>
     public void ClearEnded(string sessionId) {
         if (!SafeSessionId.IsMatch(sessionId)) return;
-        try { File.Delete(EndedMarkerPath(sessionId)); } catch { }
+        try {
+            File.Delete(EndedMarkerPath(sessionId));
+        } catch {
+            // Ignore: still marked, the next end is discarded as a straggler
+        }
     }
 
     /// <summary>
@@ -396,25 +401,35 @@ public sealed partial class HookSpool(SpoolPartition partition, TimeProvider tim
     public void DiscardRemainder(string sessionId) {
         if (!SafeSessionId.IsMatch(sessionId)) return;
         try {
-            if (!Directory.Exists(Dir)) return;
+            if (!Directory.Exists(DirectoryPath)) return;
 
-            var live = Path.Combine(Dir, $"{EncodeKey(sessionId)}.jsonl");
+            var live = Path.Combine(DirectoryPath, $"{EncodeKey(sessionId)}.jsonl");
             if (File.Exists(live)) File.Delete(live);
 
-            foreach (var temp in Directory.EnumerateFiles(Dir, $"{EncodeKey(sessionId)}.*.draining"))
-                try { File.Delete(temp); } catch { }
-            foreach (var temp in Directory.EnumerateFiles(Dir, $"{EncodeKey(sessionId)}.ordered-*"))
-                try { File.Delete(temp); } catch { }
-        } catch { }
+            foreach (var temp in Directory.EnumerateFiles(DirectoryPath, $"{EncodeKey(sessionId)}.*.draining"))
+                try {
+                    File.Delete(temp);
+                } catch {
+                    // Ignore: the next pass discards it again
+                }
+            foreach (var temp in Directory.EnumerateFiles(DirectoryPath, $"{EncodeKey(sessionId)}.ordered-*"))
+                try {
+                    File.Delete(temp);
+                } catch {
+                    // Ignore: the next pass discards it again
+                }
+        } catch {
+            // Ignore: the next pass discards it again
+        }
     }
 
-    string EndedMarkerPath(string sessionId) => Path.Combine(Dir, $".ended-{EncodeKey(sessionId)}");
+    string EndedMarkerPath(string sessionId) => Path.Combine(DirectoryPath, $".ended-{EncodeKey(sessionId)}");
 
     public const string PolicySnapshotRoute = "policy-snapshot";
 
     string? PolicySnapshotMarkerPath(string sessionId, string snapshotId) =>
         SafeSessionId.IsMatch(sessionId)
-            ? Path.Combine(Dir, $".policy-snapshot-{EncodeKey(sessionId)}-{snapshotId[..Math.Min(16, snapshotId.Length)]}")
+            ? Path.Combine(DirectoryPath, $".policy-snapshot-{EncodeKey(sessionId)}-{snapshotId[..Math.Min(16, snapshotId.Length)]}")
             : null;
 
     /// <summary>Whether a drain has had this session's policy snapshot accepted by the server.
@@ -437,7 +452,9 @@ public sealed partial class HookSpool(SpoolPartition partition, TimeProvider tim
              || PolicySnapshotMarkerPath(sid, snap) is not { } path)
                 return;
             File.WriteAllText(path, "");
-        } catch { }
+        } catch {
+            // Ignore: unrecorded, the next decision uploads the snapshot inline again
+        }
     }
 
     public void DeleteExpired() => partition.DeleteExpired(time);

@@ -80,7 +80,7 @@ public class PolicyDecisionEmitterTests : IDisposable {
     [Test]
     public async Task Snapshot_is_spooled_ahead_of_the_decision_it_names() {
         await Emitter.EmitAsync(Event("s4"), Snapshot);
-        var routes = File.ReadAllLines(Path.Combine(new HookSpool(Config.Root, TimeProvider.System, server: null).Dir, "s4.jsonl"))
+        var routes = File.ReadAllLines(Path.Combine(new HookSpool(Config.Root, TimeProvider.System, server: null).DirectoryPath, "s4.jsonl"))
             .Select(l => System.Text.Json.Nodes.JsonNode.Parse(l)!["route"]!.GetValue<string>())
             .ToList();
         await Assert.That(routes.Count).IsEqualTo(2);

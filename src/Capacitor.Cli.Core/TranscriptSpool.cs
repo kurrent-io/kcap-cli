@@ -36,20 +36,20 @@ public sealed partial class TranscriptSpool(SpoolPartition partition, TimeProvid
     static int seqCounter;
 
     /// <summary>The directory where spool files are stored.</summary>
-    internal string Dir => partition.Dir;
+    internal string DirectoryPath => partition.DirectoryPath;
 
     string? LivePathFor(string sessionId) =>
-        SafeSessionId.IsMatch(sessionId) ? Path.Combine(Dir, $"{EncodeKey(sessionId)}.transcript.jsonl") : null;
+        SafeSessionId.IsMatch(sessionId) ? Path.Combine(DirectoryPath, $"{EncodeKey(sessionId)}.transcript.jsonl") : null;
 
     string? MarkerPathFor(string sessionId) =>
-        SafeSessionId.IsMatch(sessionId) ? Path.Combine(Dir, $"{EncodeKey(sessionId)}.needs-import") : null;
+        SafeSessionId.IsMatch(sessionId) ? Path.Combine(DirectoryPath, $"{EncodeKey(sessionId)}.needs-import") : null;
 
     /// <summary>With <paramref name="reserving"/>, refuses the batch unless that one still fits after it.</summary>
     public AppendResult Append(string sessionId, string batchJson, string? reserving = null) {
         var path = LivePathFor(sessionId);
         if (path is null) return AppendResult.Ignored; // malformed id — nothing we can key on
         try {
-            Directory.CreateDirectory(Dir);
+            Directory.CreateDirectory(DirectoryPath);
             var line = batchJson.Replace("\n", "").Replace("\r", "");
             var incoming = Encoding.UTF8.GetByteCount(line) + 1 + (reserving is null ? 0 : Encoding.UTF8.GetByteCount(reserving) + 1);
             var existing = File.Exists(path) ? new FileInfo(path).Length : 0;
@@ -78,7 +78,7 @@ public sealed partial class TranscriptSpool(SpoolPartition partition, TimeProvid
         var p = MarkerPathFor(sessionId);
         if (p is null) return false;
         try {
-            Directory.CreateDirectory(Dir);
+            Directory.CreateDirectory(DirectoryPath);
             File.WriteAllText(p, $"{time.GetUtcNow():O} {reason}\n");
             return true;
         } catch (Exception ex) {
@@ -141,17 +141,17 @@ public sealed partial class TranscriptSpool(SpoolPartition partition, TimeProvid
 
     /// <summary>True if this session still has undelivered spool entries (live .jsonl or .draining temp).</summary>
     public bool HasBacklog(string sessionId) =>
-        SafeSessionId.IsMatch(sessionId) && Directory.Exists(Dir)
-        && (File.Exists(Path.Combine(Dir, $"{EncodeKey(sessionId)}.transcript.jsonl"))
-            || Directory.EnumerateFiles(Dir, $"{EncodeKey(sessionId)}.*.transcript.draining").Any());
+        SafeSessionId.IsMatch(sessionId) && Directory.Exists(DirectoryPath)
+        && (File.Exists(Path.Combine(DirectoryPath, $"{EncodeKey(sessionId)}.transcript.jsonl"))
+            || Directory.EnumerateFiles(DirectoryPath, $"{EncodeKey(sessionId)}.*.transcript.draining").Any());
 
     /// <summary>Every distinct session id with a live .jsonl, a recovered .draining temp, or a
     /// needs-import marker (a marker can outlive its transcript file if a prior pass ran out of
     /// budget before delivering it, so it must still surface the session to the caller).</summary>
     public IEnumerable<string> SessionIdsWithBacklog() {
-        if (!Directory.Exists(Dir)) return [];
+        if (!Directory.Exists(DirectoryPath)) return [];
         var ids = new List<string>();
-        foreach (var f in Directory.EnumerateFiles(Dir)) {
+        foreach (var f in Directory.EnumerateFiles(DirectoryPath)) {
             var sid = SessionIdOf(f);
             if (sid is not null && !ids.Contains(sid)) ids.Add(sid);
         }
@@ -168,16 +168,16 @@ public sealed partial class TranscriptSpool(SpoolPartition partition, TimeProvid
 
     public async Task DrainAsync(string sessionId, Func<string, Task<DrainOutcome>> poster, Func<bool> expired, CancellationToken ct) {
         var live = LivePathFor(sessionId);
-        if (live is null || !Directory.Exists(Dir)) return;
+        if (live is null || !Directory.Exists(DirectoryPath)) return;
 
-        foreach (var temp in Directory.EnumerateFiles(Dir, $"{EncodeKey(sessionId)}.*.transcript.draining").OrderBy(File.GetCreationTimeUtc)) {
+        foreach (var temp in Directory.EnumerateFiles(DirectoryPath, $"{EncodeKey(sessionId)}.*.transcript.draining").OrderBy(File.GetCreationTimeUtc)) {
             if (expired() || ct.IsCancellationRequested) return;
             if (await DrainFileAsync(temp, poster, expired, ct)) return; // transient → stop, keep remainder
         }
 
         if (!File.Exists(live) || expired() || ct.IsCancellationRequested) return;
 
-        var rotated = Path.Combine(Dir, DrainingTemp(EncodeKey(sessionId)));
+        var rotated = Path.Combine(DirectoryPath, DrainingTemp(EncodeKey(sessionId)));
         try { File.Move(live, rotated); }
         catch { return; } // lost the atomic-rename race (or vanished) — the winner handles it
         await DrainFileAsync(rotated, poster, expired, ct);
@@ -203,10 +203,18 @@ public sealed partial class TranscriptSpool(SpoolPartition partition, TimeProvid
         }
 
         if (i >= lines.Length) {
-            try { File.Delete(path); } catch { }
+            try {
+                File.Delete(path);
+            } catch {
+                // Ignore: a leftover temp drains again on the next pass
+            }
             return false;
         }
-        try { await File.WriteAllLinesAsync(path, lines.Skip(i), ct); } catch { }
+        try {
+            await File.WriteAllLinesAsync(path, lines.Skip(i), ct);
+        } catch {
+            // Ignore: the temp still holds the remainder
+        }
         return true;
     }
 
