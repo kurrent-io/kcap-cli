@@ -14,9 +14,9 @@ internal sealed class ServerChatInput : ChatInput {
     const string Unconfirmed = "delivery unconfirmed — check the chat before sending again";
     const string InterruptUnconfirmed = "interrupt delivery unconfirmed — check the agent's terminal";
     const string InterruptDenied = "you cannot interrupt this session";
-    /// A server session may have run elsewhere or been imported, and the listing says neither, so
-    /// the hint names only what holds for both: the recording stays and nothing can be sent.
-    internal const string EndedHint = "This session has ended. Its recorded history is read-only.";
+    /// The listing does not say whether a session ran live or came in through a history import, so
+    /// the hint names both rather than calling an imported one ended.
+    internal const string EndedHint = "This session ended or was imported. Its recorded history is read-only.";
 
     readonly string _agentId;
     readonly IServerLane _lane;
