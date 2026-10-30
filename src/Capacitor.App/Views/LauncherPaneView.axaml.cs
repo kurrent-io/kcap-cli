@@ -28,7 +28,7 @@ public partial class LauncherPaneView : UserControl {
     Flyout? _openMenu;
     IDisposable? _nudgeEnd;
 
-    static readonly TimeSpan NudgeHold = TimeSpan.FromMilliseconds(450);
+    static readonly TimeSpan NudgeFadeOutAfter = TimeSpan.FromMilliseconds(450);
     readonly Transitions _nudgeFadeIn = [new DoubleTransition { Property = OpacityProperty, Duration = TimeSpan.FromMilliseconds(250), Easing = new CubicEaseOut() }];
     readonly Transitions _nudgeFadeOut = [new DoubleTransition { Property = OpacityProperty, Duration = TimeSpan.FromSeconds(2), Easing = new LinearEasing() }];
 
@@ -59,7 +59,7 @@ public partial class LauncherPaneView : UserControl {
         _nudgeEnd = DispatcherTimer.RunOnce(() => {
             GoalNudgeRing.Transitions = _nudgeFadeOut;
             GoalNudgeRing.Classes.Set("on", false);
-        }, NudgeHold);
+        }, NudgeFadeOutAfter);
     }
 
     internal bool IsNudgingForTesting => GoalNudgeRing.Classes.Contains("on");
