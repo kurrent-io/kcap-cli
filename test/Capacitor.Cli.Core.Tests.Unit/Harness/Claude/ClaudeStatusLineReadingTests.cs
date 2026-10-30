@@ -33,8 +33,8 @@ public class ClaudeStatusLineReadingTests {
         return JsonDocument.Parse(root.ToJsonString()).RootElement.Clone();
     }
 
-    static ReadingFile Run(ReadingFile held, JsonElement payload, DateTimeOffset at) =>
-        ClaudeStatusLineReading.Apply(held, payload, at) ?? throw new InvalidOperationException("expected a reading");
+    static ReadingFile Run(ReadingFile held, JsonElement payload, DateTimeOffset at, bool afterSwitch = false) =>
+        ClaudeStatusLineReading.Apply(held, payload, afterSwitch, at) ?? throw new InvalidOperationException("expected a reading");
 
     static UsageWindowDto Window(ReadingFile file, int minutes) => file.Reading.Windows.Single(w => w.LimitId == "claude" && w.WindowMinutes == minutes);
 
@@ -99,9 +99,9 @@ public class ClaudeStatusLineReadingTests {
 
     [Test]
     public async Task Missing_rate_limits_writes_nothing() {
-        await Assert.That(ClaudeStatusLineReading.Apply(Empty, Payload(rateLimits: false), T0)).IsNull();
-        await Assert.That(ClaudeStatusLineReading.Apply(Empty, Payload(five: null, seven: null), T0)).IsNull();
-        await Assert.That(ClaudeStatusLineReading.Apply(Empty, JsonDocument.Parse("[]").RootElement, T0)).IsNull();
+        await Assert.That(ClaudeStatusLineReading.Apply(Empty, Payload(rateLimits: false), false, T0)).IsNull();
+        await Assert.That(ClaudeStatusLineReading.Apply(Empty, Payload(five: null, seven: null), false, T0)).IsNull();
+        await Assert.That(ClaudeStatusLineReading.Apply(Empty, JsonDocument.Parse("[]").RootElement, false, T0)).IsNull();
     }
 
     [Test]
@@ -129,15 +129,15 @@ public class ClaudeStatusLineReadingTests {
     }
 
     [Test]
-    public async Task Session_list_keeps_the_most_recent_64() {
+    public async Task Session_list_keeps_the_most_recent_256() {
         var file = Empty;
-        for (var i = 0; i < 65; i++) file = Run(file, Payload(session: $"s{i}"), T0.AddMinutes(i));
+        for (var i = 0; i < 257; i++) file = Run(file, Payload(session: $"s{i}"), T0.AddMinutes(i));
 
-        file = Run(file, Payload(session: "s1", duration: 2000), T0.AddMinutes(70));
-        file = Run(file, Payload(session: "new"), T0.AddMinutes(71));
+        file = Run(file, Payload(session: "s1", duration: 2000), T0.AddMinutes(300));
+        file = Run(file, Payload(session: "new"), T0.AddMinutes(301));
 
         var ids = file.Sessions.Select(s => s.SessionId).ToArray();
-        await Assert.That(ids.Length).IsEqualTo(64);
+        await Assert.That(ids.Length).IsEqualTo(256);
         await Assert.That(ids).DoesNotContain("s0");
         await Assert.That(ids).DoesNotContain("s2");
         await Assert.That(ids[^2..]).IsEquivalentTo(new[] { "s1", "new" });
@@ -155,5 +155,77 @@ public class ClaudeStatusLineReadingTests {
 
         await Assert.That(Window(grown, 300).ConfirmedAt).IsEqualTo(T0.AddMinutes(2));
         await Assert.That(grown.Sessions).IsEquivalentTo(new[] { new ReadingSession("s1", 2000) });
+    }
+
+    [Test]
+    public async Task Without_a_switch_a_first_payload_still_merges_unconfirmed() {
+        var file = Run(Empty, Payload(duration: 1000), T0, afterSwitch: false);
+
+        await Assert.That(Window(file, 300)).IsEqualTo(new UsageWindowDto("claude", 300, 20, FiveReset, null));
+    }
+
+    [Test]
+    public async Task After_a_switch_a_session_without_baseline_records_baseline_only() {
+        var file = Run(Empty, Payload(duration: 1000, seven: 80), T0, afterSwitch: true);
+
+        await Assert.That(file.Reading.Windows).IsEmpty();
+        await Assert.That(file.Sessions).IsEquivalentTo(new[] { new ReadingSession("s1", 1000) });
+    }
+
+    [Test]
+    public async Task After_a_switch_an_unchanged_counter_does_not_merge() {
+        var held = Empty with { Sessions = [new ReadingSession("s1", 1000)] };
+
+        var file = Run(held, Payload(duration: 1000), T0, afterSwitch: true);
+
+        await Assert.That(file.Reading.Windows).IsEmpty();
+    }
+
+    [Test]
+    public async Task After_a_switch_a_fresh_payload_merges() {
+        var held = Empty with { Sessions = [new ReadingSession("s1", 1000)] };
+
+        var file = Run(held, Payload(duration: 1500, five: 8), T0, afterSwitch: true);
+
+        await Assert.That(Window(file, 300)).IsEqualTo(new UsageWindowDto("claude", 300, 8, FiveReset, T0));
+    }
+
+    [Test]
+    public async Task After_a_switch_a_counter_reset_merges_only_once_it_advances() {
+        var file = Empty;
+        long[] counters = [1000, 200, 200, 300];
+        for (var i = 0; i < counters.Length; i++) {
+            file = Run(file, Payload(duration: counters[i]), T0.AddMinutes(i), afterSwitch: true);
+            await Assert.That(file.Reading.Windows.Count).IsEqualTo(i == counters.Length - 1 ? 2 : 0);
+        }
+    }
+
+    [Test]
+    public async Task After_a_switch_a_payload_without_counter_does_not_merge() {
+        var file = Run(Empty, Payload(duration: null), T0, afterSwitch: true);
+
+        await Assert.That(file.Reading.Windows).IsEmpty();
+    }
+
+    [Test]
+    public async Task After_a_switch_an_evicted_baseline_does_not_merge() {
+        var others = Enumerable.Range(0, 256).Select(i => new ReadingSession($"o{i}", 100)).ToArray();
+        var held   = Empty with { Sessions = others };
+
+        var file = Run(held, Payload(session: "s1", duration: 1000), T0, afterSwitch: true);
+
+        await Assert.That(file.Reading.Windows).IsEmpty();
+    }
+
+    [Test]
+    public async Task After_a_switch_many_sessions_round_robin_still_make_progress() {
+        var file = Empty;
+        var at   = 0;
+
+        foreach (var counter in new long[] { 100, 100, 200 }) {
+            for (var i = 0; i < 65; i++) file = Run(file, Payload(session: $"s{i}", duration: counter), T0.AddMinutes(at++), afterSwitch: true);
+
+            await Assert.That(file.Reading.Windows.Count).IsEqualTo(counter == 200 ? 2 : 0);
+        }
     }
 }

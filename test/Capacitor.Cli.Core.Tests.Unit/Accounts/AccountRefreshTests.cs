@@ -1,6 +1,8 @@
+using System.Text.Json;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Accounts.Readings;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.LocalEdition;
 using Microsoft.Extensions.Time.Testing;
 using static Capacitor.Cli.Core.Tests.Unit.Accounts.Readings.ReadingFixtures;
@@ -45,6 +47,16 @@ public class AccountRefreshTests {
             Reading  = ReadingMerge.Apply(f.Reading, Limits(0, used)),
             Sessions = [.. f.Sessions, new ReadingSession(session, null)],
         });
+
+    bool RecordStatusLine(long counter, double used, string session = "S") {
+        var payload = JsonDocument.Parse($$"""
+            { "session_id": "{{session}}", "cost": { "total_api_duration_ms": {{counter}} },
+              "rate_limits": { "seven_day": { "used_percentage": {{used}}, "resets_at": 1793000000 } } }
+            """).RootElement;
+        var now = _time.GetUtcNow();
+
+        return Store.Readings.TryRecord("a", (held, account) => ClaudeStatusLineReading.Apply(held, payload, account.HasSwitched, now));
+    }
 
     /// <summary>The older refresh takes its sequence number first and answers last.</summary>
     async Task Overlap(ProbeResult older, ProbeResult newer) {
@@ -246,14 +258,14 @@ public class AccountRefreshTests {
     }
 
     [Test]
-    public async Task Producer_committing_just_before_the_switch_is_not_fenced() {
-        Register(Codex("a@example.com", "idA"));
+    public async Task Producer_committing_just_before_the_switch_records_only_fresh_payloads_afterwards() {
+        Register(Claude("a@example.com", "org-a"));
         using var holding  = new ManualResetEventSlim();
         Task<bool>? producer = null;
 
         var probe = new FakeAccountProbe {
             BeforeReturn = () => {
-                producer = Task.Run(() => Seed("S"));
+                producer = Task.Run(() => RecordStatusLine(1000, 80));
                 holding.Wait(TimeSpan.FromSeconds(10));
             },
         };
@@ -261,7 +273,7 @@ public class AccountRefreshTests {
             holding.Set();
             Thread.Sleep(300);
         };
-        probe.Complete(Identity("b@example.com", "idB"));
+        probe.Complete(Identity("b@example.com", orgId: "org-b"));
 
         await Refresh(probe);
         Store.Readings.AfterMembershipCheck = null;
@@ -269,7 +281,29 @@ public class AccountRefreshTests {
         await Assert.That(await producer!).IsTrue();
         await Assert.That(Reading).IsNull();
         await Assert.That(Account.GenerationStartedAt).IsNotNull();
-        await Assert.That(Seed("S")).IsTrue();
+
+        await Assert.That(RecordStatusLine(1000, 80)).IsTrue();
+        await Assert.That(Reading!.Reading.Windows).IsEmpty();
+
+        await Assert.That(RecordStatusLine(1500, 8)).IsTrue();
+        await Assert.That(Reading!.Reading.Windows.Single().UsedPercent).IsEqualTo(8d);
+    }
+
+    [Test]
+    public async Task Legacy_switched_account_replay_does_not_merge() {
+        Tmp.CreateFile("accounts/accounts.json", """
+            { "version": 1, "revision": 2, "accounts": [
+                { "id": "a", "vendor": "Claude", "directory": "/h/.claude-a", "label": "a@example.com",
+                  "added_at": "2026-01-01T00:00:00Z", "generation": 1, "retired_sessions": ["A"],
+                  "email": "a@example.com", "org_id": "org-a" }
+            ] }
+            """);
+
+        await Refresh(Identity("a@example.com", orgId: "org-a"));
+        await Assert.That(Account.GenerationStartedAt).IsNull();
+
+        await Assert.That(RecordStatusLine(1000, 80, session: "A")).IsTrue();
+        await Assert.That(Reading!.Reading.Windows).IsEmpty();
     }
 
     [Test]
