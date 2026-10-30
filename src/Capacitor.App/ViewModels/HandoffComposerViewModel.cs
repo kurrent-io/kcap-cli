@@ -447,7 +447,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
     }
 
     public static string NotStartedNotice(string title, string reason) =>
-        $"The hand-off of {title} didn't start: {reason.TrimEnd('.')}. Your message is back in that session.";
+        $"The hand-off of {HandoffOutcomeRow.Fold(title)} didn't start: {reason.TrimEnd('.')}. Your message is back in that session.";
 
     static string ShortId(string sessionId) => sessionId.Length > 8 ? sessionId[..8] : sessionId;
 
