@@ -186,7 +186,17 @@ public sealed partial class WorkContextViewModel {
     public string? RequesterAvatarUrl { get => _requesterAvatarUrl; private set => this.RaiseAndSetIfChanged(ref _requesterAvatarUrl, value); }
 
     bool _partsExpanded;
-    public bool PartsExpanded { get => _partsExpanded; private set => this.RaiseAndSetIfChanged(ref _partsExpanded, value); }
+    public bool PartsExpanded {
+        get => _partsExpanded;
+        private set {
+            this.RaiseAndSetIfChanged(ref _partsExpanded, value);
+            this.RaisePropertyChanged(nameof(PartsAccessibleName));
+        }
+    }
+    /// The folded counts are told apart only by their marks, so the header names them in words.
+    public string PartsAccessibleName => PartsExpanded || _partCounts.Count == 0
+        ? $"Parts, {PartsHeader}"
+        : $"Parts, {string.Join(", ", _partCounts.Select(c => c.Label))}";
     bool _peopleExpanded;
     public bool PeopleExpanded { get => _peopleExpanded; private set => this.RaiseAndSetIfChanged(ref _peopleExpanded, value); }
     bool _issuesExpanded;
@@ -304,6 +314,7 @@ public sealed partial class WorkContextViewModel {
     void RaiseCardCounts() {
         SyncPartsFold();
         this.RaisePropertyChanged(nameof(PartsHeader));
+        this.RaisePropertyChanged(nameof(PartsAccessibleName));
         this.RaisePropertyChanged(nameof(HasParts));
         this.RaisePropertyChanged(nameof(HasThisSessionParts));
         this.RaisePropertyChanged(nameof(HasBlockers));

@@ -389,7 +389,7 @@
 
                             <StackPanel IsVisible="{Binding HasParts}">
                                 <Button x:Name="PartsToggle" Command="{Binding TogglePartsCommand}" Classes="sectionHeader expandable"
-                                        AutomationProperties.Name="Parts">
+                                        AutomationProperties.Name="{Binding PartsAccessibleName}">
                                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                                         <TextBlock Text="PARTS" Classes="eyebrow" />
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">

@@ -707,6 +707,9 @@ public class WorkContextViewModelTests {
                 new(WorkContextPartMark.Unknown, 1), new(WorkContextPartMark.ThisSession, 1), new(WorkContextPartMark.Settled, 1),
             }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
             await Assert.That(h.Vm.ThisSessionParts.Select(p => p.Title)).IsEquivalentTo(new[] { "First" });
+            await Assert.That(h.Vm.PartsAccessibleName).IsEqualTo("Parts, 1 open, 1 in this session, 1 done");
+            await h.Vm.TogglePartsCommand.Execute();
+            await Assert.That(h.Vm.PartsAccessibleName).IsEqualTo("Parts, 1 of 3");
             await Assert.That(h.Vm.BlockedBy[0]).IsEqualTo("Pin the helper");
             await Assert.That(h.Vm.HasBlockers).IsTrue();
             await Assert.That(h.Vm.CycleNote).IsEqualTo("Dependencies could not be fully resolved");
