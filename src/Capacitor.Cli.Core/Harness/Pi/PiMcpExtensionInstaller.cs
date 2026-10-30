@@ -176,8 +176,9 @@ public static class PiMcpExtensionInstaller {
           // Turn-1 readiness: pi awaits the async factory before session_start.
           await startBridge();
 
-          // Respawn on a session switch/restart within the same process (idempotent).
-          pi.on("session_start", async () => { await startBridge(); });
+          // Respawn on a session switch/restart, and retry a server the factory skipped. Not awaited: a
+          // hosted launch waits for session_start, and a server may itself be waiting on that launch.
+          pi.on("session_start", () => { void startBridge(); });
           // Primary teardown — fires on switch AND on process exit (Ctrl+C/Ctrl+D/SIGHUP/SIGTERM).
           pi.on("session_shutdown", async () => { await stopBridge(); });
         }
