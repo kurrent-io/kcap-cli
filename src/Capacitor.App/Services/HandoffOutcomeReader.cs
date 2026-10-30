@@ -11,7 +11,7 @@ public sealed class HandoffOutcomeReader(IDaemonClientService daemon, ILocalCont
     internal static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
     internal static readonly TimeSpan NullWindow = TimeSpan.FromMinutes(2);
 
-    /// Emits each distinct stored outcome. An answer of null (nothing stored yet, or a failed
+    /// Emits each outcome that differs in value from the last; every read deserializes fresh lists, so reference equality would re-emit each poll. An answer of null (nothing stored yet, or a failed
     /// read) is retried for <see cref="NullWindow"/>; a running outcome is followed without limit.
     /// Completes on a terminal state or when the window lapses, and emits nothing for a daemon
     /// without handoff/1.
@@ -30,16 +30,16 @@ public sealed class HandoffOutcomeReader(IDaemonClientService daemon, ILocalCont
             HandoffOutcomeDto? last = null;
             try {
                 while (!ct.IsCancellationRequested) {
-                    var outcome = await Task.Run(() => ops.ReadHandoffOutcomeAsync(sessionId, ct), ct);
+                    var outcome = await Task.Run(() => ops.ReadHandoffOutcomeAsync(sessionId, ct), ct).ConfigureAwait(false);
                     if (outcome is not null) {
                         seen = true;
-                        if (outcome != last) observer.OnNext(outcome);
+                        if (!Same(outcome, last)) observer.OnNext(outcome);
                         last = outcome;
                         if (outcome.State != "running") break;
                     } else if (!seen && time.GetElapsedTime(started) >= NullWindow) {
                         break;
                     }
-                    await Task.Delay(PollInterval, time, ct);
+                    await Task.Delay(PollInterval, time, ct).ConfigureAwait(false);
                 }
                 observer.OnCompleted();
             } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
@@ -47,4 +47,8 @@ public sealed class HandoffOutcomeReader(IDaemonClientService daemon, ILocalCont
                 observer.OnError(ex);
             }
         });
+
+    internal static bool Same(HandoffOutcomeDto a, HandoffOutcomeDto? b) =>
+        b is not null && a.SourceSessionId == b.SourceSessionId && a.SourceTitle == b.SourceTitle
+        && a.State == b.State && a.Detail == b.Detail && a.Items.SequenceEqual(b.Items);
 }

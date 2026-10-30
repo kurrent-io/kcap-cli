@@ -104,6 +104,7 @@
                     <TextBlock Text="{Binding Note}" FontSize="13" Foreground="{StaticResource KcapMutedBrush}"
                                TextWrapping="Wrap" VerticalAlignment="Center" />
                 </StackPanel>
+                <ScrollViewer MaxHeight="160" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
                 <ItemsControl x:Name="HandoffOutcomeRows" ItemsSource="{Binding Rows}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:HandoffOutcomeRow">
@@ -120,6 +121,7 @@
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
+                </ScrollViewer>
             </StackPanel>
         </Border>
         <!-- The template owns the ScrollViewer: that is the shape Avalonia virtualizes. An

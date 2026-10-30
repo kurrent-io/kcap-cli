@@ -52,4 +52,31 @@ public class HandoffOutcomeViewModelTests {
         await Assert.That(vm.Rows[2].IsNeutral).IsTrue();
         await Assert.That(vm.Note).IsNull();
     }
+
+    static readonly HandoffOutcomeItemDto Carried = new("plan", "Plan A", "carried", null);
+
+    [Test]
+    public async Task A_rejected_sign_in_asks_for_a_new_one_not_a_code() {
+        var none = new HandoffOutcomeViewModel(new("s1", "Old", "unauthorized", null, []));
+        var some = new HandoffOutcomeViewModel(new("s1", "Old", "unauthorized", null, [Carried]));
+
+        await Assert.That(none.Note).IsEqualTo(HandoffOutcomeViewModel.SignInNote);
+        await Assert.That(some.Note).IsEqualTo(HandoffOutcomeViewModel.SignInPartlyNote);
+    }
+
+    [Test]
+    public async Task A_failure_that_carried_rows_does_not_say_nothing_was_carried() {
+        var some = new HandoffOutcomeViewModel(new("s1", "Old", "failed", "takeover_error", [Carried]));
+        var none = new HandoffOutcomeViewModel(new("s1", "Old", "failed", "takeover_error", []));
+
+        await Assert.That(some.Note).IsEqualTo("Only part of the previous session's work was carried over (takeover_error).");
+        await Assert.That(none.Note).IsEqualTo("Couldn't carry over the previous session's work (takeover_error).");
+    }
+
+    [Test]
+    public async Task A_source_active_refusal_is_not_flagged() {
+        var vm = new HandoffOutcomeViewModel(HandoffOutcomeDto.Refused("s1", "Old", "source_active"));
+
+        await Assert.That(vm.NoteNeedsAttention).IsFalse();
+    }
 }

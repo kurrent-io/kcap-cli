@@ -44,7 +44,10 @@ public class HandoffOutcomeReaderTests {
         public void Dispose() => _sub?.Dispose();
     }
 
-    static HandoffOutcomeDto Outcome(string state) => new("s1", "Old session", state, null, []);
+    /// Each call builds its own list, the shape a fresh deserialization has: an empty collection
+    /// expression would share one array and hide a reference comparison.
+    static HandoffOutcomeDto Outcome(string state) =>
+        new("s1", "Old session", state, null, new List<HandoffOutcomeItemDto> { new("plan", "Plan A", "carried", null) });
 
     [Test]
     public async Task Running_polls_until_terminal() {
@@ -60,7 +63,7 @@ public class HandoffOutcomeReaderTests {
         await rig.NextReadAsync();
         await WaitUntilAsync(() => rig.Completed, what: "completion on done");
 
-        await Assert.That(rig.Seen.Select(o => o.State)).IsEquivalentTo(["running", "done"]);
+        await Assert.That(rig.Seen.Select(o => o.State).ToArray()).IsEquivalentTo(new[] { "running", "done" });
         await Assert.That(rig.Reads).IsEqualTo(3);
     }
 

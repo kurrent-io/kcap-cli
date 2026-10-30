@@ -16,6 +16,8 @@ public sealed record HandoffOutcomeRow(string Text, bool IsCarried, bool NeedsAt
             _         => "couldn't be checked",
         };
 
-        return new($"{item.Label} — {result}", item.Result == "carried", item.Result is not ("carried" or "skipped"));
+        var label = string.IsNullOrWhiteSpace(item.Label) ? (item.Kind == "work_item" ? "Untitled work item" : "Untitled plan") : item.Label;
+
+        return new($"{label} — {result}", item.Result == "carried", item.Result is not ("carried" or "skipped"));
     }
 }

@@ -66,6 +66,42 @@ public class WorkspaceViewModelTests {
         });
     }
 
+    /// A live agent learns its session id after the view is built: the reader starts then, once.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_handoff_outcome_is_read_once_when_the_live_session_id_arrives() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, [Cli.Core.LocalIpc.HandoffWire.Capability]));
+            var asked = new List<string>();
+            var ops = new ScriptedLocalControlOps {
+                ReadHandoffOutcome = id => {
+                    lock (asked) asked.Add(id);
+                    return Task.FromResult<Cli.Core.Handoff.HandoffOutcomeDto?>(new("s1", "Old", "done", null, []));
+                },
+            };
+            var time = new FakeTimeProvider();
+            var vm = new WorkspaceViewModel("a1", daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()),
+                new FakeTerminalAttachClientFactory().Factory, () => new FakeTerminalSurface(), time, new RecordingOpener(),
+                new FakePermissionService(), new FakeWorkContextSource(), ops, new NoAttachmentUploader(),
+                handoffOutcomes: new HandoffOutcomeReader(daemon, ops, time));
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: null));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await Assert.That(vm.Chat).IsNotNull();
+            await Task.Delay(50);
+            await Assert.That(asked).IsEmpty();
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: Session));
+            await WaitUntilAsync(() => vm.Chat!.HandoffOutcome is not null, what: "the outcome");
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: Session));
+            await Task.Delay(50);
+
+            await Assert.That(asked.ToArray()).IsEquivalentTo(new[] { Session });
+            await vm.TeardownAsync();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task An_empty_session_does_not_flash_the_artefacts_tab_while_loading() {
