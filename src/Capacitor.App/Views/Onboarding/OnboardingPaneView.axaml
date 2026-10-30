@@ -17,7 +17,8 @@
                 <StackPanel x:Name="NewWorkspaceChoices" Spacing="12">
                     <Button x:Name="LocalEditionButton" Classes="onboardingEditionCard" Command="{Binding ChooseLocalCommand}"
                             AutomationProperties.Name="{x:Static vm:EditionStepViewModel.LocalTitle}"
-                            AutomationProperties.HelpText="{Binding LocalUnavailableReason}">
+                            AutomationProperties.HelpText="{Binding LocalUnavailableReason}"
+                            ToolTip.Tip="{Binding LocalUnavailableReason}" ToolTip.ShowOnDisabled="True">
                         <StackPanel>
                             <Grid Classes="onboardingEditionHead" ColumnDefinitions="20,*" RowDefinitions="Auto,Auto" ColumnSpacing="14" RowSpacing="4">
                                 <app:AppIcon Kind="Laptop" Size="20" />
@@ -86,6 +87,8 @@
                 <Border Classes="onboardingCard" IsVisible="{Binding ChoiceVisible}">
                     <StackPanel Spacing="2">
                         <RadioButton x:Name="ShareUsageOption" Classes="onboardingOption" GroupName="UsageData"
+                                     AutomationProperties.Name="{x:Static vm:UsageDataStepViewModel.ShareTitle}"
+                                     AutomationProperties.HelpText="{x:Static vm:UsageDataStepViewModel.ShareDetail}"
                                      IsChecked="{Binding Share, Mode=TwoWay}">
                             <StackPanel Spacing="2">
                                 <TextBlock Classes="onboardingLabel" FontSize="13" Text="{x:Static vm:UsageDataStepViewModel.ShareTitle}" />
@@ -93,6 +96,8 @@
                             </StackPanel>
                         </RadioButton>
                         <RadioButton x:Name="DontShareUsageOption" Classes="onboardingOption" GroupName="UsageData"
+                                     AutomationProperties.Name="{x:Static vm:UsageDataStepViewModel.OffTitle}"
+                                     AutomationProperties.HelpText="{x:Static vm:UsageDataStepViewModel.OffDetail}"
                                      IsChecked="{Binding DontShare, Mode=TwoWay}">
                             <StackPanel Spacing="2">
                                 <TextBlock Classes="onboardingLabel" FontSize="13" Text="{x:Static vm:UsageDataStepViewModel.OffTitle}" />
