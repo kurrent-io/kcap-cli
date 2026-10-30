@@ -12,14 +12,31 @@ public static class AccountRefresh {
     /// <summary>What the commit decided, carried from the registry change to the reading writes.</summary>
     sealed record Decision(long FromGeneration, long ToGeneration, bool MergeLimits);
 
-    public static async Task<RefreshOutcome> RunAsync(AccountStore store, string accountId, IAccountProbe probe, TimeProvider time, CancellationToken ct) {
-        var (started, startRevision) = store.MutateWithRevision(r => {
-            if (r.Accounts.FirstOrDefault(a => a.Id == accountId) is not { } account) return (r, (VendorAccount?) null);
+    public static async Task<RefreshOutcome> RunAsync(AccountStore store, string accountId, IAccountProbe probe, TimeProvider time, CancellationToken ct) =>
+        (await RunCoreAsync(store, accountId, probe, time, null, ct).ConfigureAwait(false))!;
 
-            var probing = account with { ProbeSeq = account.ProbeSeq + 1 };
-            return (Replace(r, probing), probing);
+    /// <summary><see cref="RunAsync"/> for a home whose last refresh, or the start of one still running, by any
+    /// process sharing the registry, is at least <paramref name="interval"/> old. Null, changing nothing, when it
+    /// is not; the check and the claim are one registry mutation, so two callers cannot both probe.</summary>
+    public static Task<RefreshOutcome?> RunIfDueAsync(
+        AccountStore store, string accountId, IAccountProbe probe, TimeProvider time, TimeSpan interval, CancellationToken ct
+    ) => RunCoreAsync(store, accountId, probe, time, interval, ct);
+
+    static async Task<RefreshOutcome?> RunCoreAsync(
+        AccountStore store, string accountId, IAccountProbe probe, TimeProvider time, TimeSpan? dueAfter, CancellationToken ct
+    ) {
+        var ((started, notDue), startRevision) = store.MutateWithRevision(r => {
+            if (r.Accounts.FirstOrDefault(a => a.Id == accountId) is not { } account) return (r, ((VendorAccount?) null, false));
+
+            var now = time.GetUtcNow();
+            if (dueAfter is { } interval && Max(account.RefreshedAt, account.ProbeStartedAt) is { } last && now - last < interval)
+                return (r, (null, true));
+
+            var probing = account with { ProbeSeq = account.ProbeSeq + 1, ProbeStartedAt = now };
+            return (Replace(r, probing), (probing, false));
         });
 
+        if (notDue) return null;
         if (started is null) return new(false, [], startRevision);
 
         var probeStartedAt = time.GetUtcNow();
@@ -122,6 +139,8 @@ public static class AccountRefresh {
         SignInStates.SignedOut => "signed out",
         _                      => "sign-in unknown",
     };
+
+    static DateTimeOffset? Max(DateTimeOffset? a, DateTimeOffset? b) => a > b || b is null ? a : b;
 
     static AccountRegistry Replace(AccountRegistry registry, VendorAccount account) =>
         registry with { Accounts = [.. registry.Accounts.Select(a => a.Id == account.Id ? account : a)] };

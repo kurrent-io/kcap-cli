@@ -89,6 +89,7 @@ public class AccountRefreshTests {
         await Assert.That(account.GenerationStartedAt).IsNull();
         await Assert.That(account.RefreshError).IsNull();
         await Assert.That(account.CommittedProbeSeq).IsEqualTo(1L);
+        await Assert.That(account.ProbeStartedAt).IsEqualTo(T0);
         await Assert.That(Reading!.Sessions.Single().SessionId).IsEqualTo("s1");
     }
 
@@ -222,6 +223,61 @@ public class AccountRefreshTests {
         await Assert.That(Store.Load().Revision).IsGreaterThan(before);
         await Assert.That(outcome.Revision).IsEqualTo(Store.Load().Revision);
         await Assert.That(Account.RefreshedAt).IsEqualTo(At(1));
+    }
+
+    static readonly TimeSpan Interval = TimeSpan.FromMinutes(10);
+
+    Task<RefreshOutcome?> RefreshIfDue(IAccountProbe probe) =>
+        AccountRefresh.RunIfDueAsync(Store, "a", probe, _time, Interval, CancellationToken.None);
+
+    [Test]
+    public async Task RunIfDue_skips_a_home_refreshed_within_the_interval() {
+        Register(Codex() with { RefreshedAt = T0.AddMinutes(-5), ProbeSeq = 3 });
+        var probe = FakeAccountProbe.Returning(Identity("a@example.com"));
+
+        var outcome = await RefreshIfDue(probe);
+
+        await Assert.That(outcome).IsNull();
+        await Assert.That(Account.ProbeSeq).IsEqualTo(3L);
+        await Assert.That(probe.Started.IsCompleted).IsFalse();
+    }
+
+    [Test]
+    public async Task RunIfDue_skips_a_home_whose_probe_started_within_the_interval() {
+        Register(Codex() with { RefreshedAt = T0.AddMinutes(-30), ProbeStartedAt = T0.AddMinutes(-1), ProbeSeq = 3 });
+        var probe = FakeAccountProbe.Returning(Identity("a@example.com"));
+
+        var outcome = await RefreshIfDue(probe);
+
+        await Assert.That(outcome).IsNull();
+        await Assert.That(Account.ProbeSeq).IsEqualTo(3L);
+        await Assert.That(probe.Started.IsCompleted).IsFalse();
+    }
+
+    [Test]
+    public async Task RunIfDue_probes_a_due_home_and_stamps_probe_started_at() {
+        Register(Codex() with { RefreshedAt = T0 - Interval, ProbeStartedAt = T0.AddMinutes(-11) });
+        var probe = new FakeAccountProbe { BeforeReturn = () => _time.Advance(TimeSpan.FromMinutes(1)) };
+        probe.Complete(Identity("a@example.com"));
+
+        var outcome = await RefreshIfDue(probe);
+
+        await Assert.That(outcome!.Found).IsTrue();
+        await Assert.That(Account.ProbeSeq).IsEqualTo(1L);
+        await Assert.That(Account.ProbeStartedAt).IsEqualTo(T0);
+        await Assert.That(Account.RefreshedAt).IsEqualTo(At(1));
+    }
+
+    [Test]
+    public async Task RunIfDue_probes_a_home_never_refreshed() {
+        Register(Codex());
+        var probe = FakeAccountProbe.Returning(Identity("a@example.com"));
+
+        var outcome = await RefreshIfDue(probe);
+
+        await Assert.That(outcome!.Found).IsTrue();
+        await Assert.That(probe.Started.IsCompleted).IsTrue();
+        await Assert.That(Account.ProbeStartedAt).IsEqualTo(T0);
     }
 
     [Test]

@@ -32,6 +32,7 @@ public sealed record VendorAccount(
     [property: JsonPropertyName("hook_trust")]             string?           HookTrust            = null,
     [property: JsonPropertyName("hook_trust_fingerprint")] string?           HookTrustFingerprint = null,
     [property: JsonPropertyName("generation_started_at")]  DateTimeOffset?   GenerationStartedAt  = null,
+    [property: JsonPropertyName("probe_started_at")]       DateTimeOffset?   ProbeStartedAt       = null,
     [property: JsonPropertyName("label_set_by_user")]      bool?             LabelSetByUser       = null
 ) {
     /// <summary>An entry that never recorded the flag kept the directory name <c>kcap accounts add</c> gave it
