@@ -96,6 +96,12 @@ class MemoriesCommand(
         if (flags.ContainsKey("--dry-run") || plan.All(c => c.SkipReason is not null)) return 0;
 
         if (!flags.ContainsKey("--yes") && !flags.ContainsKey("-y")) {
+            // Redirected, the prompt lands where nobody reads it while the read waits on input nobody will send.
+            if (Console.IsInputRedirected || Console.IsOutputRedirected) {
+                await Console.Error.WriteLineAsync("Nothing imported: there is no terminal to confirm on. Pass --yes to import without a prompt.");
+                return 1;
+            }
+
             await Console.Out.WriteAsync("Import? [y/N] ");
             if (!string.Equals((await Console.In.ReadLineAsync())?.Trim(), "y", StringComparison.OrdinalIgnoreCase)) {
                 await Console.Out.WriteLineAsync("Cancelled.");
