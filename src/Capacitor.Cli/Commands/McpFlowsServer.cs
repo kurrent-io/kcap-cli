@@ -2616,10 +2616,20 @@ partial class McpFlowsServer(
     static TimeSpan Remaining(DateTimeOffset deadline, FlowRetryClock clock) =>
         deadline - clock.UtcNow is var left && left > TimeSpan.Zero ? left : TimeSpan.Zero;
 
+    /// <summary>Harnesses defer MCP tools and show only their names until searched for, so this is what
+    /// tells an agent that its waits belong to <c>schedule_wakeup</c> rather than to its own shell.</summary>
+    internal const string ServerInstructions =
+        "Use the flow and agent tools when the user asks for a separate agent to do or review work, or accepts a " +
+        "flow you offered. A hosted agent whose next step is due later, with nothing to do until then (CI or the " +
+        "reviewers' findings after a push, or a request to check back in a few minutes), calls schedule_wakeup " +
+        "with what to check and ends its turn: kcap delivers that prompt when it fires, waking the session if it " +
+        "has gone idle. Never wait with sleep, a background command or a polling loop instead; those last only " +
+        "as long as your own process, and kcap cannot see them.";
+
     static string BuildInitializeResponse(JsonNode id, JsonObject request) =>
         ToResponse<McpInitResult>(
             id,
-            new(McpProtocol.NegotiateVersion(request), new(new()), new("kcap-flows", "1.0.0")),
+            new(McpProtocol.NegotiateVersion(request), new(new()), new("kcap-flows", "1.0.0"), ServerInstructions),
             McpJsonContext.Default.McpInitResult
         );
 

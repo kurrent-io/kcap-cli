@@ -17,8 +17,34 @@ public class SessionNudgesTests {
         Tmp.CreateFile("config.toml", string.Concat(servers.Select(s =>
             $"[mcp_servers.kcap-{s}]\ncommand = \"kcap\"\nargs = [\"mcp\", \"{s}\"]\n\n")));
 
-    string? Resolve(string config, Profile? profile = null, PlanEntitlements? plan = null) =>
-        SessionNudges.Resolve(HarnessId.Codex, "s1", profile, Harnesses, plan ?? PlanEntitlements.Unknown, SessionStartAudience.Interactive, cwd: null, Home, config);
+    string? Resolve(string config, Profile? profile = null, PlanEntitlements? plan = null, SessionStartAudience? audience = null) =>
+        SessionNudges.Resolve(HarnessId.Codex, "s1", profile, Harnesses, plan ?? PlanEntitlements.Unknown,
+            audience ?? SessionStartAudience.Interactive, cwd: null, Home, config);
+
+    static readonly SessionStartAudience Hosted = new(IsHosted: true, IsFlowParticipant: false);
+
+    /// <summary>schedule_wakeup refuses a terminal session, so only a hosted agent is pointed at it.</summary>
+    [Test]
+    public async Task Only_a_hosted_agent_is_told_to_wait_with_a_wake_up() {
+        var config = CodexConfig("workitems", "plans", "flows");
+
+        await Assert.That(Resolve(config, audience: Hosted)).Contains(WakeUpNudgeEmitter.Nudge);
+        await Assert.That(Resolve(config)).DoesNotContain("## Waiting");
+        await Assert.That(Resolve(config, audience: new(IsHosted: true, IsFlowParticipant: true)) ?? "").DoesNotContain("## Waiting");
+    }
+
+    [Test]
+    public async Task A_hosted_agent_without_the_flows_server_is_not_told_to_wait_with_a_wake_up() {
+        await Assert.That(Resolve(CodexConfig("workitems", "plans"), audience: Hosted)).DoesNotContain("## Waiting");
+    }
+
+    /// <summary>The nudge says nothing about the session id, so it must not stand in for the line that does.</summary>
+    [Test]
+    public async Task A_hosted_agent_with_only_the_flows_server_still_gets_the_session_id_line() {
+        var nudges = Resolve(CodexConfig("flows"), audience: Hosted);
+
+        await Assert.That(nudges).IsEqualTo(HarnessNudgeEmitter.Combine(WakeUpNudgeEmitter.Nudge, Line));
+    }
 
     [Test]
     public async Task With_both_nudges_shown_the_line_is_left_out() {
