@@ -4,6 +4,7 @@ using Capacitor.App.Services;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Pages;
 using Capacitor.Cli.Core.Plans;
 
 namespace Capacitor.App.Tests.Unit;
@@ -46,6 +47,19 @@ public class ServerPageSourceTests {
         var read = await source.ReadAsync(Session, CancellationToken.None);
 
         await Assert.That(read.Kind).IsEqualTo(SessionPlansReadKind.SignedOut);
+        await Assert.That(handlers).IsEmpty();
+        await source.DisposeAsync();
+    }
+
+    [Test]
+    public async Task Content_and_bridge_calls_without_a_profile_read_signed_out() {
+        var (source, handlers) = Build(Config.Root, profiles: null, new());
+        using var payload = System.Text.Json.JsonDocument.Parse("{}");
+
+        await Assert.That(await source.ReadContentAsync("a1", null, CancellationToken.None)).IsTypeOf<PageContentRead.SignedOut>();
+        await Assert.That((await source.SubmitAsync("a1", 1, payload.RootElement, CancellationToken.None)).Status).IsEqualTo(401);
+        await Assert.That((await source.MineAsync("a1", 1, CancellationToken.None)).Status).IsEqualTo(401);
+        await Assert.That((await source.ResultsAsync("a1", 1, CancellationToken.None)).Status).IsEqualTo(401);
         await Assert.That(handlers).IsEmpty();
         await source.DisposeAsync();
     }

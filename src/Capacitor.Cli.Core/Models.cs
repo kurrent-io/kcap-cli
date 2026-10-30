@@ -1293,6 +1293,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(Capacitor.Cli.Core.Http.ArtefactDto))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Http.ArtefactDetailDto))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Http.ArtefactListDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Http.PageResponseBody))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Http.ArtefactGrantDto))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Http.ArtefactErrorDto))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Http.PublishArtefactBody))]
