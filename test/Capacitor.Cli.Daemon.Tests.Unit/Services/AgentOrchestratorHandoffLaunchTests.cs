@@ -9,6 +9,8 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 /// prompt, or is refused without leaving a worktree or starting a runtime.</summary>
 [ParallelLimiter<SubprocessLimit>]
 public class AgentOrchestratorHandoffLaunchTests {
+    [TempDir] public required TempDir Tmp { get; init; }
+
     const string AgentId  = "handoff-1";
     const string UserText = "Finish the retry loop.";
 
@@ -16,14 +18,14 @@ public class AgentOrchestratorHandoffLaunchTests {
         "session-ended-1", "Wire the widget", "User One", "acme", "widgets", "feature", null, null, "build it", "now test it");
 
     sealed class Fixture : IAsyncDisposable {
-        public Fixture(Exception? startThrow = null) {
+        public Fixture(Exception? startThrow = null, LaunchConsentGate? consentGate = null) {
             Repo    = GitRepo.CreateWithCommit();
             Repo.AddRemote("https://github.com/acme/widgets.git");
             Server  = new CaptureServerConnection();
             Factory = new SpyHostedAgentRuntimeFactory("cursor") { StartThrow = startThrow };
             Orch    = AgentOrchestratorHarness.BuildOrchestrator(
                 Server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
-                allowedRepoPath: Repo.Path, extraRuntimeFactories: [Factory]);
+                allowedRepoPath: Repo.Path, extraRuntimeFactories: [Factory], consentGate: consentGate);
         }
 
         public GitRepo                      Repo    { get; }
@@ -120,6 +122,37 @@ public class AgentOrchestratorHandoffLaunchTests {
         await f.Orch.HandleLaunchAgentForTest(cmd);
 
         await Assert.That(f.Refusal()).StartsWith("invalid_handoff");
+        await Assert.That(f.Factory.StartCalls).IsEqualTo(0);
+        await Assert.That(f.Worktrees()).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_scratch_launch_with_a_handoff_block_is_refused_as_such() {
+        await using var f = new Fixture();
+
+        await f.Orch.HandleLaunchAgentForTest(Launch(f.Repo.Path, Start(f.Repo.Head, "CreateBranch")) with { ScratchWorkspace = true, RepoPath = "" });
+
+        await Assert.That(f.Refusal()).IsEqualTo("invalid_handoff: a scratch launch cannot hand off");
+        await Assert.That(f.Factory.StartCalls).IsEqualTo(0);
+    }
+
+    /// <summary>The block's shape is known before consent, so a launch that cannot proceed never asks the owner.</summary>
+    [Test]
+    public async Task A_malformed_handoff_is_refused_before_consent() {
+        await using var f = new Fixture(consentGate: AgentOrchestratorHarness.DenyDefaultGate(Tmp.CreateDir("consent")));
+
+        await f.Orch.HandleLaunchAgentForTest(Launch(f.Repo.Path, Start(f.Repo.Head, "Sideways")));
+
+        await Assert.That(f.Refusal()).StartsWith("invalid_handoff");
+    }
+
+    [Test]
+    public async Task A_valid_handoff_still_passes_the_consent_gate() {
+        await using var f = new Fixture(consentGate: AgentOrchestratorHarness.DenyDefaultGate(Tmp.CreateDir("consent")));
+
+        await f.Orch.HandleLaunchAgentForTest(Launch(f.Repo.Path, Start(f.Repo.Head, "CreateBranch")));
+
+        await Assert.That(f.Refusal()).StartsWith(LaunchConsentGate.DeniedReasonPrefix);
         await Assert.That(f.Factory.StartCalls).IsEqualTo(0);
         await Assert.That(f.Worktrees()).IsEmpty();
     }

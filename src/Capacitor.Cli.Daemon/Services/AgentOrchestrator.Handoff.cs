@@ -103,12 +103,13 @@ internal partial class AgentOrchestrator {
     internal static string? HandoffLaunchRefusal(LaunchAgentCommand cmd, bool resuming) =>
         cmd.Handoff switch {
             null => null,
-            _ when resuming || cmd.ResumeSessionId is not null => "invalid_handoff: a resumed launch cannot hand off",
-            _ when cmd.Kind != LaunchKind.Default              => "invalid_handoff: a review launch cannot hand off",
-            _ when cmd.Borrowed                                => "invalid_handoff: a borrowed launch cannot hand off",
-            { Start: null } or { Source: null }                => "invalid_handoff: the block is incomplete",
-            { Start: var start } when start.ToStart() is null  => "invalid_handoff: the start's shape is not one this daemon knows",
-            _                                                  => null
+            _ when resuming || !string.IsNullOrEmpty(cmd.ResumeSessionId) => "invalid_handoff: a resumed launch cannot hand off",
+            _ when cmd.Kind != LaunchKind.Default                         => "invalid_handoff: a review launch cannot hand off",
+            _ when cmd.Borrowed                                           => "invalid_handoff: a borrowed launch cannot hand off",
+            _ when cmd.ScratchWorkspace                                   => "invalid_handoff: a scratch launch cannot hand off",
+            { Start: null } or { Source: null }                           => "invalid_handoff: the block is incomplete",
+            { Start: var start } when start.ToStart() is null             => "invalid_handoff: the start's shape is not one this daemon knows",
+            _                                                             => null
         };
 
     /// <summary>A derived title naming the session handed off, by its title or else by the start of its id.</summary>
