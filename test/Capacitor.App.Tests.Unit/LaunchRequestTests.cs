@@ -117,7 +117,7 @@ public class LaunchRequestTests {
         var json = Payload(new LaunchRequest("kcap-dev", "/repo", "claude", "go"));
         var keys = json.EnumerateObject().Select(p => p.Name).ToArray();
 
-        // Pins the complete RequestLaunchAgentV2 key set so a member added or renamed on
+        // Pins the complete launch key set so a member added or renamed on
         // either side (this payload or the hub argument) fails loudly instead of silently
         // binding null.
         await Assert.That(keys).IsEquivalentTo([

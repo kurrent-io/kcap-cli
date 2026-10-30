@@ -187,7 +187,7 @@ public class ServerConnectionServiceTests {
             // The payload arrives with the pinned snake_case names whatever the policy does.
             if (!payload.TryGetProperty("daemon_name", out var d) || d.GetString() != "work-mac")
                 throw new InvalidOperationException("daemon_name missing");
-            return "agent-42";
+            return new() { AgentId = "agent-42" };
         };
         await using var lane = Lane(host);
         lane.Start();

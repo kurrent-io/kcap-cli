@@ -501,7 +501,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     readonly CancellationToken _shutdown;
     volatile bool _disposed;
 
-    // The id RequestLaunchAgentV2 hands back is request-accepted, not success: failure arrives
+    // The id a launch hands back is request-accepted, not success: failure arrives
     // later as a LaunchFailed broadcast, success as the agent's row appearing. StartAsync tracks
     // the id here until one of those settles it; one lock covers both maps and the retained draft,
     // since StartAsync, the failure subscription and the rows subscription all touch them.

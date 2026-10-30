@@ -529,9 +529,18 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
             var hub = _hub;
             if (hub is not { State: HubConnectionState.Connected })
                 return new LaunchOutcome(false, null, "Not connected to the server.");
-            var agentId = await hub.InvokeAsync<string>(
-                HubMethods.RequestLaunchAgentV2, LaunchPayload.For(request), ct).ConfigureAwait(false);
-            return new LaunchOutcome(Started: true, AgentId: agentId, Error: null);
+            var payload = LaunchPayload.For(request);
+            LaunchResponse response;
+            try {
+                response = await hub.InvokeAsync<LaunchResponse>(HubMethods.TryLaunchAgent, payload, ct).ConfigureAwait(false);
+            } catch (HubException ex) when (ex.Message.Contains("Method does not exist", StringComparison.Ordinal)) {
+                // TODO: fallback for servers without TryLaunchAgent. Remove once every tenant has it.
+                var agentId = await hub.InvokeAsync<string>(HubMethods.RequestLaunchAgentV2, payload, ct).ConfigureAwait(false);
+                return new LaunchOutcome(Started: true, AgentId: agentId, Error: null);
+            }
+            return response.AgentId is { } id
+                ? new LaunchOutcome(Started: true, AgentId: id, Error: null)
+                : new LaunchOutcome(false, null, response.Refusal);
         } catch (Exception ex) {
             return new LaunchOutcome(false, null, ex.Message, IsUnauthorized(ex));
         }

@@ -18,13 +18,13 @@ public sealed record LaunchOutcome(bool Started, string? AgentId, string? Error,
 
 /// Starting a session goes through the SERVER, not the local socket: the local Spawn frame
 /// resolves against the daemon's PTY launchers (claude and codex only), while the server's
-/// RequestLaunchAgentV2 reaches every vendor through the runtime factories.
+/// TryLaunchAgent reaches every vendor through the runtime factories.
 public interface ILaunchClient {
     Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct);
 }
 
-/// The RequestLaunchAgentV2 hub argument, serialized by SignalR through reflection. Member names
-/// must match LaunchAgentRequestV2's properties — the hub binds by name.
+/// The launch hub argument, serialized by SignalR through reflection. Member names
+/// must match RemoteLaunchRequest's properties — the hub binds by name.
 // Explicit snake_case on every member: the names survive whatever naming policy the hub options
 // carry, and a key that drifts from the server record binds null there without an error.
 public sealed record LaunchAgentRequestV2Payload {
@@ -49,7 +49,7 @@ public sealed record LaunchAgentRequestV2Payload {
     public string? AccountId { get; init; }
 }
 
-/// The RequestLaunchAgentV2 argument, split from the transport so its shape is testable.
+/// The launch argument, split from the transport so its shape is testable.
 public static class LaunchPayload {
     public static LaunchAgentRequestV2Payload For(LaunchRequest r) => new() {
         DaemonName = r.DaemonName,
