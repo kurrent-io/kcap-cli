@@ -16,7 +16,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     public const string LockedText     = "The install did not finish.";
     public const string ProfileMismatchCode = "profile_mismatch";
     public const string AnswerRequiredText  = "This installer needs answers this version of kcap doesn't give. Update kcap, then try again.";
-    public const string NotStartedText = "The local server didn't finish starting. Try again to finish the install.";
+    public const string NotStartedText = "kcap didn't finish starting. Try again to finish the install.";
     public const string RepairingText  = "Updating an older kcap on this Mac";
     public const string OldClientText  = "An older kcap on this Mac is still in the way. Try again to update it.";
 
@@ -85,7 +85,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     public bool         CanContinue       => !ChoiceVisible || (Search.Valid && !Search.Checking);
     public bool         PassThrough       => !_onLocalPath() || _controller.Outcome is LocalInstallOutcome.Installed;
 
-    public string Lede => "The server runs on this Mac and your sessions stay on it";
+    public string Lede => "kcap runs on this Mac and your sessions stay on it";
 
     public LocalSetupProgress Progress => _controller.Progress;
 
@@ -381,11 +381,11 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
         next.PropertyChanged          += OnProgressChanged;
         next.Download.PropertyChanged += OnProgressChanged;
         Rows = [
-            new("Downloading the kcap server", next.Download),
+            new("Downloading kcap", next.Download),
             new("Verifying the signature", next.Verify),
-            new("Installing the kcap server", next.Install),
+            new("Installing kcap", next.Install),
             new("Search by meaning", next.Embeddings.Row),
-            new("Starting the kcap server", next.FirstStart),
+            new("Starting kcap", next.FirstStart),
         ];
         RestateDownload();
     }
