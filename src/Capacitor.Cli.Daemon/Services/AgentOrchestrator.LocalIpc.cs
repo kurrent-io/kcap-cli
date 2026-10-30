@@ -525,6 +525,7 @@ internal partial class AgentOrchestrator {
         AgentInstance agent;
         DateTime      spawnedAtUtc;
         WorktreeInfo? ownedWorktree = null; // tracked so a failure after creation cleans it up
+        string?       permissionMode;
 
         try {
             var worktree = work == WorkLocation.OwnedWorktree
@@ -543,6 +544,7 @@ internal partial class AgentOrchestrator {
             try { launcher.Prepare(ctx); }
             finally { if (before is not null) WorktreeManager.RecordDaemonBaseline(worktree.Path, before); }
             var built = launcher.BuildPassthrough(ctx, args);
+            permissionMode = built.PermissionMode;
 
             // Records to the account either way. Keep KCAP_URL and re-add ANTHROPIC_API_KEY so
             // normal local auth survives UnixPtyProcess.Spawn's headless scrub (it applies
@@ -600,7 +602,7 @@ internal partial class AgentOrchestrator {
             return;
         }
 
-        WriteLedger(agent, cmd: null, "local", consent: null);
+        WriteLedger(agent, cmd: null, "local", consent: null, permissionMode);
 
         // Register like a UI launch (no-op for --private). Best-effort: a registration hiccup
         // must not break the local terminal session.

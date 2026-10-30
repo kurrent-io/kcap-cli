@@ -246,6 +246,27 @@ public class AgentOrchestratorResumeLedgerTests {
         await Assert.That(entry.Launch.IsPrivate).IsTrue();
     }
 
+    /// A recovery relaunches from the entry, not from the user's args: an unrecorded mode would leave the
+    /// resumed Claude on whatever <c>permissions.defaultMode</c> it inherits.
+    [Test]
+    public async Task A_local_spawn_records_the_permission_mode_its_args_select() {
+        var launchers = new Dictionary<string, IHostedAgentLauncher> {
+            ["claude"] = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude") { PassthroughPermissionMode = "manual" }
+        };
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
+            new CaptureServerConnection(), new FixedPtyProcessFactory(new OneChunkThenBlockPtyProcess()), launchers);
+        using var cwd = new TempDir();
+
+        var readBuf = new MemoryStream();
+        await FrameCodec.WriteAsync(readBuf, LocalFrame.Detach(), default);
+        readBuf.Position = 0;
+        using var client = new DuplexTestStream(readBuf, new MemoryStream());
+        await orch.HandleLocalSpawnAsync(
+            FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, isPrivate: true, cwd.Path, [], 80, 24), client, default);
+
+        await Assert.That(orch.ResumeLedger!.ReadAll().Single().Launch.PermissionMode).IsEqualTo("manual");
+    }
+
     [Test]
     public async Task A_claude_launch_keeps_its_unconfirmed_pin_only_as_the_vendor_session() {
         using var repoPath = GitRepo.CreateWithCommit();
