@@ -61,10 +61,10 @@ public class RemoteSessionViewModelTests {
         public RemoteSessionViewModel Build(AgentRow row, IPlanArtifactSource? planArtifacts = null,
                 Capacitor.Cli.Core.PullRequests.IPullRequestSource? pullRequests = null, IPlanSource? plans = null,
                 BackgroundCommandActivity? commands = null, SubagentEventsReader? readSubagent = null, AccountReadings? readings = null,
-                Func<AgentRow, HandoffComposerViewModel>? handoff = null) {
+                Func<AgentRow, HandoffComposerViewModel>? handoff = null, HandoffOutcomeReader? handoffOutcomes = null) {
             Directory.Rows.AddOrUpdate(row);
             return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time, WorkSource, () => new FakeTerminalSurface(), planArtifacts, commands, pullRequests: pullRequests, plans: plans, readSubagent: readSubagent, readings: readings,
-                remoteAgents: Remote, notifier: Notifier, serverSessions: Sessions, handoff: handoff);
+                remoteAgents: Remote, notifier: Notifier, serverSessions: Sessions, handoff: handoff, handoffOutcomes: handoffOutcomes);
         }
 
         /// One chat poll: the pane reads its feed on the timer this harness owns.
@@ -1395,6 +1395,33 @@ public class RemoteSessionViewModelTests {
             await Assert.That(vm.RepoLabelText).IsEqualTo("kurrent-io/kcap-cli · Alexey");
             await Assert.That(h.Lane.ChatSubscribes).Contains("s1");
             await Assert.That(ended).IsFalse();
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// The successor's server row, once it ended, still shows what the hand-off carried: the daemon
+    /// keeps the outcome by session id, not on the agent that is gone.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_outcome_shows_after_the_successor_ended_and_became_a_server_row() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var daemon = new FakeDaemonClientService();
+            daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, [Cli.Core.LocalIpc.HandoffWire.Capability]));
+            var asked = new List<string>();
+            var ops = new ScriptedLocalControlOps {
+                ReadHandoffOutcome = id => {
+                    asked.Add(id);
+                    return Task.FromResult<Cli.Core.Handoff.HandoffOutcomeDto?>(
+                        new("s0", "Desktop app RAM growth", "done", null, [new("plan", "Plan A", "carried", null)]));
+                },
+            };
+            var vm = h.Build(Harness.ServerRow(sessionId: "s9"), handoffOutcomes: new HandoffOutcomeReader(daemon, ops, h.Time));
+
+            await WaitUntilAsync(() => vm.Chat.HandoffOutcome is not null, what: "the outcome");
+
+            await Assert.That(asked).Contains("s9");
+            await Assert.That(vm.Chat.HandoffOutcome!.Header).IsEqualTo("Continued from Desktop app RAM growth");
             await vm.TeardownAsync();
         });
     }

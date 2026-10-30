@@ -5,6 +5,7 @@ using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Capacitor.App.Services;
+using Capacitor.Cli.Core.Handoff;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests;
 using Capacitor.Remote.Models;
@@ -276,7 +277,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             LastReads<PullRequestSnapshot>? pullRequestSnapshots = null, Action<string>? pullRequestLinksChanged = null,
             SubagentEventsReader? readSubagent = null, AccountReadings? readings = null, IMessageSenderSource? senders = null,
             IRemoteAgentsService? remoteAgents = null, IAppNotifier? notifier = null, IObservable<string?>? appSubject = null,
-            IServerSessionsService? serverSessions = null, Func<AgentRow, HandoffComposerViewModel>? handoff = null) {
+            IServerSessionsService? serverSessions = null, Func<AgentRow, HandoffComposerViewModel>? handoff = null,
+            HandoffOutcomeReader? handoffOutcomes = null) {
         _drafts = drafts;
         _handoffFactory = handoff;
         _time = time;
@@ -344,7 +346,9 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
                     : lane.PendingInputChanged.Where(u => u.SessionId == sid).Select(u => u.Items))),
             planActivity: planActivity, openCard: OpenCard, drafts: drafts, senders: senders,
             accountReadings: row.MachineBadge is { } daemon ? readings?.Remote(daemon) : null, usageClock: readings?.Clock,
-            signInCompleted: signInCompleted) { InputSending = inputSending };
+            signInCompleted: signInCompleted,
+            handoffOutcome: handoffOutcomes is null ? null : Observable.Switch(_sessionIds.DistinctUntilChanged()
+                .Select(sid => sid is null ? Observable.Empty<HandoffOutcomeDto>() : handoffOutcomes.Watch(sid)))) { InputSending = inputSending };
         lane.Status.Select(s => s.Subject).DistinctUntilChanged()
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(subject => {

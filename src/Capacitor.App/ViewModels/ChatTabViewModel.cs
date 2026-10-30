@@ -11,6 +11,7 @@ using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Handoff;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Remote.Models;
@@ -669,6 +670,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     public bool ShowsReadOnlyBanner => IsReadOnlyParticipant && Handoff is null;
 
+    HandoffOutcomeViewModel? _handoffOutcome;
+    /// What the hand-off carried over from the previous session, shown above the transcript.
+    public HandoffOutcomeViewModel? HandoffOutcome { get => _handoffOutcome; private set => this.RaiseAndSetIfChanged(ref _handoffOutcome, value); }
+
     string _readOnlyNotice = "";
     public string ReadOnlyNotice { get => _readOnlyNotice; private set => this.RaiseAndSetIfChanged(ref _readOnlyNotice, value); }
 
@@ -728,12 +733,13 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             IObservable<bool>? localDaemonOnAppServer = null, PlanActivity? planActivity = null,
             Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null, LocalTranscripts? transcripts = null,
             IMessageSenderSource? senders = null, IObservable<AccountsSnapshotDto?>? accountReadings = null,
-            IObservable<DateTimeOffset>? usageClock = null, IObservable<Unit>? signInCompleted = null)
+            IObservable<DateTimeOffset>? usageClock = null, IObservable<Unit>? signInCompleted = null,
+            IObservable<HandoffOutcomeDto>? handoffOutcome = null)
         : this(agentId, AgentOrigin.Local, LocalSession(agentId, daemon), daemon.Snapshots.Select(s => s.Daemon.SupportedVendors),
                input, uploader, projection is null ? null : LocalFeed(agentId, projection, time, transcripts), opener, time, permissions,
                runs, unavailableNote, null, sessionId, localDaemonOnAppServer, planActivity: planActivity, openCard: openCard,
                drafts: drafts, senders: senders, accountReadings: accountReadings, usageClock: usageClock,
-               signInCompleted: signInCompleted) { }
+               signInCompleted: signInCompleted, handoffOutcome: handoffOutcome) { }
 
     public ChatTabViewModel(
             string agentId, AgentOrigin origin, IObservable<ChatSessionInfo> session, IObservable<string[]?> supportedVendors,
@@ -743,7 +749,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             IObservable<IReadOnlyList<QueuedInputItem>>? serverQueue = null, PlanActivity? planActivity = null,
             Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null, IMessageSenderSource? senders = null,
             IObservable<AccountsSnapshotDto?>? accountReadings = null, IObservable<DateTimeOffset>? usageClock = null,
-            IObservable<Unit>? signInCompleted = null) {
+            IObservable<Unit>? signInCompleted = null, IObservable<HandoffOutcomeDto>? handoffOutcome = null) {
         _drafts = drafts;
         _origin = origin;
         _agentId = agentId;
@@ -751,6 +757,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         drafts?.Watch(origin, agentId, OnStoredDraftChanged).DisposeWith(_disposables);
         _planActivity = planActivity;
         _openCard = openCard;
+        handoffOutcome?.Select(outcome => new HandoffOutcomeViewModel(outcome))
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(card => HandoffOutcome = card, ex => LogOnce($"hand-off outcome: {ex.Message}"))
+            .DisposeWith(_disposables);
         _input = input;
         _uploader = uploader;
         _disposables.Add(input);
