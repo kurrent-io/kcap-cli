@@ -11,7 +11,7 @@ public sealed class HandoffOutcomeViewModel {
     public const string InterruptedNote = "The hand-off was cut short before its work items and plans were carried over.";
 
     public HandoffOutcomeViewModel(HandoffOutcomeDto outcome) {
-        Header = $"Continued from {(string.IsNullOrWhiteSpace(outcome.SourceTitle) ? outcome.SourceSessionId : outcome.SourceTitle)}";
+        Header = $"Continued from {(string.IsNullOrWhiteSpace(outcome.SourceTitle) ? outcome.SourceSessionId : HandoffOutcomeRow.Fold(outcome.SourceTitle))}";
         Note = NoteFor(outcome);
         NoteNeedsAttention = outcome.State is "failed" or "unauthorized" or "interrupted"
             || outcome is { State: "refused", Detail: not "source_active" };

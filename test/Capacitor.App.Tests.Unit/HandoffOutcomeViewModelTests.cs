@@ -24,6 +24,17 @@ public class HandoffOutcomeViewModelTests {
     }
 
     [Test]
+    public async Task Server_labels_are_folded_onto_one_line_and_capped() {
+        var longTitle = new string('t', 200);
+        var vm = new HandoffOutcomeViewModel(new("s1", "Fix\n  the\r\nwidgets", "done", null,
+            [Item("carried", "Plan\nA"), Item("carried", longTitle)]));
+
+        await Assert.That(vm.Header).IsEqualTo("Continued from Fix the widgets");
+        await Assert.That(vm.Rows[0].Text).IsEqualTo("Plan A — carried over");
+        await Assert.That(vm.Rows[1].Text).IsEqualTo($"{new string('t', 119)}… — carried over");
+    }
+
+    [Test]
     public async Task Interrupted_reads_as_cut_short() {
         var vm = new HandoffOutcomeViewModel(new("s1", "Old", "interrupted", null, []));
 
