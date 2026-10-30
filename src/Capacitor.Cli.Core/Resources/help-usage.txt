@@ -53,7 +53,7 @@ Harness setup nudges:
 
 Agents:
   agent start <vendor> [-d] [--worktree] [--private] [--title T] [-- <args>]  Start a daemon-hosted agent
-  agent ls                         List this daemon's agents (id, status, activity, harness, session, repo, worktree, title)
+  agent ls                         List this daemon's agents (id, status, state, activity, kind, harness, session, repo, worktree, title)
   agent attach <id>                Attach your terminal to a running agent (id prefix ok)
   agent resume <id>                Retry an agent a daemon restart left interrupted
   agent stop <id> | --all [-y] [--force]  Stop one agent, or all of them

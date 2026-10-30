@@ -104,8 +104,12 @@ class ArtefactCommand(IArtefactsApi artefacts) {
         yield return $"{"PAGE".PadRight(idWidth)}  {"VERSION",-7} {"VISIBILITY",-10} {"UPDATED",-10}  TITLE";
 
         foreach (var a in pages)
-            yield return $"{a.ArtefactId.PadRight(idWidth)}  {"v" + a.LatestVersion,-7} {a.Visibility,-10} {a.UpdatedAt:yyyy-MM-dd}  {ForTerminal(a.Title)}";
+            yield return $"{a.ArtefactId.PadRight(idWidth)}  {"v" + a.LatestVersion,-7} {a.Visibility,-10} {a.UpdatedAt:yyyy-MM-dd}  {ForTerminal(OneLine(a.Title))}";
     }
+
+    /// <summary>A title with its line breaks and tabs as spaces, so it cannot spill into rows of its own.</summary>
+    static string OneLine(string text) =>
+        text.Replace("\r\n", " ").Replace('\r', ' ').Replace('\n', ' ').Replace('\t', ' ');
 
     /// <summary>The content goes to stdout alone, so it pipes; what the page is and whose words it
     /// holds go to stderr.</summary>

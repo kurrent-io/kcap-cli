@@ -21,4 +21,13 @@ public class ArtefactListTests {
         await Assert.That(lines[2][column..].StartsWith("org ", StringComparison.Ordinal)).IsTrue();
         await Assert.That(lines[1]).EndsWith("Migration plan");
     }
+
+    /// <summary>A title's line breaks and tabs would otherwise print as rows that are not pages.</summary>
+    [Test]
+    public async Task A_title_with_line_breaks_stays_on_its_own_row() {
+        string[] lines = [.. ArtefactCommand.ListLines([Page("art_1", "org", "Plan\nart_2  v1 org\r\nend\rof\ttitle")])];
+
+        await Assert.That(lines.Length).IsEqualTo(2);
+        await Assert.That(lines[1]).EndsWith("Plan art_2  v1 org end of title");
+    }
 }
