@@ -12,7 +12,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 
 /// <summary>
 /// An import that cannot ask — <c>--yes</c> at a terminal, or no terminal at all — keeps every capture
-/// exclusion, never reads stdin for one, and never probes the server about a session it excludes.
+/// exclusion and never reads stdin for one.
 /// </summary>
 [ParallelLimiter<SubprocessLimit>]
 public class ImportExclusionTests {
@@ -58,9 +58,6 @@ public class ImportExclusionTests {
 
         return server;
     }
-
-    static bool Asked(WireMockServer server, string sessionId) =>
-        server.LogEntries.Any(e => e.RequestMessage.Path.Contains(sessionId, StringComparison.Ordinal));
 
     async Task<(int Exit, ImportCommand.ImportRunOutcome? Outcome)> RunAsync(
             WireMockServer server, string projects, string excluded, ImportConsole console) {
@@ -109,12 +106,10 @@ public class ImportExclusionTests {
         await Assert.That(error.ToString()).Contains("Auto-skipping 1 session(s) from 1 excluded source(s) (--yes keeps exclusions).");
         await Assert.That(outcome!.Counts.Excluded).IsEqualTo(1);
         await Assert.That(outcome.Counts.Imported).IsEqualTo(1);
-        await Assert.That(Asked(server, Secret)).IsFalse();
-        await Assert.That(Asked(server, Open)).IsTrue();
     }
 
     [Test]
-    public async Task Redirected_stdin_keeps_the_exclusion_and_never_probes_it() {
+    public async Task Redirected_stdin_keeps_the_exclusion() {
         var (projects, excluded) = Fixture();
         using var server = Online();
         var terminal = new TestImportTerminal();
@@ -126,7 +121,6 @@ public class ImportExclusionTests {
         await Assert.That(outcome!.Counts.Excluded).IsEqualTo(1);
         await Assert.That(outcome.Counts.Imported).IsEqualTo(1);
         await Assert.That(outcome.Counts.Failed).IsEqualTo(0);
-        await Assert.That(Asked(server, Secret)).IsFalse();
     }
 
     [Test]

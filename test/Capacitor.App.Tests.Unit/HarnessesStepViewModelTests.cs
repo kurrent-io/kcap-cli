@@ -180,7 +180,7 @@ public class HarnessesStepViewModelTests {
     /// No tools found sends the user to Settings → Harnesses after setup, not back through the wizard.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Nothing_found_or_chosen_points_at_harnesses_settings() {
+    public async Task Nothing_found_points_at_a_relaunch_and_nothing_chosen_at_harnesses_settings() {
         var (noneFound, declineVisible) = await AvaloniaSession.DispatchAsync(async () => {
             var none = new Harness(Config.Root, new Dictionary<HarnessId, DetectedAgent>());
             await none.Vm.OnEnterAsync(CancellationToken.None);
@@ -192,7 +192,7 @@ public class HarnessesStepViewModelTests {
 
         await Assert.That(noneFound).IsTrue();
         await Assert.That(declineVisible).IsTrue();
-        await Assert.That(SetupLocation.NoneFoundTail).Contains("Settings → Harnesses");
+        await Assert.That(SetupLocation.NoneFoundTail).Contains(SetupLocation.Relaunch);
         await Assert.That(SetupLocation.NothingSelectedNote).Contains("Settings → Harnesses");
     }
 

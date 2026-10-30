@@ -101,8 +101,7 @@ internal sealed class ClaudeImportSource(
             transcripts,
             ctx.MinLines,
             ct,
-            vendor: Vendor,
-            canAddEvents: ClaudeEventLines.CanAddEvents
+            vendor: Vendor
         );
     }
 

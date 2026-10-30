@@ -88,6 +88,30 @@ public partial class UnixPtyProcessOutputTests {
         }
     }
 
+    /// <summary>The mode is the child's, read through the master. Leaving canonical mode is not enough
+    /// while CR still maps to LF; the child moves one step per line this test writes, so each read is
+    /// of a settled state.</summary>
+    [Test]
+    public async Task IsInputCooked_holds_until_the_child_stops_mapping_CR() {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
+
+        using var spawner = new UnixSpawnerThread();
+        var       proc    = Spawn(spawner, "/bin/sh", "-c", "read x; stty -icanon; echo half; read y; stty -icrnl; echo ready; sleep 5");
+        try {
+            await Assert.That(proc.IsInputCooked).IsTrue();
+
+            await proc.WriteAsync("go\r");
+            await ReadUntilAsync(proc, "half");
+            await Assert.That(proc.IsInputCooked).IsTrue();
+
+            await proc.WriteAsync("go\r");
+            await ReadUntilAsync(proc, "ready");
+            await Assert.That(proc.IsInputCooked).IsFalse();
+        } finally {
+            await proc.DisposeAsync();
+        }
+    }
+
     [Test]
     public async Task Dispose_ends_a_parked_read_quietly() {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
@@ -150,6 +174,17 @@ public partial class UnixPtyProcessOutputTests {
 
     static IPtyProcess Spawn(UnixSpawnerThread spawner, string command, params string[] args)
         => new UnixPtyProcessFactory(spawner, TimeProvider.System).Spawn(command, args, AppContext.BaseDirectory);
+
+    static async Task ReadUntilAsync(IPtyProcess proc, string marker) {
+        using var found  = new CancellationTokenSource(Bound);
+        var       output = new StringBuilder();
+
+        await foreach (var chunk in proc.ReadOutputAsync(found.Token)) {
+            output.Append(Encoding.ASCII.GetString(chunk));
+
+            if (output.ToString().Contains(marker, StringComparison.Ordinal)) return;
+        }
+    }
 
     static async Task<byte[]> ReadToEndAsync(IPtyProcess proc, CancellationToken ct = default) {
         var output = new List<byte>();

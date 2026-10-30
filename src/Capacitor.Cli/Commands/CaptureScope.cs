@@ -43,7 +43,12 @@ sealed class CaptureScope {
     bool NeedsPath     => _allowedPaths is { Length: > 0 } || _excludedPaths is { Length: > 0 };
 
     /// <summary>
-    /// Stamps the scope verdict onto the sessions it decides — see <see cref="Judged"/>.
+    /// Stamps the scope verdict onto the sessions this run could act on, and onto those whose probe
+    /// failed. Already-loaded counts: it still reaches <c>ImportSessionAsync</c> to re-assert its
+    /// lifecycle hooks, so one outside the scope has to carry the verdict that keeps it out. A probe
+    /// failure says nothing about scope, and leaving an excluded one unstamped would count it as a
+    /// failure to retry while the server is down and as excluded once it is back. A session that is
+    /// too short or internal reaches nothing either way and keeps its own status.
     ///
     /// <para><paramref name="resolvedCwds"/> holds the remapped, worktree-stripped cwd that
     /// <c>--repo</c> / <c>--org</c> matched each session on. The raw cwd of a deleted worktree
@@ -56,19 +61,8 @@ sealed class CaptureScope {
             IReadOnlyDictionary<string, string> resolvedCwds) {
         if (NeedsRepo) await WarmRepoCacheAsync(classifications, resolvedCwds);
 
-        return [.. classifications.Select(c => Judged(c) ? Stamp(c, resolvedCwds) : c)];
+        return [.. classifications.Select(c => Scoped(c) ? Stamp(c, resolvedCwds) : c)];
     }
-
-    /// <summary>
-    /// The sessions a verdict is stamped on. Already-loaded counts: it still reaches
-    /// <c>ImportSessionAsync</c> to re-assert its lifecycle hooks, so one outside the scope has to carry
-    /// the verdict that keeps it out. A failed probe counts too: the exclusion holds whether or not the
-    /// server answered, and without it an excluded session reads as a failure when the server is down. A
-    /// session that is too short or internal reaches nothing, and stamping it would relabel it
-    /// <c>Excluded</c> in the plan.
-    /// </summary>
-    internal static bool Judged(ImportCommand.SessionClassification c) =>
-        Actionable(c) || c.Status is ImportCommand.ClassificationStatus.ProbeError;
 
     /// <summary>
     /// The statuses that can still reach the server this run: <c>BuildImportChains</c> takes New and
@@ -79,6 +73,10 @@ sealed class CaptureScope {
                  or ImportCommand.ClassificationStatus.Partial
                  or ImportCommand.ClassificationStatus.AlreadyLoaded;
 
+    /// <summary>The sessions <see cref="ApplyAsync"/> stamps.</summary>
+    internal static bool Scoped(ImportCommand.SessionClassification c) =>
+        Actionable(c) || c.Status is ImportCommand.ClassificationStatus.ProbeError;
+
     /// <summary>
     /// Resolves every distinct cwd up front, bounded, so a few hundred workspaces are not a serial
     /// wall of <c>git</c> invocations between the probe bar clearing and the plan appearing. Each
@@ -87,7 +85,7 @@ sealed class CaptureScope {
     async Task WarmRepoCacheAsync(
             IReadOnlyList<ImportCommand.SessionClassification> classifications,
             IReadOnlyDictionary<string, string> resolvedCwds) {
-        var cwds = classifications.Where(Judged)
+        var cwds = classifications.Where(Scoped)
             .SelectMany(c => ExcludesRepos
                             ? new[] { ImportCommand.ResolveCwd(c, resolvedCwds), CwdOf(c) }
                             : new[] { ImportCommand.ResolveCwd(c, resolvedCwds) })

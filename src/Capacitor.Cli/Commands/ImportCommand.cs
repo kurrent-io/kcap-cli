@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Frozen;
+using System.Net;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -626,23 +628,25 @@ class ImportCommand(
     internal static bool HadBackgroundWork(ConcurrentBag<Task> backgroundTasks) => !backgroundTasks.IsEmpty;
 
     /// <summary>
-    /// Compute the per-source Done-grid row for a single vendor, from the same outcomes the totals row
-    /// sums, so the rows add up to it.
+    /// Compute the per-source Done-grid row for a single vendor.
     /// </summary>
     /// <param name="classifications">All classifications for this vendor (already filtered).</param>
-    /// <param name="chainOutcomes">How each session the chain phase ran ended, by session id.</param>
+    /// <param name="imported">Count of sessions in <paramref name="classifications"/> whose SessionId appears in importedSessionIds (i.e. chain-phase imports).</param>
     /// <param name="routedOutcomes">Per-vendor routed-phase outcomes, or null if this vendor ran through the chain phase only.</param>
     /// <param name="deferredIds">Sessions a cap left for the background import.</param>
     /// <remarks>
-    /// Routed-phase vendors fold <c>routedOutcomes.Skipped</c> into Excluded (the server said "already
-    /// current") and <c>routedOutcomes.Failed</c> into Errored. A session a cap left for later is
-    /// Deferred, as it is in the totals.
+    /// Routed-phase vendors (Cursor today) get exact attribution: <c>routedOutcomes.Skipped</c>
+    /// folds into Excluded (server said "already current"), <c>routedOutcomes.Failed</c> into Errored.
+    /// Chain-phase vendors (Claude/Codex) split their imported sessions into Loaded and
+    /// <paramref name="resumed"/> the way the totals do, and count (New+Partial)−imported as Errored,
+    /// less the sessions a cap deferred: those never ran, and the totals count them as Deferred.
     /// </remarks>
     internal static FinalCounts ComputePerSourceFinalCounts(
-            IReadOnlyList<SessionClassification>                   classifications,
-            IReadOnlyDictionary<string, SessionImportOutcome>      chainOutcomes,
-            (int Loaded, int Skipped, int Failed)?                 routedOutcomes,
-            IReadOnlySet<string>?                                  deferredIds = null
+            IReadOnlyList<SessionClassification>   classifications,
+            int                                    imported,
+            (int Loaded, int Skipped, int Failed)? routedOutcomes,
+            int                                    resumed     = 0,
+            IReadOnlySet<string>?                  deferredIds = null
         ) {
         var counts   = ComputeCounts(classifications);
         var deferred = CountDeferred(classifications, deferredIds);
@@ -668,18 +672,14 @@ class ImportCommand(
             );
         }
 
-        var outcomes = classifications
-            .Select(c => chainOutcomes.TryGetValue(c.SessionId, out var o) ? o : (SessionImportOutcome?)null)
-            .ToList();
-
         return new FinalCounts(
-            Loaded: outcomes.Count(o => o is SessionImportOutcome.Loaded),
-            Resumed: outcomes.Count(o => o is SessionImportOutcome.Resumed),
+            Loaded: imported - resumed,
+            Resumed: resumed,
             AlreadyLoaded: counts.AlreadyLoaded,
             TooShort: counts.TooShort,
             Excluded: counts.Excluded,
             ProbeError: counts.ProbeError,
-            Errored: outcomes.Count(o => o is SessionImportOutcome.Errored),
+            Errored: counts.Eligible - imported - deferred,
             TitlesGenerated: 0,
             TitlesSkipped: 0,
             TitlesFailed: 0,
@@ -733,21 +733,8 @@ class ImportCommand(
 
         /// <summary>Should have landed and did not. Re-running retries exactly these.</summary>
         internal int Failed => ProbeError + Errored;
-
-        /// <summary>Probes failed and the server answered for no session at all: the shape of a server that is
-        /// down or unreachable, rather than one turning particular sessions away.</summary>
-        internal bool NoAnswerFromServer => ProbeError > 0 && Imported + AlreadyLoaded + Deleted + Errored == 0;
     }
 
-    /// <summary>
-    /// How a run ended, for a caller that has to say so.
-    /// </summary>
-    /// <remarks>
-    /// <b>The return value cannot answer this.</b> <c>HandleImport</c> returns 0 for a run whose sessions
-    /// failed — import is best-effort and the Done grid is where that is reported — so a caller
-    /// deriving success from it calls a partial or total failure a success. <see cref="ImportExitCode"/>
-    /// derives the command's exit code from this outcome instead.
-    /// </remarks>
     /// <summary>Reports a run that deliberately moved nothing: it reached a decision, and the decision
     /// was that there was nothing to do.</summary>
     static void ReportNothing(Action<ImportRunOutcome>? onFinished, Action<ImportRunSelection>? onSelected, bool capped) {
@@ -760,9 +747,22 @@ class ImportCommand(
             Partition: capped ? ImportRunPartition.Empty : null));
     }
 
+    /// <summary>
+    /// How a run ended, for a caller that has to say so.
+    /// </summary>
+    /// <remarks>
+    /// <c>HandleImport</c> returns 0 for a run whose sessions failed, because its embedded callers report
+    /// the failure themselves; only <c>kcap import</c> itself turns this into its exit code.
+    /// </remarks>
     internal sealed record ImportRunOutcome(FinalCounts Counts, int VisibilityFailures, ImportRunPartition? Partition = null) {
         /// <summary>Anything the user asked for that did not happen.</summary>
         internal bool AnythingFailed => Counts.Failed > 0 || VisibilityFailures > 0;
+
+        /// <summary>
+        /// <c>kcap import</c>'s exit status: 1 when anything failed, whether some sessions or all of them,
+        /// since either leaves work a re-run has to finish. Skipped and excluded sessions are not failures.
+        /// </summary>
+        internal int ExitCode => AnythingFailed ? 1 : 0;
     }
 
     /// <summary>
@@ -1236,18 +1236,6 @@ class ImportCommand(
             Reimport: reimport
         ) { Stderr = console.Error };
 
-        // Capture scope is decided here, over every source's output at once, and nowhere else.
-        var captureScope = new CaptureScope(router, config, home,
-                                            allowedPaths, excludedPaths, allowedRepos, excludedRepos, time);
-
-        var canPrompt = CanPromptForExclusions(display.Tty, console.InputRedirected, autoSkipExclusions, skipConfirmation);
-
-        var heldBack = captureScope.Configured && !canPrompt
-            ? await ExcludeBeforeProbeAsync(captureScope, filteredPerSource, sessionCwds)
-            : null;
-
-        var toProbe = filteredPerSource.Sum(d => d.Count);
-
         IReadOnlyList<SessionClassification>[] classificationsPerSource;
 
         if (display.Tty) {
@@ -1258,7 +1246,6 @@ class ImportCommand(
                 .Columns(new TaskDescriptionColumn(), new ProgressBarColumn(), new PercentageColumn())
                 .StartAsync(async ctx => {
                         var bar = ctx.AddTask($"{display.Indented}[yellow]Probing[/]", maxValue: totalAfterScope);
-                        bar.Increment(totalAfterScope - toProbe);
 
                         var probeTasks = sources.Select(async (s, idx) => {
                                     var slice = filteredPerSource[idx];
@@ -1281,15 +1268,11 @@ class ImportCommand(
                     }
                 );
         } else {
-            display.Line($"Probing {toProbe} sessions...");
+            display.Line($"Probing {totalAfterScope} sessions...");
 
             classificationsPerSource = await Task.WhenAll(
                 sources.Select(async (s, idx) => await s.ClassifyAsync(filteredPerSource[idx], classifyCtx, CancellationToken.None))
             );
-        }
-
-        if (heldBack is not null) {
-            for (var i = 0; i < sources.Count; i++) classificationsPerSource[i] = [.. classificationsPerSource[i], .. heldBack[i]];
         }
 
         // --- --since filter (file-based sources only — Codex pruned at discovery, Cursor n/a) ---
@@ -1330,19 +1313,21 @@ class ImportCommand(
             foreach (var c in classificationsPerSource[i])
                 sourceBySession.TryAdd((c.Vendor, c.SessionId), sources[i]);
 
+        // Capture scope is decided here, over every source's output at once, and nowhere else.
+        var captureScope = new CaptureScope(router, config, home,
+                                            allowedPaths, excludedPaths, allowedRepos, excludedRepos, time);
+
         if (captureScope.Configured) classifications = await captureScope.ApplyAsync(classifications, sessionCwds);
 
         // --- Resolve excluded-repo / excluded-path prompts (interactive without --yes only) ---
         // Repo and path exclusions are independent gates: a session is included only when
         // EVERY applicable exclusion key has been opted-in. Without that, opting into a
         // repo would silently bypass a path the user had explicitly ignored.
-        // Every session this run could still send: an already-loaded one re-asserts its lifecycle
-        // hooks, so it is as much a question for the user as a new one, it counts toward what an
-        // answer withholds, and it must be able to open the block below on its own. A session held
-        // back before the probe is already Excluded and is counted with them.
-        var actionable = classifications
-            .Where(c => CaptureScope.Actionable(c) || c.Status is ClassificationStatus.Excluded)
-            .ToList();
+        // Every session this run could still send, which is the same set CaptureScope stamps: an
+        // already-loaded one re-asserts its lifecycle hooks, so it is as much a question for the
+        // user as a new one, it counts toward what an answer withholds, and — since the block below
+        // only opens when a bucket is non-empty — it must be able to open it on its own.
+        var actionable = classifications.Where(CaptureScope.Actionable).ToList();
 
         var excludedByRepo = actionable
             .SelectMany(c => c.ExcludedRepoKeys.Select(key => (Key: key, Session: c)))
@@ -1364,6 +1349,8 @@ class ImportCommand(
         var includeOutsideAllowlist = false;
 
         if (excludedByRepo.Count > 0 || excludedByPath.Count > 0 || outsideAllowlist.Count > 0) {
+            var canPrompt = CanPromptForExclusions(display.Tty, console.InputRedirected, autoSkipExclusions, skipConfirmation);
+
             if (canPrompt) {
                 foreach (var (key, sessions) in excludedByRepo) {
                     await console.Error.WriteAsync($"Repository {key} is excluded. Include {sessions.Count} session{(sessions.Count == 1 ? "" : "s")} from it? (y/N) ");
@@ -1401,8 +1388,8 @@ class ImportCommand(
             }
         }
 
-        // Also reaches a session whose probe failed, which no prompt asks about: an exclusion holds whether
-        // or not the server answered.
+        // Outside the prompt block: a session whose probe failed is never asked about, and must still
+        // land in Excluded when nothing opted its exclusion in.
         for (var i = 0; i < classifications.Count; i++) {
             var c = classifications[i];
 
@@ -1429,6 +1416,13 @@ class ImportCommand(
 
         display.BeginPhase("Plan");
         display.WritePlanGrid(planCounts, planBySource);
+
+        // A probe error alone cannot tell a down server from a bad session, and the Done grid's "re-run
+        // to retry" reads as a transient blip unless the cause is named.
+        if (planCounts.ProbeError > 0 && await ServerReachability.UnreachableReasonAsync(httpClient, baseUrl, time) is { } unreachable)
+            await console.Error.WriteLineAsync(
+                $"{display.Indented}Could not reach the kcap server at {UnusableUrlDiagnostic.Sanitize(baseUrl)} "
+              + $"({HttpClientExtensions.StripControlCharacters(unreachable)}). Nothing can be imported until it is back.");
 
         // --- Build chains + set continuation predecessors ---
         // Chain workers operate on file-based classifications (Claude/Codex);
@@ -1507,6 +1501,7 @@ class ImportCommand(
         var       titleFailures      = new ConcurrentBag<(string SessionId, string Reason)>();
         var       summaryFailures    = new ConcurrentBag<(string SessionId, string Reason)>();
         var       importedSessionIds = new ConcurrentBag<string>();
+        var       resumedSessionIds  = new ConcurrentBag<string>();
         var       partitionSucceeded = new ConcurrentBag<string>();
         var       partitionSkipped   = new ConcurrentBag<string>();
         var       partitionFailed    = new ConcurrentBag<string>();
@@ -1532,6 +1527,7 @@ class ImportCommand(
             OnSessionWarning = (_, sid, message) => WarnSession(sid, message),
             OnSessionEnded = (_, c, outcome, lines) => {
                 importedSessionIds.Add(c.SessionId);
+                if (outcome == SessionImportOutcome.Resumed) resumedSessionIds.Add(c.SessionId);
                 if (selectedIds?.Contains(c.SessionId) == true) partitionSucceeded.Add(c.SessionId);
 
                 var verb = outcome == SessionImportOutcome.Resumed
@@ -1826,8 +1822,9 @@ class ImportCommand(
                                         slots[slot].Description     = LoadingDesc(slot, currentSid[slot], currentVerb[slot]);
                                     }
                                 },
-                                OnSessionEnded = (slot, c, _, _) => {
+                                OnSessionEnded = (slot, c, outcome, _) => {
                                     importedSessionIds.Add(c.SessionId);
+                                    if (outcome == SessionImportOutcome.Resumed) resumedSessionIds.Add(c.SessionId);
                                     // Partition accounting must happen on BOTH the TTY and non-TTY
                                     // paths (the base handler records it too); it drives the
                                     // foreground outcome and the background-spawn decision.
@@ -2214,23 +2211,30 @@ class ImportCommand(
             Deferred: deferredCount
         );
 
-        // Per-source FinalCounts, only with more than one source.
+        // Per-source FinalCounts. With a single source there's no sub-grid;
+        // with N sources we attribute Loaded/Resumed/Errored from the imported
+        // SessionIds back to their vendor.
         Dictionary<string, FinalCounts>? doneBySource = null;
 
         if (sources.Count > 1) {
+            var importedSet = importedSessionIds.ToHashSet(StringComparer.Ordinal);
+            var resumedSet  = resumedSessionIds.ToHashSet(StringComparer.Ordinal);
+
             doneBySource = classifications
                 .GroupBy(c => c.Vendor)
                 .ToDictionary(
                     g => g.Key.VendorId,
                     g => {
-                        var slice = g.ToList();
+                        var slice    = g.ToList();
+                        var imported = slice.Count(c => importedSet.Contains(c.SessionId));
                         routedOutcomesByVendor.TryGetValue(g.Key, out var routed);
                         var hasRouted = routedOutcomesByVendor.ContainsKey(g.Key);
 
                         return ComputePerSourceFinalCounts(
                             slice,
-                            importResult.BySession,
+                            imported,
                             hasRouted ? routed : null,
+                            slice.Count(c => resumedSet.Contains(c.SessionId)),
                             deferredIds
                         );
                     },
@@ -2239,10 +2243,6 @@ class ImportCommand(
         }
 
         display.WriteDoneGrid(final, doneBySource);
-
-        if (final.NoAnswerFromServer) {
-            await console.Error.WriteLineAsync($"{display.Indented}{ServerUnavailableNotice(baseUrl, classifications)}");
-        }
 
         ImportRunPartition? partition = null;
 
@@ -3250,17 +3250,7 @@ class ImportCommand(
 
     enum TitleResult { Generated, Skipped, Failed }
 
-    /// <param name="Outcomes">How each session the workers ran ended, keyed by session id; the counts above
-    /// are its tallies.</param>
-    internal sealed record ImportChainsResult(
-            int                                                Loaded,
-            int                                                Resumed,
-            int                                                Errored,
-            IReadOnlyDictionary<string, SessionImportOutcome>? Outcomes = null
-        ) {
-        internal IReadOnlyDictionary<string, SessionImportOutcome> BySession =>
-            Outcomes ?? FrozenDictionary<string, SessionImportOutcome>.Empty;
-    }
+    internal sealed record ImportChainsResult(int Loaded, int Resumed, int Errored);
 
     internal sealed record ChainWorkerEvents {
         /// <summary>Fired before a worker begins importing a session on its slot.</summary>
@@ -3328,10 +3318,10 @@ class ImportCommand(
             IReadOnlyDictionary<string, string>? sessionCwds       = null,
             string?                              defaultVisibility = null
         ) {
-        var loaded   = 0;
-        var resumed  = 0;
-        var errored  = 0;
-        var outcomes = new ConcurrentDictionary<string, SessionImportOutcome>(StringComparer.Ordinal);
+        var loaded  = 0;
+        var resumed = 0;
+        var errored = 0;
+        var ledger  = TranscriptImportLedger.ForRecording(config);
 
         var queue = Channel.CreateUnbounded<List<SessionClassification>>(
             new() {
@@ -3361,7 +3351,7 @@ class ImportCommand(
                                 var linesSent = 0;
 
                                 try {
-                                    (r, linesSent) = await ImportSingleSessionAsync(httpClient, baseUrl, session, slot, events, ct, sessionCwds, defaultVisibility);
+                                    (r, linesSent) = await ImportSingleSessionAsync(httpClient, baseUrl, session, slot, events, ledger, ct, sessionCwds, defaultVisibility);
                                 } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
                                     throw;
                                 } catch (Exception ex) {
@@ -3375,8 +3365,6 @@ class ImportCommand(
                                     case SessionImportOutcome.Errored: Interlocked.Increment(ref errored); break;
                                 }
 
-                                outcomes[session.SessionId] = r;
-
                                 if (r != SessionImportOutcome.Errored) {
                                     events.OnSessionEnded(slot, session, r, linesSent);
                                 }
@@ -3388,9 +3376,13 @@ class ImportCommand(
             );
         }
 
-        await Task.WhenAll(workers);
+        try {
+            await Task.WhenAll(workers);
+        } finally {
+            ledger.Save();
+        }
 
-        return new(loaded, resumed, errored, outcomes);
+        return new(loaded, resumed, errored);
     }
 
     internal enum SessionImportOutcome { Loaded, Resumed, Errored }
@@ -3410,12 +3402,13 @@ class ImportCommand(
             : session.Meta.Cwd ?? SessionImporter.DecodeCwdFromDirName(session.EncodedCwd);
 
     async Task<(SessionImportOutcome Outcome, int LinesSent)> ImportSingleSessionAsync(
-            HttpClient            httpClient,
-            string                baseUrl,
-            SessionClassification session,
-            int                   slot,
-            ChainWorkerEvents     events,
-            CancellationToken     ct,
+            HttpClient             httpClient,
+            string                 baseUrl,
+            SessionClassification  session,
+            int                    slot,
+            ChainWorkerEvents      events,
+            TranscriptImportLedger ledger,
+            CancellationToken      ct,
             IReadOnlyDictionary<string, string>? sessionCwds       = null,
             string?                              defaultVisibility = null
         ) {
@@ -3431,8 +3424,11 @@ class ImportCommand(
             )
             : 0;
 
+        var transcriptDropped = false;
+
         IProgress<ImportProgress> perSessionProgress = new CallbackProgress(ev => {
                 switch (ev) {
+                    case BatchDropped { AgentId: null }: transcriptDropped = true; break;
                     // Only parent-transcript batches (AgentId == null) advance the
                     // slot bar; subagent batches are surfaced via the subagent events.
                     case BatchFlushed { AgentId: null } bf: events.OnSessionProgress(slot, bf.LinesAdded, sendableTotal); break;
@@ -3447,6 +3443,7 @@ class ImportCommand(
             try {
                 // Fail-closed tail: a rejected/half-applied resume must NOT be finalized
                 // (posting session-end after a gap would mark the session ended with a hole).
+                var completeLines = new StrongBox<int>();
                 var linesSent = await SessionImporter.SendTranscriptBatches(
                     httpClient,
                     baseUrl,
@@ -3456,7 +3453,8 @@ class ImportCommand(
                     startLine: session.ResumeFromLine, time: time,
                     progress: perSessionProgress,
                     vendor: session.Vendor,
-                    failOnError: true
+                    failOnError: true,
+                    completeLines: completeLines
                 );
 
                 var (_, resumeTitleCancelled) = await TryPostCodexHarnessTitleAsync(httpClient, baseUrl, session, perSessionProgress, ct);
@@ -3492,6 +3490,8 @@ class ImportCommand(
 
                     return (SessionImportOutcome.Errored, linesSent);
                 }
+
+                if (!transcriptDropped) await RecordImportMarkAsync(httpClient, baseUrl, session.SessionId, completeLines.Value, ledger, ct);
 
                 return (SessionImportOutcome.Resumed, linesSent);
             } catch (HttpRequestException ex) {
@@ -3675,10 +3675,35 @@ class ImportCommand(
 
         if (titleCancelled) ct.ThrowIfCancellationRequested();
 
+        if (!transcriptDropped) await RecordImportMarkAsync(httpClient, baseUrl, session.SessionId, importResult.CompleteLines, ledger, ct);
+
         if (!harnessTitled) events.OnTitleTaskReady((session.SessionId, session.FilePath, session.PreviousSessionId, session.Vendor));
         events.OnBackgroundWorkReady((session.SessionId, generateWhatsDone, session.Vendor));
 
         return (SessionImportOutcome.Loaded, importResult.LinesSent);
+    }
+
+    /// <summary>
+    /// Asks the server where its watermark settled once the transcript landed, and records it beside the lines
+    /// that were sent, so the next import can tell lines the server ignored from lines it never got.
+    /// </summary>
+    static async Task RecordImportMarkAsync(
+            HttpClient             httpClient,
+            string                 baseUrl,
+            string                 sessionId,
+            int                    completeLines,
+            TranscriptImportLedger ledger,
+            CancellationToken      ct
+        ) {
+        try {
+            using var resp = await httpClient.GetAsync($"{baseUrl}/api/sessions/{sessionId}/last-line", ct);
+            if (resp.StatusCode != HttpStatusCode.OK) return;
+
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+            if (doc.RootElement.Num("last_line_number") is { } watermark && completeLines > watermark)
+                ledger.Record(baseUrl, sessionId, new TranscriptImportMark(completeLines, (int)watermark));
+        } catch (Exception e) when (e is HttpRequestException or JsonException or InvalidOperationException
+                                     || e is OperationCanceledException && !ct.IsCancellationRequested) { }
     }
 
     // A cancellation during the title post is held until session-end has been sent, which then runs uncancelled and is
@@ -3758,7 +3783,6 @@ class ImportCommand(
     internal static bool CanPromptForExclusions(bool tty, bool inputRedirected, bool autoSkipExclusions, bool skipConfirmation) =>
         tty && !inputRedirected && !autoSkipExclusions && !skipConfirmation;
 
-    /// <summary>What a run that cannot ask prints in place of the exclusion prompts.</summary>
     /// <summary>The count is of working directories: several can share a repository, and one can have none.</summary>
     internal static string MatchingFoldersLine(int folders) =>
         $"Matching {folders} folder{(folders == 1 ? "" : "s")} to repositories...";
@@ -3779,93 +3803,12 @@ class ImportCommand(
             yield return $"{Count(outsideAllowlist)} outside the allow list (`kcap allow --list`)";
     }
 
+    /// <summary>What a run that cannot ask prints in place of the exclusion prompts.</summary>
     internal static string AutoSkipNotice(int sessions, int groups, bool skipConfirmation, bool autoSkipExclusions) {
         var notice = $"Auto-skipping {sessions} session(s) from {groups} excluded source(s) "
                    + (skipConfirmation && !autoSkipExclusions ? "(--yes keeps exclusions)." : "(non-interactive).");
 
         return autoSkipExclusions ? notice : notice + " To include them, run without --yes at a terminal and answer its prompt.";
-    }
-
-    /// <summary>
-    /// Takes every session a capture exclusion already settles out of <paramref name="perSource"/> before
-    /// anything is probed, and returns them per source as <c>Excluded</c>. Only for a run that cannot ask to
-    /// include them: there the probe could add nothing but a request about an excluded session, and a server
-    /// that is down would report the exclusion as a failure. A session whose cwd is unknown before
-    /// classification is left to the scope pass that follows it.
-    /// </summary>
-    internal static async Task<List<SessionClassification>[]> ExcludeBeforeProbeAsync(
-            CaptureScope                        scope,
-            List<DiscoveredSession>[]           perSource,
-            IReadOnlyDictionary<string, string> sessionCwds
-        ) {
-        var candidates = new List<(int Source, DiscoveredSession Session, SessionClassification Classification)>();
-
-        for (var i = 0; i < perSource.Length; i++) {
-            foreach (var s in perSource[i]) {
-                if (BeforeProbe(s) is { } c) candidates.Add((i, s, c));
-            }
-        }
-
-        var heldBack = new List<SessionClassification>[perSource.Length];
-        for (var i = 0; i < heldBack.Length; i++) heldBack[i] = [];
-
-        if (candidates.Count == 0) return heldBack;
-
-        var stamped = await scope.ApplyAsync([.. candidates.Select(c => c.Classification)], sessionCwds);
-        var dropped = new HashSet<DiscoveredSession>(ReferenceEqualityComparer.Instance);
-        var none    = new HashSet<string>();
-
-        for (var k = 0; k < stamped.Count; k++) {
-            if (!ShouldExclude(stamped[k], none, none)) continue;
-
-            heldBack[candidates[k].Source].Add(stamped[k] with { Status = ClassificationStatus.Excluded });
-            dropped.Add(candidates[k].Session);
-        }
-
-        for (var i = 0; i < perSource.Length; i++) {
-            if (perSource[i].Any(dropped.Contains)) perSource[i] = [.. perSource[i].Where(s => !dropped.Contains(s))];
-        }
-
-        return heldBack;
-    }
-
-    /// <summary>
-    /// What a session's own files say before the server is asked, or null when they do not name its cwd.
-    /// Claude and Codex read it from the transcript with the extractor their classification uses; every other
-    /// source found it at discovery. kcap's own sub-sessions are left to classification, which drops them.
-    /// </summary>
-    static SessionClassification? BeforeProbe(DiscoveredSession s) {
-        var filePath   = s.SourceMeta.TryGetValue("FilePath", out var f) ? f as string : null;
-        var encodedCwd = s.SourceMeta.TryGetValue("EncodedCwd", out var e) ? e as string : null;
-        var transcript = s.Vendor is HarnessId.Claude or HarnessId.Codex ? filePath : null;
-
-        if (transcript is not null && s.Vendor is HarnessId.Claude && TitleGenerator.IsCapacitorSubSession(transcript)) return null;
-
-        var meta = transcript is null           ? new SessionMetadata { SessionId = s.SessionId, Cwd = s.Cwd, FirstTimestamp = s.FirstTimestamp }
-                 : s.Vendor is HarnessId.Codex ? ExtractCodexSessionMetadata(transcript)
-                 :                               ExtractSessionMetadata(transcript);
-
-        if (meta.Cwd is null) return null;
-
-        return new SessionClassification {
-            SessionId  = s.SessionId,
-            FilePath   = transcript ?? "",
-            EncodedCwd = encodedCwd ?? "",
-            Meta       = meta,
-            Status     = ClassificationStatus.New,
-            Vendor     = s.Vendor,
-            SourceMeta = s.SourceMeta,
-        };
-    }
-
-    /// <summary>Names the server as the likely cause when it answered for no session of the run.</summary>
-    internal static string ServerUnavailableNotice(string baseUrl, IEnumerable<SessionClassification> classifications) {
-        var failed = classifications.Where(c => c.Status is ClassificationStatus.ProbeError).ToList();
-        var reason = failed.Select(c => c.ProbeErrorReason).FirstOrDefault(r => !string.IsNullOrWhiteSpace(r));
-        var detail = reason is null ? "" : $" ({new string(reason.Where(ch => !char.IsControl(ch)).ToArray())})";
-
-        return $"The kcap server at {UnusableUrlDiagnostic.Sanitize(baseUrl)} answered none of {failed.Count} probe(s){detail}, "
-             + "so it looks unavailable. Check that it is running and reachable, then re-run; nothing already imported is sent again.";
     }
 
     /// <summary>

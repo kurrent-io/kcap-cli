@@ -8,7 +8,7 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Integration;
 
 /// <summary>Spawns the built CLI for <c>kcap memories import</c> against a stubbed server: every note but the index is
-/// saved, homed at the working directory's repository, and a dry run sends nothing.</summary>
+/// saved, homed at the working directory's repository, and a dry run or an unconfirmable run sends nothing.</summary>
 public class MemoriesImportTests : IDisposable {
     [TempDaemonPaths] public required TempDaemonStore Daemons { get; init; }
     [TempConfigRoot]  public required TempConfigRoot  Config  { get; init; }
@@ -18,7 +18,10 @@ public class MemoriesImportTests : IDisposable {
 
     public void Dispose() => _server.Stop();
 
-    async Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(string workingDirectory, params string[] args) {
+    async Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(string workingDirectory, params string[] args) =>
+        await RunAsync(workingDirectory, CancellationToken.None, args);
+
+    async Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(string workingDirectory, CancellationToken ct, params string[] args) {
         _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"provider":"None"}"""));
         _server.Given(Request.Create().WithPath("/api/memories").UsingPost())
@@ -30,11 +33,16 @@ public class MemoriesImportTests : IDisposable {
         psi.Environment["KCAP_URL"] = _server.Url!;
 
         using var proc   = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start kcap process");
-        var       stdout = await proc.StandardOutput.ReadToEndAsync();
-        var       stderr = await proc.StandardError.ReadToEndAsync();
-        await proc.WaitForExitAsync();
+        var       stdout = proc.StandardOutput.ReadToEndAsync(CancellationToken.None);
+        var       stderr = proc.StandardError.ReadToEndAsync(CancellationToken.None);
+        try {
+            await proc.WaitForExitAsync(ct);
+        } catch (OperationCanceledException) {
+            proc.Kill();
+            throw;
+        }
 
-        return (proc.ExitCode, stdout, stderr);
+        return (proc.ExitCode, await stdout, await stderr);
     }
 
     string MemoryFolder() {
@@ -73,6 +81,20 @@ public class MemoriesImportTests : IDisposable {
         await Assert.That(result.ExitCode).IsEqualTo(0).Because(result.StdErr);
         await Assert.That(result.StdOut).Contains("utc-clock");
         await Assert.That(result.StdOut).Contains("the whole org");
+        await Assert.That(Saves()).IsEmpty();
+    }
+
+    /// <summary>Pins the refusal with stdin left open and never written, which is what made the prompt wait forever.</summary>
+    [Test]
+    public async Task Without_a_terminal_and_without_yes_it_refuses_promptly_and_sends_nothing() {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+
+        var result = await RunAsync(Tmp.Path, timeout.Token, "memories", "import", "--from", MemoryFolder(), "--global");
+
+        await Assert.That(result.ExitCode).IsEqualTo(1);
+        await Assert.That(result.StdOut).Contains("utc-clock");
+        await Assert.That(result.StdOut).DoesNotContain("Import? [y/N]");
+        await Assert.That(result.StdErr).Contains("Pass --yes");
         await Assert.That(Saves()).IsEmpty();
     }
 }

@@ -18,9 +18,10 @@ Options:
   --update           Overwrite a memory whose slug already exists. Without it,
                      existing slugs are reported and left alone.
   --dry-run          Show the plan and exit without saving anything.
-  --yes, -y          Skip the confirmation prompt. Required when stdin or
-                     stdout is not a terminal: without it the command lists
-                     the plan, saves nothing and exits 1.
+  --yes, -y          Skip the confirmation prompt. When there are notes to
+                     save and stdin or stdout is not a terminal, it is
+                     required: without it, nothing is saved and the command
+                     exits 1. --dry-run never asks.
 
 Notes:
   - The home defaults to the current directory's repository. A Claude project

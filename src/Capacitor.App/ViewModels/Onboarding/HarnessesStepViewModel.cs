@@ -94,8 +94,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     public bool Skippable => !_installed;
 
     public string Lede =>
-        "Each harness you turn on records its sessions from now on and gets tools to search your past work — " +
-        "so what you already fixed is there to find.";
+        "Sessions are stored from now on, and each harness gets tools to search your past work";
 
     public string MachineName { get; }
 

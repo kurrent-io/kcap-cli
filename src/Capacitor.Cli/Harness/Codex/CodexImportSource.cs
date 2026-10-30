@@ -112,8 +112,7 @@ internal sealed class CodexImportSource(
             transcripts,
             ctx.MinLines,
             ct,
-            vendor: Vendor,
-            canAddEvents: CodexEventLines.CanAddEvents
+            vendor: Vendor
         );
     }
 

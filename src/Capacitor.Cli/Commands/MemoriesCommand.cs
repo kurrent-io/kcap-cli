@@ -95,9 +95,19 @@ class MemoriesCommand(
 
         if (flags.ContainsKey("--dry-run") || plan.All(c => c.SkipReason is not null)) return 0;
 
-        var yes = flags.ContainsKey("--yes") || flags.ContainsKey("-y");
-        if (await ConfirmAsync(yes, Console.IsInputRedirected, Console.IsOutputRedirected, Console.In, Console.Out, Console.Error) is { } stop)
-            return stop;
+        if (!flags.ContainsKey("--yes") && !flags.ContainsKey("-y")) {
+            // Redirected, the prompt lands where nobody reads it while the read waits on input nobody will send.
+            if (Console.IsInputRedirected || Console.IsOutputRedirected) {
+                await Console.Error.WriteLineAsync("Nothing imported: there is no terminal to confirm on. Pass --yes to import without a prompt.");
+                return 1;
+            }
+
+            await Console.Out.WriteAsync("Import? [y/N] ");
+            if (!string.Equals((await Console.In.ReadLineAsync())?.Trim(), "y", StringComparison.OrdinalIgnoreCase)) {
+                await Console.Out.WriteLineAsync("Cancelled.");
+                return 0;
+            }
+        }
 
         var baseUrl   = profiles.Resolution.ServerUrl!;
         var machineId = await ResolveMachineIdAsync();
@@ -140,25 +150,6 @@ class MemoriesCommand(
         }
 
         return failed == 0 ? 0 : 1;
-    }
-
-    /// <summary>Asks before anything is saved. Null means go ahead; otherwise the exit code to stop with. Without a
-    /// terminal on both ends nobody can see the question or answer it, so the run stops at once and names
-    /// <c>--yes</c> rather than waiting on a read.</summary>
-    internal static async Task<int?> ConfirmAsync(
-            bool yes, bool inputRedirected, bool outputRedirected, TextReader input, TextWriter output, TextWriter error) {
-        if (yes) return null;
-
-        if (inputRedirected || outputRedirected) {
-            await error.WriteLineAsync("Nothing saved: confirming needs a terminal. Re-run with --yes to save the notes above, or --dry-run to only list them.");
-            return 1;
-        }
-
-        await output.WriteAsync("Import? [y/N] ");
-        if (string.Equals((await input.ReadLineAsync())?.Trim(), "y", StringComparison.OrdinalIgnoreCase)) return null;
-
-        await output.WriteLineAsync("Cancelled.");
-        return 0;
     }
 
     /// <summary>The outcome line for one save, or null when the server refused the credential and nothing further

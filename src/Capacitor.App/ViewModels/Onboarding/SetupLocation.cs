@@ -5,13 +5,17 @@ namespace Capacitor.App.ViewModels.Onboarding;
 /// so a user is not sent back through the whole wizard for one.
 public static class SetupLocation {
     public static string Path { get; } = OperatingSystem.IsMacOS()
-        ? "the application menu → Set up kcap"
+        ? "the kcap menu → Set up kcap"
         : "Help and support → Set up kcap";
 
     public const string HarnessesSettings = "Settings → Harnesses";
 
-    public static string NoneFoundTail { get; } =
-        $". Install a supported tool, then open {HarnessesSettings} after setup to rescan and turn on recording.";
+    /// Setup runs on launch, so a relaunch is how a user with nothing to connect comes back to it.
+    public static string Relaunch { get; } = OperatingSystem.IsMacOS()
+        ? "relaunch kcap from the Applications folder"
+        : "relaunch the application";
+
+    public static string NoneFoundTail { get; } = $". Install a harness, then {Relaunch}";
 
     public static string ConnectLaterNote { get; } = $"You can connect coding tools later in {HarnessesSettings}.";
 

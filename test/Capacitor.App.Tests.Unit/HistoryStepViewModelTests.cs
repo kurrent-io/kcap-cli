@@ -161,7 +161,7 @@ public class HistoryStepViewModelTests {
         var left = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
 
         await Assert.That(h.Vm.State).IsEqualTo(HistoryState.NoHistory);
-        await Assert.That(h.Vm.EmptyMessage).IsEqualTo("No history on test-mac to import. New sessions will record as they happen.");
+        await Assert.That(h.Vm.EmptyMessage).IsEqualTo("No history on test-mac to import. New sessions will be stored as they happen.");
         await Assert.That(h.Vm.Sources).IsEmpty();
         await Assert.That(left).IsTrue();
         await Assert.That(h.Cli.ImportCallCount).IsEqualTo(0);

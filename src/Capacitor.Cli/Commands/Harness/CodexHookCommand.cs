@@ -162,7 +162,7 @@ sealed class CodexHookCommand(
                     IsTopLevel: true, ClassificationAuthoritative: true, SessionLifecycleReason.New,
                     CallbackMayRepeat: false),
                 new SessionStartMemoryContextRequest(Url, scopeRoot, disabled, budget, CancellationToken.None,
-                    GuidelinesDisabled: guidelinesDisabled, FlowsDisabled: flowsDisabled));
+                    GuidelinesDisabled: guidelinesDisabled, WakeUpsWanted: hosted.IsHosted, FlowsDisabled: flowsDisabled));
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
         }

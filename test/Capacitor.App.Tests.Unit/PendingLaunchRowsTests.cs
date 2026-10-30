@@ -1,5 +1,6 @@
 using Capacitor.App.Services;
 using Capacitor.Cli.Core.LocalIpc;
+using System.Reactive.Linq;
 using DynamicData;
 using Microsoft.Extensions.Time.Testing;
 
@@ -156,5 +157,72 @@ public class PendingLaunchRowsTests {
 
         local.Pending.AddOrUpdate(Pending("p6", stage: "initialized"));
         await Assert.That(dir.Rows.Lookup("pending:p6").Value.LaunchStage).IsEqualTo("initialized");
+    }
+    static Capacitor.Remote.Models.AgentInstanceDto RemoteAgent(string id, string status = "Starting") => new() {
+        AgentId = id, Status = status, DaemonName = "work-mac", OwnerUserId = "u1", Vendor = "claude",
+        RepoPath = "/w/r", RepoOwner = "o", RepoName = "r",
+    };
+
+    /// The registry row lands under the placeholder's own key, so a workspace bound to that key
+    /// sees an update rather than a removal.
+    [Test]
+    public async Task A_remote_placeholder_is_replaced_in_place_by_the_registry_row() {
+        var (_, remote, dir) = BuildWithRemote(TimeProvider.System);
+        using var _d = dir;
+
+        dir.AddRemotePlaceholder("r1", "work-mac", "u1", "codex", "/w/r", "Fix it", "gpt-5-codex");
+        var placeholder = dir.Rows.Lookup("remote:r1").Value;
+        await Assert.That(placeholder.Origin).IsEqualTo(AgentOrigin.Remote);
+        await Assert.That(placeholder.IsPlaceholder).IsTrue();
+        await Assert.That(placeholder.Status).IsEqualTo("Starting");
+        await Assert.That(placeholder.MachineBadge).IsEqualTo("work-mac");
+        await Assert.That(placeholder.Title).IsEqualTo("Fix it");
+
+        var changes = new List<ChangeReason>();
+        using var _s = dir.Rows.Connect().Skip(1).Subscribe(set => changes.AddRange(set.Select(c => c.Reason)));
+        remote.Cache.AddOrUpdate(RemoteAgent("r1"));
+
+        await Assert.That(changes).IsEquivalentTo([ChangeReason.Update]);
+        await Assert.That(dir.Rows.Lookup("remote:r1").Value.IsPlaceholder).IsFalse();
+    }
+
+    /// The registry names the repository by its remote; a row it already lists for the same
+    /// checkout on that machine puts the stand-in in the group the real row will join.
+    [Test]
+    public async Task A_remote_placeholder_joins_the_group_of_a_listed_sibling() {
+        var (_, remote, dir) = BuildWithRemote(TimeProvider.System);
+        using var _d = dir;
+        remote.Cache.AddOrUpdate(RemoteAgent("r0", "Running"));
+
+        dir.AddRemotePlaceholder("r2", "work-mac", "u1", "claude", "/w/r", null, null);
+
+        await Assert.That(dir.Rows.Lookup("remote:r2").Value.RepoGroupKey).IsEqualTo(dir.Rows.Lookup("remote:r0").Value.RepoGroupKey);
+    }
+
+    /// A failed agent never shows on the remote lane, but the registry has still spoken for it.
+    [Test]
+    public async Task A_terminal_registry_row_retires_a_remote_placeholder() {
+        var (_, remote, dir) = BuildWithRemote(TimeProvider.System);
+        using var _d = dir;
+        dir.AddRemotePlaceholder("r3", "work-mac", "u1", "claude", "/w/r", null, null);
+
+        remote.Cache.AddOrUpdate(RemoteAgent("r3", "Failed"));
+
+        await Assert.That(dir.Rows.Lookup("remote:r3").HasValue).IsFalse();
+    }
+
+    [Test]
+    public async Task A_remote_placeholder_is_removed_and_expires_like_a_local_one() {
+        var time = new FakeTimeProvider();
+        var (_, dir) = Build(time);
+        using var _d = dir;
+        dir.AddRemotePlaceholder("r4", "work-mac", "u1", "claude", "/w/r", null, null);
+        dir.AddRemotePlaceholder("r5", "work-mac", "u1", "claude", "/w/r", null, null);
+
+        dir.RemovePlaceholder("r4");
+        await Assert.That(dir.Rows.Lookup("remote:r4").HasValue).IsFalse();
+
+        time.Advance(TimeSpan.FromMinutes(10) + TimeSpan.FromSeconds(1));
+        await Assert.That(dir.Rows.Lookup("remote:r5").HasValue).IsFalse();
     }
 }

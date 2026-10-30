@@ -8,16 +8,9 @@ namespace Capacitor.Cli.Commands;
 
 /// <summary>
 /// Probes the server for each transcript to decide New / Partial / AlreadyLoaded / TooShort /
-/// Deleted / ProbeError. Used by both ClaudeImportSource and CodexImportSource, which differ in the
-/// metadata extractor (selected from <c>vendor</c>) and in the line predicate they pass.
+/// Deleted / ProbeError. Used by both ClaudeImportSource and CodexImportSource, which differ only in
+/// the metadata extractor, selected from <c>vendor</c>.
 /// </summary>
-/// <remarks>
-/// The server's watermark is the highest line number any stored event carries, and a line its
-/// normalizer turns into no event (a Claude <c>system</c> or <c>last-prompt</c> line, a Codex
-/// <c>event_msg</c>) carries none. A complete transcript ending in such lines therefore sits past its
-/// watermark for good, so the comparison is against the last line that can produce an event, never the
-/// last line on disk.
-/// </remarks>
 internal static class TranscriptFileClassification {
     public static async Task<List<ImportCommand.SessionClassification>> ClassifyAsync(
             GitProviderRouter                                            router,
@@ -29,15 +22,15 @@ internal static class TranscriptFileClassification {
             List<(string SessionId, string FilePath, string EncodedCwd)> transcripts,
             int                                                          minLines,
             CancellationToken                                            ct,
-            HarnessId                                                    vendor       = HarnessId.Claude,
-            Action?                                                      onProbed     = null,
-            Func<string, bool>?                                          canAddEvents = null
+            HarnessId                                                    vendor        = HarnessId.Claude,
+            Action?                                                      onProbed      = null
         ) {
         using var probeGate = new SemaphoreSlim(8);
         var       tasks     = new List<Task<ImportCommand.SessionClassification>>(transcripts.Count);
+        var       ledger    = TranscriptImportLedger.Load(config);
 
         foreach (var (sessionId, filePath, encodedCwd) in transcripts) {
-            tasks.Add(ClassifyOneAsync(router, config, home, httpClient, time, baseUrl, sessionId, filePath, encodedCwd, minLines, probeGate, vendor, onProbed, canAddEvents, ct));
+            tasks.Add(ClassifyOneAsync(router, config, home, httpClient, time, baseUrl, sessionId, filePath, encodedCwd, minLines, probeGate, vendor, ledger, onProbed, ct));
         }
 
         var results = await Task.WhenAll(tasks);
@@ -46,44 +39,44 @@ internal static class TranscriptFileClassification {
     }
 
     static async Task<ImportCommand.SessionClassification> ClassifyOneAsync(
-            GitProviderRouter   router,
-            ConfigRoot          config,
-            UserHome            home,
-            HttpClient          httpClient,
-            TimeProvider        time,
-            string              baseUrl,
-            string              sessionId,
-            string              filePath,
-            string              encodedCwd,
-            int                 minLines,
-            SemaphoreSlim       probeGate,
-            HarnessId           vendor,
-            Action?             onProbed,
-            Func<string, bool>? canAddEvents,
-            CancellationToken   ct
+            GitProviderRouter      router,
+            ConfigRoot             config,
+            UserHome               home,
+            HttpClient             httpClient,
+            TimeProvider           time,
+            string                 baseUrl,
+            string                 sessionId,
+            string                 filePath,
+            string                 encodedCwd,
+            int                    minLines,
+            SemaphoreSlim          probeGate,
+            HarnessId              vendor,
+            TranscriptImportLedger ledger,
+            Action?                onProbed,
+            CancellationToken      ct
         ) {
         try {
-            return await ClassifyOneCoreAsync(router, config, home, httpClient, time, baseUrl, sessionId, filePath, encodedCwd, minLines, probeGate, vendor, canAddEvents, ct);
+            return await ClassifyOneCoreAsync(router, config, home, httpClient, time, baseUrl, sessionId, filePath, encodedCwd, minLines, probeGate, vendor, ledger, ct);
         } finally {
             onProbed?.Invoke();
         }
     }
 
     static async Task<ImportCommand.SessionClassification> ClassifyOneCoreAsync(
-            GitProviderRouter   router,
-            ConfigRoot          config,
-            UserHome            home,
-            HttpClient          httpClient,
-            TimeProvider        time,
-            string              baseUrl,
-            string              sessionId,
-            string              filePath,
-            string              encodedCwd,
-            int                 minLines,
-            SemaphoreSlim       probeGate,
-            HarnessId           vendor,
-            Func<string, bool>? canAddEvents,
-            CancellationToken   ct
+            GitProviderRouter      router,
+            ConfigRoot             config,
+            UserHome               home,
+            HttpClient             httpClient,
+            TimeProvider           time,
+            string                 baseUrl,
+            string                 sessionId,
+            string                 filePath,
+            string                 encodedCwd,
+            int                    minLines,
+            SemaphoreSlim          probeGate,
+            HarnessId              vendor,
+            TranscriptImportLedger ledger,
+            CancellationToken      ct
         ) {
         var isCodex = vendor is HarnessId.Codex;
         var meta    = isCodex ? ImportCommand.ExtractCodexSessionMetadata(filePath) : ImportCommand.ExtractSessionMetadata(filePath);
@@ -148,7 +141,7 @@ internal static class TranscriptFileClassification {
                         using var doc  = JsonDocument.Parse(json);
 
                         if (doc.RootElement.Num("last_line_number") is { } lastLine) {
-                            resumeFromLine = (int)lastLine + 1;
+                            resumeFromLine = ledger.ResumeFrom(baseUrl, sessionId, (int)lastLine) ?? (int)lastLine + 1;
                             status         = ImportCommand.ClassificationStatus.Partial;
                         } else {
                             status = ImportCommand.ClassificationStatus.AlreadyLoaded;
@@ -167,26 +160,40 @@ internal static class TranscriptFileClassification {
             probeGate.Release();
         }
 
-        if (minLines > 0 && status is ImportCommand.ClassificationStatus.New or ImportCommand.ClassificationStatus.Partial) {
-            var observedLines = CountLinesUpTo(filePath, minLines);
+        // Read enough of the local transcript to satisfy two checks at once:
+        //   1. TooShort — fewer lines than minLines.
+        //   2. False Partial — server says last_line_number = N but the local
+        //      transcript has no lines past index N (resumeFromLine would be
+        //      N+1 with nothing to send).
+        // CountLinesUpTo early-exits at the threshold, so the read cost is
+        // bounded by Math.Max(minLines, resumeFromLine + 1) lines.
+        if (status is ImportCommand.ClassificationStatus.New or ImportCommand.ClassificationStatus.Partial) {
+            var threshold = Math.Max(
+                minLines,
+                status == ImportCommand.ClassificationStatus.Partial ? resumeFromLine + 1 : 0
+            );
 
-            if (observedLines < minLines) {
-                return new() {
-                    SessionId  = sessionId,
-                    FilePath   = filePath,
-                    EncodedCwd = encodedCwd,
-                    Meta       = meta,
-                    Status     = ImportCommand.ClassificationStatus.TooShort,
-                    TotalLines = observedLines,
-                    Vendor     = vendor,
-                };
+            if (threshold > 0) {
+                var observedLines = CountLinesUpTo(filePath, threshold);
+
+                if (minLines > 0 && observedLines < minLines) {
+                    return new() {
+                        SessionId  = sessionId,
+                        FilePath   = filePath,
+                        EncodedCwd = encodedCwd,
+                        Meta       = meta,
+                        Status     = ImportCommand.ClassificationStatus.TooShort,
+                        TotalLines = observedLines,
+                        Vendor     = vendor,
+                    };
+                }
+
+                // Server has lines >= the local transcript — nothing to resume.
+                if (status == ImportCommand.ClassificationStatus.Partial && observedLines <= resumeFromLine) {
+                    status         = ImportCommand.ClassificationStatus.AlreadyLoaded;
+                    resumeFromLine = 0;
+                }
             }
-        }
-
-        if (status == ImportCommand.ClassificationStatus.Partial
-         && !HasLineThatCanAddEvents(filePath, resumeFromLine, canAddEvents ?? (static _ => true))) {
-            status         = ImportCommand.ClassificationStatus.AlreadyLoaded;
-            resumeFromLine = 0;
         }
 
         // TotalLines is only meaningful for TooShort sessions (where we know the exact
@@ -202,28 +209,6 @@ internal static class TranscriptFileClassification {
             ProbeErrorReason = probeErrorReason,
             Vendor           = vendor,
         };
-    }
-
-    /// <summary>
-    /// Whether any non-blank line at or after <paramref name="fromLine"/> could still add an event. An
-    /// unreadable file answers yes: the resume then runs and reports its own failure, where a no would
-    /// skip the session on every run.
-    /// </summary>
-    internal static bool HasLineThatCanAddEvents(string path, int fromLine, Func<string, bool> canAddEvents) {
-        try {
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            using var reader = new StreamReader(stream);
-            var       index  = 0;
-
-            while (reader.ReadLine() is { } line) {
-                if (index++ < fromLine || string.IsNullOrWhiteSpace(line)) continue;
-                if (canAddEvents(line)) return true;
-            }
-
-            return false;
-        } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
-            return true;
-        }
     }
 
     /// <summary>

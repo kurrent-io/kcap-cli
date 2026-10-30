@@ -8,7 +8,7 @@ namespace Capacitor.Cli.Core.Tests.Unit.Harness.Pi;
 /// kcap already failed. No runtime harness executes the embedded TypeScript, so these assert the source.
 /// </summary>
 public class PiKcapPathSourceTests {
-    const string Bridge = PiMcpExtensionInstaller.ExtensionContent;
+    static readonly string Bridge = PiMcpExtensionInstaller.ExtensionContent;
     const string Ingest = PiExtensionInstaller.ExtensionContent;
 
     [Test]

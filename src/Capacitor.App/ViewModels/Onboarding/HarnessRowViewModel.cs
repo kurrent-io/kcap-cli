@@ -9,7 +9,7 @@ namespace Capacitor.App.ViewModels.Onboarding;
 /// One detected harness on the Harnesses page: whether to record it, whether to give it the tools,
 /// and how its install went.
 public sealed class HarnessRowViewModel : ReactiveObject {
-    internal const string CodexConsentNote = "Also opens Codex's sandbox network to your server, so its skills can reach it.";
+    internal const string CodexConsentNote = "Also opens Codex's sandbox network to kcap, so its skills can reach it.";
 
     bool               _record;
     bool               _tools;

@@ -8,6 +8,7 @@ using Capacitor.App.Services.Mutation;
 using Capacitor.App.ViewModels;
 using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.LocalIpc;
@@ -103,6 +104,8 @@ internal sealed record WizardGraphOptions(
     Func<CancellationToken, Task<VisibilityOptionsResponse?>>?                   ReadVisibilityOptions = null,
     // Brings any other kcap the local installer would refuse up to date; null finds nothing to update.
     Func<CancellationToken, Task<ClientRepairOutcome>>?                          RepairClients = null,
+    // Opens a support email with this report as its body; null offers no support email.
+    Func<string, FeedbackMailOutcome>?                                           MailSupport = null,
     // This app sent the user to kcap.ai's sign-up and no sign-in has committed since.
     bool                                                                         ResumeWebSignUp = false);
 
@@ -280,6 +283,8 @@ internal static class WizardComposition {
             builtinOffer: options.BuiltinOffer,
             recorded: () => LocalEmbeddingFile.Read(root),
             repairClients: options.RepairClients,
+            time: options.Time,
+            mailSupport: options.MailSupport is { } mail ? failures => mail(InstallSupportReport.Build(failures, root)) : null,
             resuming: Pending);
         var connect  = new ConnectChoiceViewModel();
         var signIn   = new SignInStepViewModel(
@@ -374,7 +379,8 @@ internal static class WizardComposition {
             : (WizardStepId?)null;
         if (startAt == WizardStepId.SignIn) SettleUsageData(local: false);
         var wizard = shell = new OnboardingViewModel(
-            steps, options.ShutdownToken, options.Surface, startAt, canFinishLater, durable.Select(_ => Unit.Default));
+            steps, options.ShutdownToken, options.Surface, startAt, canFinishLater,
+            preflight: new HarnessPreflight(detect), restate: durable.Select(_ => Unit.Default));
         signIn.SignUpExpired += () => {
             edition.ShowNotice(SignInStepViewModel.SignUpExpiredNotice);
             wizard.TryGoTo(WizardStepId.Edition);

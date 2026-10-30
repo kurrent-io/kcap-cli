@@ -1752,6 +1752,9 @@ public partial class App : Application {
             ReportCliSetup: ReportWizardCliSetupAsync,
             ReadVisibilityOptions: ReadWizardVisibilityOptionsAsync,
             RepairClients: StaleClientRepair.ForApp(runner, probe, shimTarget, _userHome).RunAsync,
+            MailSupport: report => FeedbackMail.Send(
+                new FeedbackSubmission(FeedbackCategory.Bug, report, Guid.NewGuid(), FeedbackSource.Desktop),
+                SystemBrowser.Instance, Capacitor.Cli.Core.Auth.Clipboard.TryCopy),
             ResumeWebSignUp: WizardComposition.ResumesWebSignUp(await _appState.LoadAsync(), _time.GetUtcNow()));
         _localInstall ??= WizardComposition.NewInstallController(options);
         var graph = WizardComposition.BuildGraph(options with { Install = _localInstall });
@@ -1876,9 +1879,9 @@ public partial class App : Application {
 
     /// Before a server is connected the main window has nothing to show, so closing setup's window quits
     /// rather than handing over; the next launch resumes setup. Read after the handoff, so a sign-in it
-    /// lets commit still opens the app.
+    /// lets commit still opens the app. The pre-flight's Quit leaves either way.
     internal static bool QuitsAfterWizardClose(OnboardingViewModel wizard, bool windowClosed) =>
-        windowClosed && !wizard.Deferrable;
+        wizard.QuitRequested || (windowClosed && !wizard.Deferrable);
 
     // One logical close (the Done step's finish and the window's own Closing both route through
     // RequestClose, which is idempotent). Shutdown ends the wait too — a quit must never sit

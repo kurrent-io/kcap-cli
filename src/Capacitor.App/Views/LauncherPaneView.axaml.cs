@@ -4,6 +4,8 @@ using System.Globalization;
 using System.Reactive.Linq;
 using System.Windows.Input;
 using Avalonia;
+using Avalonia.Animation;
+using Avalonia.Animation.Easings;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Data.Converters;
@@ -11,6 +13,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core.Accounts;
@@ -23,6 +26,11 @@ namespace Capacitor.App.Views;
 public partial class LauncherPaneView : UserControl {
     AttachmentDropPaste? _attachments;
     Flyout? _openMenu;
+    IDisposable? _nudgeEnd;
+
+    static readonly TimeSpan NudgeFadeOutAfter = TimeSpan.FromMilliseconds(450);
+    readonly Transitions _nudgeFadeIn = [new DoubleTransition { Property = OpacityProperty, Duration = TimeSpan.FromMilliseconds(250), Easing = new CubicEaseOut() }];
+    readonly Transitions _nudgeFadeOut = [new DoubleTransition { Property = OpacityProperty, Duration = TimeSpan.FromSeconds(2), Easing = new LinearEasing() }];
 
     /// A picker search term matches a model by its label or its launch id, so a Pi row is found by
     /// model name, provider, or `provider/` prefix alike.
@@ -39,6 +47,22 @@ public partial class LauncherPaneView : UserControl {
     }
 
     public void FocusComposer() => GoalInput.Focus();
+
+    /// New session pressed while this pane is already showing: focus the goal and ring the card
+    /// briefly, so the press does not read as a dead button.
+    public void Nudge() {
+        FocusComposer();
+        GoalCard.BringIntoView();
+        _nudgeEnd?.Dispose();
+        GoalNudgeRing.Transitions = _nudgeFadeIn;
+        GoalNudgeRing.Classes.Set("on", true);
+        _nudgeEnd = DispatcherTimer.RunOnce(() => {
+            GoalNudgeRing.Transitions = _nudgeFadeOut;
+            GoalNudgeRing.Classes.Set("on", false);
+        }, NudgeFadeOutAfter);
+    }
+
+    internal bool IsNudgingForTesting => GoalNudgeRing.Classes.Contains("on");
 
     internal Task? PendingIntakeForTesting => _attachments?.PendingIntakeForTesting;
 

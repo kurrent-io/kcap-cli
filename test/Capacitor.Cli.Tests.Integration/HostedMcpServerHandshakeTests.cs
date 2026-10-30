@@ -19,6 +19,7 @@ public class HostedMcpServerHandshakeTests {
     [Test]
     [Arguments("flows")]
     [Arguments("plans")]
+    [Arguments("handoff")]
     public async Task Answers_initialize_while_the_daemon_holds_the_agents_session(string server) {
         await using var daemon = new FakeAgentSessionDaemon(Daemons.Store.SocketPath(DaemonName), [AgentSessionIpc.Capability], session: null);
 

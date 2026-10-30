@@ -1425,7 +1425,7 @@ public sealed class ClaudeHookCommand(
                     IsTopLevel: true, ClassificationAuthoritative: true, reason,
                     CallbackMayRepeat: false),
                 new SessionStartMemoryContextRequest(Url, cwd, disabled, budget, CancellationToken.None,
-                    GuidelinesDisabled: true, FlowsDisabled: flowsDisabled));
+                    GuidelinesDisabled: true, WakeUpsWanted: hosted.IsHosted, FlowsDisabled: flowsDisabled));
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
         }

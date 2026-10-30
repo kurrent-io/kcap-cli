@@ -109,8 +109,6 @@ public class ImportChainsTests : IDisposable {
         await Assert.That(result.Loaded).IsEqualTo(3);
         await Assert.That(result.Errored).IsEqualTo(0);
         await Assert.That(completedLines.Count).IsEqualTo(3);
-        await Assert.That(result.BySession.Keys).IsEquivalentTo(["cnt-s1", "cnt-s2", "cnt-s3"]);
-        await Assert.That(result.BySession.Values.All(o => o == ImportCommand.SessionImportOutcome.Loaded)).IsTrue();
     }
 
     [Test]

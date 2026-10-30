@@ -93,15 +93,11 @@ public class ImportForegroundSplitTests {
             Cls("x1", ClassificationStatus.New, HarnessId.Codex),
             Cls("x2", ClassificationStatus.Partial, HarnessId.Codex),
         };
-        var ran = new Dictionary<string, SessionImportOutcome> {
-            ["c1"] = SessionImportOutcome.Loaded,
-            ["c2"] = SessionImportOutcome.Resumed,
-            ["x1"] = SessionImportOutcome.Errored,
-        };
         var deferred = new HashSet<string> { "c3", "x2" };
 
-        var claudeRow = ComputePerSourceFinalCounts(claude, ran, null, deferred);
-        var codexRow  = ComputePerSourceFinalCounts(codex, ran, null, deferred);
+        // c1 loaded and c2 resumed; x1 errored.
+        var claudeRow = ComputePerSourceFinalCounts(claude, imported: 2, routedOutcomes: null, resumed: 1, deferredIds: deferred);
+        var codexRow  = ComputePerSourceFinalCounts(codex, imported: 0, routedOutcomes: null, deferredIds: deferred);
 
         await Assert.That(claudeRow.Deferred).IsEqualTo(1);
         await Assert.That(claudeRow.Total).IsEqualTo(claude.Length);
