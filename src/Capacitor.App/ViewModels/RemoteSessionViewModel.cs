@@ -379,6 +379,17 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             notifier ?? new AppNotifier());
         _disposables.Add(TitleEditor);
 
+        if (handoff is not null)
+            // Only the fields the composer reads reach the UI thread; every other revision stays here.
+            directory.Rows.Connect()
+                .Filter(r => r.Key == row.Key)
+                .SelectMany(changes => changes.Where(c => c.Reason != ChangeReason.Remove).Select(c => c.Current))
+                .Where(r => r.IsEndedSession)
+                .DistinctUntilChanged(r => (r.AccessLevel, r.RepoGroupKey, r.Branch, r.RepoPath, r.Vendor, r.Title))
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(r => _handoff?.UpdateSource(HandoffComposerViewModel.SourceOf(r)))
+                .DisposeWith(_disposables);
+
         directory.Rows.Connect()
             .Filter(r => r.Key == row.Key)
             .ObserveOn(RxSchedulers.MainThreadScheduler)

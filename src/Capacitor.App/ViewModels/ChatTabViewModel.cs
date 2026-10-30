@@ -645,6 +645,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     public bool IsReadOnlyParticipant {
         get => _isReadOnlyParticipant;
         private set {
+            if (_isReadOnlyParticipant == value) return;
             this.RaiseAndSetIfChanged(ref _isReadOnlyParticipant, value);
             this.RaisePropertyChanged(nameof(ShowsReadOnlyBanner));
         }
@@ -660,6 +661,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     public HandoffComposerViewModel? Handoff {
         get => _handoff;
         set {
+            if (ReferenceEquals(_handoff, value)) return;
             this.RaiseAndSetIfChanged(ref _handoff, value);
             this.RaisePropertyChanged(nameof(ShowsReadOnlyBanner));
         }

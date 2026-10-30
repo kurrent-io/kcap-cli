@@ -1436,6 +1436,37 @@ public class RemoteSessionViewModelTests {
         });
     }
 
+    /// A pinned session enters with an unknown access level, which the composer reads as not full;
+    /// the listing's level reaches the same composer, so what the user typed survives the re-check.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_ended_row_revision_refreshes_the_composer_without_rebuilding_it() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            using var handoff = new HandoffComposerFixture();
+            var vm = h.Build(Harness.ServerRow() with { AccessLevel = "" }, handoff: handoff.Build);
+            var composer = vm.Chat.Handoff!;
+            await WaitUntilAsync(() => composer.DisabledReason is not null, what: "the first check");
+            await Assert.That(composer.DisabledReason).IsEqualTo(HandoffComposerViewModel.NeedsFullAccess);
+            await Assert.That(handoff.Ops.Probes).IsEmpty();
+            composer.Text = "keep going";
+
+            h.Directory.Rows.AddOrUpdate(Harness.ServerRow());
+
+            await WaitUntilAsync(() => composer.ProbedStart is not null, what: "the probe after the listing's level");
+            await Assert.That(composer.DisabledReason).IsNull();
+            await Assert.That(handoff.Ops.Probes).Count().IsEqualTo(1);
+            await Assert.That(composer.Text).IsEqualTo("keep going");
+            await Assert.That(vm.Chat.Handoff).IsSameReferenceAs(composer);
+
+            h.Directory.Rows.AddOrUpdate(Harness.ServerRow() with { LastActivityAt = DateTime.UnixEpoch.AddHours(2) });
+            await Task.Delay(50);
+            await Assert.That(handoff.Ops.Probes).Count().IsEqualTo(1);
+            await Assert.That(handoff.Built).Count().IsEqualTo(1);
+            await vm.TeardownAsync();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task An_active_server_session_keeps_the_read_only_path() {

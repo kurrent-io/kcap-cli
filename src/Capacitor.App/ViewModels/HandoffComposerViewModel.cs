@@ -39,7 +39,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
         string? Reason, HandoffLaunchStart? Start = null, string? Checkout = null, string? Label = null,
         string? CompletenessNote = null, bool Waiting = false);
 
-    readonly RepoSessionDto _session;
+    RepoSessionDto _session;
     readonly IDaemonClientService _daemon;
     readonly ILaunchClient _launch;
     readonly IServerSessionsService _sessions;
@@ -62,6 +62,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
     volatile bool _serverConnected;
     bool _initialized;
     bool _disposed;
+    bool _sourceChangedWhileLaunching;
     IReadOnlySet<string>? _features;
     HandoffContextDto? _context;
     string? _checkout;
@@ -240,6 +241,17 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
         return ReevaluateAsync(ct);
     }
 
+    /// A later revision of the session's row: the composer keeps its text, tray and chips and checks
+    /// again against the new source. The chips' vendor was only a seed, so it stays the user's.
+    public void UpdateSource(RepoSessionDto session) {
+        if (_disposed || session == _session) return;
+        _session = session;
+        _context = null;
+        if (!_initialized) return;
+        if (IsLaunching) { _sourceChangedWhileLaunching = true; return; }
+        _ = ReevaluateAsync(CancellationToken.None);
+    }
+
     internal Task PendingEvaluationForTesting { get; private set; } = Task.CompletedTask;
 
     Task ReevaluateAsync(CancellationToken ct) => PendingEvaluationForTesting = RunEvaluationAsync(ct);
@@ -407,6 +419,10 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
             if (opens) openedUnder = _navigationGeneration();
         } finally {
             IsLaunching = false;
+            if (_sourceChangedWhileLaunching && !_disposed) {
+                _sourceChangedWhileLaunching = false;
+                _ = ReevaluateAsync(CancellationToken.None);
+            }
         }
     }
 
