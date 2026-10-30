@@ -18,6 +18,7 @@ Repository: `/Users/alexey/dev/eventstore/kcap-server`, its own branch and PR. R
 - **Server capability is a hub method.** `GetLaunchFeatures()` returns `["handoff/1"]`. An older server has no such method, so the app's call fails and the app treats hand-off as unsupported. No feature flag and no version comparison.
 - **`Ended` is decided from the stream, not the read model.** The projector can lag; a reactivating event appended after `SessionEnded` must refuse the takeover even if `sessions.status` still says ended. The begin step reads the root stream backwards to the first decisive event and appends `SessionContinuedAs` expecting that exact revision.
 - **The reservation is in memory**, like `DaemonRegistry` and its launch reservations: one server process owns daemon connections, so a lease bound to a connection lives where the connection does.
+- **A per-source gate fences every commit point.** Acquiring a lease, the begin's guarded append, and every takeover write run inside an async gate per source session, each re-checking that its token is still live first. A lease can expire or its holder disconnect at any time, but no other holder can acquire while a commit is inside the gate, and a commit that enters after its lease lapsed is refused. The daemon's takeover writes carry the token in `X-Kcap-Source-Reservation`; the three write routes the takeover uses check it through one endpoint filter, and behave as today when the header is absent.
 
 ## Global Constraints
 
@@ -31,6 +32,7 @@ Repository: `/Users/alexey/dev/eventstore/kcap-server`, its own branch and PR. R
 ## Review Focus
 
 1. A session reactivated after the daemon read it as ended but before the guarded append (a terminal `claude --resume` writes a `UserMessage`): the append must fail and the begin must refuse with `source_active`, not record the continuation. Pinned in Task 4.
+1a. A holder whose lease expires or whose connection drops while its begin or one of its writes is in flight: no second holder is admitted until that commit leaves the gate, and the stale holder's next begin step or write is refused `source_reservation_lost`. Pinned in Tasks 3–5.
 2. A daemon that disconnects while holding the lease: a second begin from another connection must then be admitted without waiting for the TTL. Pinned in Task 3.
 3. A session linked to PRs in two repositories, the other repository's PR more recently updated: the session's own repository's PR is selected. Pinned in Task 1.
 4. GitHub unreachable or no token while reading the context: the endpoint still answers with branch, commits and the PR number from `session_prs`, with `head` null, rather than failing the strip. Pinned in Task 1.
@@ -73,15 +75,15 @@ Repository: `/Users/alexey/dev/eventstore/kcap-server`, its own branch and PR. R
 - Test: `test/Capacitor.Api.Public.Tests/Sessions/CapacitorHubHandoffLaunchTests.cs` (pattern: `CapacitorHubLaunchAttachmentAdmissionTests`)
 
 **Interfaces:**
-- Produces (app → server): `public sealed record HandoffLaunchRequest(string SourceSessionId, string StartSha, string Checkout, string? Branch, string? LocalBranchSha, string Source, string DetachReason, int? PullRequestNumber, bool HeadIsFork)` — `Checkout`/`Source`/`DetachReason` are the CLI enums' names (`CreateBranch`, `Branch`, `None`, …), passed through unread except for presence.
-- Produces (server → daemon): `public sealed record HandoffLaunch(HandoffLaunchRequest Start, HandoffSourceContext Source, IReadOnlyList<string>? SessionCommits)`; `public sealed record HandoffSourceContext(string SessionId, string? Title, string? OwnerDisplay, string? RepoOwner, string? RepoName, string? Branch, int? PullRequestNumber, string? PullRequestTitle, string? FirstPrompt, string? LastPrompt)`.
+- Produces (app → server): `public sealed record HandoffLaunchRequest(string SourceSessionId, string StartSha, string Checkout, string? Branch, string? LocalBranchSha, string Source, string DetachReason, int? PullRequestNumber, bool HeadIsFork, string? HeadOwner, string? HeadRepo)` — `Checkout`/`Source`/`DetachReason` are the CLI enums' names (`CreateBranch`, `Branch`, `None`, …), passed through unread except for presence; `HeadOwner`/`HeadRepo` set only for a fork.
+- Produces (server → daemon): `public sealed record HandoffLaunch(HandoffLaunchRequest Start, HandoffSourceContext Source, IReadOnlyList<string>? SessionCommits)`; `public sealed record HandoffSourceContext(string SessionId, string? Title, string? OwnerDisplay, string? RepoOwner, string? RepoName, string? Branch, int? PullRequestNumber, string? PullRequestTitle, string? FirstPrompt, string? LastPrompt)` — the PR is the one `HandoffContextReader` selects, not the summary's.
 - Produces: hub `public Task<string[]> GetLaunchFeatures()` → `["handoff/1"]`.
 - Produces: `HandoffLaunchAdmission.AdmitAsync(HandoffLaunchRequest request, string requesterUserId, bool requesterIsOwner, bool daemonSupportsHandoff, CancellationToken ct) : Task<(HandoffLaunch? Launch, string? Refusal)>`; refusal codes `handoff_unsupported_daemon`, `handoff_not_owner`, `handoff_source_unavailable` (hidden, missing or below full), each with the human sentence after `: ` as the existing refusals do.
 
 - [ ] **Step 1: Write the failing hub tests** — `A_handoff_to_a_daemon_without_the_capability_is_refused_and_nothing_is_sent` (asserts the refusal starts with `handoff_unsupported_daemon` and the client proxy received no `LaunchAgent`), `A_handoff_below_full_access_is_refused`, `A_handoff_for_someone_elses_daemon_is_refused`, `An_admitted_handoff_carries_the_start_and_the_source_context` (captured command's `Handoff.Start.StartSha`, `Handoff.Source.Title`, `Handoff.Source.LastPrompt`, `Handoff.SessionCommits`), `GetLaunchFeatures_lists_handoff`, and in the connect tests `DaemonConnect_records_SupportsHandoffLaunch` (absent → false).
 - [ ] **Step 2: Run** the class; expected: compile failure.
 - [ ] **Step 3: Add the records and trailing fields** (comments: one line each, what absent means).
-- [ ] **Step 4: Implement `HandoffLaunchAdmission`** — reads the source with `SessionAccess.ReadAsync` under the requester; `Full` required; `HandoffSourceContext` from the summary (title, owner display, repo, branch, PR) plus first and last prompts from the same read the listing uses for `LastPrompt`; commits via `HandoffContextReader`'s commit step (extract it as `HandoffContextReader.ReadCommitsAsync(sessionId, owner, repo, ct)`).
+- [ ] **Step 4: Implement `HandoffLaunchAdmission`** — reads the source with `SessionAccess.ReadAsync` under the requester; `Full` required; `HandoffSourceContext` takes title, owner display, repo and branch from the summary, the PR number and title from `HandoffContextReader.ReadAsync` (the same selection the strip showed), and first and last prompts from the same read the listing uses for `LastPrompt`; commits from that same context read.
 - [ ] **Step 5: Wire it in `RequestLaunchAgentCore`** after `DaemonLaunchCapabilityPolicy` and before `TryReserveAsync`, so a refusal reserves nothing; set `LaunchAgentCommand.Handoff`. Add `GetLaunchFeatures`.
 - [ ] **Step 6: Run the hub tests and the existing `Capacitor.Api.Public.Tests` suite**; expected: PASS.
 - [ ] **Step 7: Commit** — `Refuse a hand-off launch the daemon or requester cannot carry`
@@ -96,13 +98,15 @@ Repository: `/Users/alexey/dev/eventstore/kcap-server`, its own branch and PR. R
 **Interfaces:**
 - Produces: `public sealed class SourceSessionReservations(TimeProvider time)` with
   - `public static readonly TimeSpan Lease = TimeSpan.FromSeconds(60);`
-  - `public SourceReservation? TryAcquire(string sourceSessionId, string holderConnectionId, SourceReservationKind kind)` — null while another unexpired lease exists;
-  - `public bool Renew(string token, string holderConnectionId)`; `public void Release(string token, string holderConnectionId)`; `public void ReleaseConnection(string connectionId)`.
+  - `public Task<IAsyncDisposable> EnterAsync(string sourceSessionId, CancellationToken ct)` — the per-source gate; one holder of the gate at a time;
+  - `public SourceReservation? TryAcquire(string sourceSessionId, string holderConnectionId, SourceReservationKind kind)` — **only inside the gate**; null while another unexpired lease exists;
+  - `public bool IsLive(string token)` — called inside the gate immediately before each commit; `public string? SourceOf(string token)`;
+  - `public bool Renew(string token, string holderConnectionId)`; `public void Release(string token, string holderConnectionId)`; `public void ReleaseConnection(string connectionId)` — these three need not enter the gate: they can only shorten or extend the holder's own lease, never admit another holder.
 - Produces: `public enum SourceReservationKind { Takeover, Resume }`; `public sealed record SourceReservation(string Token, string SourceSessionId, SourceReservationKind Kind, DateTimeOffset ExpiresAt)`.
 
-- [ ] **Step 1: Write the failing tests** (`FakeTimeProvider`): `A_second_holder_is_refused_while_the_lease_is_live`, `An_expired_lease_is_taken_over`, `Renew_extends_the_lease`, `Renew_from_another_connection_fails`, `ReleaseConnection_frees_every_lease_it_held`, `Release_with_a_stale_token_frees_nothing` (a lease re-acquired after expiry survives the old holder's release), `Session_ids_are_compared_canonically` (dashed and dashless spellings collide).
+- [ ] **Step 1: Write the failing tests** (`FakeTimeProvider`): `A_second_holder_is_refused_while_the_lease_is_live`, `An_expired_lease_is_taken_over`, `Renew_extends_the_lease`, `Renew_from_another_connection_fails`, `ReleaseConnection_frees_every_lease_it_held`, `Release_with_a_stale_token_frees_nothing` (a lease re-acquired after expiry survives the old holder's release), `Session_ids_are_compared_canonically` (dashed and dashless spellings collide), `The_gate_admits_one_holder_per_source` (a second `EnterAsync` completes only after the first disposes; another source is not blocked), `An_expired_token_is_not_live`.
 - [ ] **Step 2: Run**; expected: compile failure.
-- [ ] **Step 3: Implement** with one lock over a dictionary keyed by `CanonicalSessionId.Normalize(source)`; expiry checked on every call, no timer.
+- [ ] **Step 3: Implement** with one lock over a dictionary keyed by `CanonicalSessionId.Normalize(source)`, a `SemaphoreSlim(1,1)` per source for the gate (entries removed when free and unreserved); expiry checked on every call, no timer.
 - [ ] **Step 4: Run**; expected: PASS. Add `OnDisconnectedAsync` release and a hub test `A_daemon_disconnect_releases_its_takeover_lease` in `CapacitorHubHandoffTakeoverTests` (created in Task 4; write it there).
 - [ ] **Step 5: Commit** — `Hold a lease on a source session while it is taken over`
 
@@ -125,16 +129,31 @@ Repository: `/Users/alexey/dev/eventstore/kcap-server`, its own branch and PR. R
 - Produces: `SessionWriter.ReadEndStateAsync(string sessionId, CancellationToken ct) : Task<(bool Ended, long Revision)?>` — null when the stream does not exist.
 - Produces: `HandoffTakeoverGate.BeginAsync(string source, string successor, string connectionId, string ownerUserId, CancellationToken ct) : Task<HandoffTakeoverAdmission>`.
 
-- [ ] **Step 1: Write the failing gate tests** — `An_ended_source_is_admitted_and_records_the_continuation` (projected `next_session_id` equals the successor), `A_source_reactivated_after_its_end_is_refused` (append `SessionEnded` then `UserMessage`: `source_active`), `A_reactivation_between_read_and_append_is_refused` (inject an append after `ReadEndStateAsync` returns, via a hook on the gate; expects `source_active` and no `SessionContinuedAs` on the stream), `A_live_agent_on_the_source_is_refused`, `A_held_lease_is_refused_as_source_reserved`, `A_successor_not_on_the_calling_connection_is_refused`, `Below_full_access_is_source_unavailable`, `A_refused_begin_releases_the_lease_it_took` (a second begin after a `source_active` refusal is not `source_reserved`).
+- [ ] **Step 1: Write the failing gate tests** — `An_ended_source_is_admitted_and_records_the_continuation` (projected `next_session_id` equals the successor), `A_source_reactivated_after_its_end_is_refused` (append `SessionEnded` then `UserMessage`: `source_active`), `A_reactivation_between_read_and_append_is_refused` (inject an append after `ReadEndStateAsync` returns, via a hook on the gate; expects `source_active` and no `SessionContinuedAs` on the stream), `A_live_agent_on_the_source_is_refused`, `A_held_lease_is_refused_as_source_reserved`, `A_successor_not_on_the_calling_connection_is_refused`, `Below_full_access_is_source_unavailable`, `A_refused_begin_releases_the_lease_it_took` (a second begin after a `source_active` refusal is not `source_reserved`), `A_lease_lost_during_begin_is_refused_and_admits_no_one_meanwhile` (pause A inside the gate after acquire via the hook; advance time past the lease and disconnect A; start B's begin — it does not complete while A is paused; resume A: A is refused `source_reservation_lost` with no `SessionContinuedAs`; then B is admitted and records its own).
 - [ ] **Step 2: Run**; expected: compile failure.
 - [ ] **Step 3: Implement `ReadEndStateAsync`** — read the root stream backwards; the first event that is `SessionEnded`/`UserClosed` gives `Ended = true`, the first for which `IsReactivationEvent` holds gives `false`; revision is the stream's last revision, not the decisive event's.
-- [ ] **Step 4: Implement `BeginAsync`** in this order: access (`Full` for `ownerUserId`) → successor registered on `connectionId` → `TryAcquire` → `ReadEndStateAsync` → live agent check → `TryRecordSessionContinuedAsAtAsync` at the read revision. Any refusal after `TryAcquire` releases the lease before returning.
+- [ ] **Step 4: Implement `BeginAsync`** in this order: access (`Full` for `ownerUserId`) → successor registered on `connectionId` → `EnterAsync(source)` → `TryAcquire` → `ReadEndStateAsync` → live agent check → `IsLive(token)` → `TryRecordSessionContinuedAsAtAsync` at the read revision → leave the gate. Any refusal after `TryAcquire` releases the lease before leaving the gate. Refusal code `source_reservation_lost` joins the list.
 - [ ] **Step 5: Run the gate tests**; expected: PASS.
 - [ ] **Step 6: Write the hub tests** — `Begin_from_a_non_daemon_connection_is_refused`, `Renew_and_end_round_trip`, and Task 3's `A_daemon_disconnect_releases_its_takeover_lease`. Implement the hub methods (owner from `daemonRegistry` by `Context.ConnectionId`). Run; expected: PASS.
 - [ ] **Step 7: Run the full server unit suites touched** (`Capacitor.Server.Services.Tests`, `Capacitor.Api.Public.Tests`, `Capacitor.Server.Tests.Read`); expected: PASS.
 - [ ] **Step 8: Commit** — `Revalidate an ended source under a lease before a hand-off takeover`
 
-### Task 5: Pull request
+### Task 5: Fence the takeover's writes by the lease
+
+**Files:**
+- Create: `src/Capacitor.Api.Public/Sessions/SourceReservationFence.cs` (an `IEndpointFilter`)
+- Modify: the route maps for `POST /api/work-items/declare` (`WorkItemEndpoints.cs`), `POST /api/plans/{planId}/tasks/{taskRef}` (`PlanEndpoints.cs`), `POST /api/loose-ends/adopt` (`LooseEndEndpoints.cs`) — `.AddEndpointFilter<SourceReservationFence>()`
+- Test: `test/Capacitor.Api.Public.Tests/Sessions/SourceReservationFenceTests.cs`
+
+**Interfaces:**
+- Consumes: `SourceSessionReservations.SourceOf`, `EnterAsync`, `IsLive` (Task 3).
+- Produces: header `X-Kcap-Source-Reservation: <token>`; with it, the request runs inside the source's gate and only while the token is live, else **409** `{"code":"source_reservation_lost"}` without running the handler. Without it, the route behaves exactly as today.
+
+- [ ] **Step 1: Write the failing tests** — `Without_the_header_the_route_runs_unfenced`, `A_live_token_runs_the_handler_inside_the_gate` (a concurrent `EnterAsync` on the same source waits until the handler returns), `An_expired_token_is_refused_409_and_the_handler_does_not_run`, `An_unknown_token_is_refused_409`, `A_token_lost_while_waiting_for_the_gate_is_refused` (gate held by a begin; token expires meanwhile; the write is refused when it enters).
+- [ ] **Step 2–4: Run (fail), implement, run (pass)**, then the three routes' existing test classes.
+- [ ] **Step 5: Commit** — `Refuse a hand-off takeover write once its lease is lost`
+
+### Task 6: Pull request
 
 - [ ] Bump nothing in `src/cli` here (the CLI PR lands after; its models are independent copies).
 - [ ] Open the PR per kcap-server's template, reference line `Part of kurrent-io/kcap-cli#2132 — AI-4757`. Ask the user before merging.
