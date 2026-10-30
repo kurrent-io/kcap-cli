@@ -88,17 +88,17 @@ public sealed record AgentRow(
     /// row for the same session has just gone, so a hand-over never flashes as a terminal session.
     public static AgentRow FromServer(RepoSessionDto dto, bool hostedPresentation) {
         var active = dto.Status == "active";
-        var repo = RepoIdentityResolver.ForRemote(dto.Repo?.Owner, dto.Repo?.Name, dto.Cwd, "server");
         // The listing names only the cwd. A hosted agent's is its worktree, whose path names the
         // checkout that owns it; any other cwd could be a linked worktree just the same, so it is
         // not presented as one.
-        var owner = dto.Cwd is { } cwd ? GitRepository.AgentWorktreeOwner(cwd) : null;
-        var worktree = owner is not null && owner.Length != dto.Cwd!.Length ? dto.Cwd : null;
+        var agentWorktree = dto.Cwd is { } cwd ? GitRepository.AgentWorktreeOf(cwd) : null;
+        var repoPath = agentWorktree?.Owner ?? dto.Cwd;
+        var repo = RepoIdentityResolver.ForRemote(dto.Repo?.Owner, dto.Repo?.Name, repoPath, "server");
         return new(
             Key: $"server:{dto.SessionId}", Origin: AgentOrigin.Server, Id: dto.SessionId, SessionId: dto.SessionId,
             Kind: "session", Vendor: dto.Vendor ?? "", Status: active ? "Running" : "Completed",
-            CreatedAt: dto.StartedAt.UtcDateTime, RepoPath: owner, Title: dto.Title, Model: null, RequesterDisplay: null,
-            WorktreePath: worktree, WorkLocation: null, BorrowedFrom: null,
+            CreatedAt: dto.StartedAt.UtcDateTime, RepoPath: repoPath, Title: dto.Title, Model: null, RequesterDisplay: null,
+            WorktreePath: agentWorktree?.Worktree, WorkLocation: null, BorrowedFrom: null,
             MachineBadge: null, RepoGroupKey: repo.Key, RepoGroupLabel: repo.Label,
             CheckoutKey: "@server", CheckoutLabel: "",
             OwnerUserId: dto.Owner?.UserId, OwnerName: dto.Owner?.DisplayName ?? dto.Owner?.Username,

@@ -60,6 +60,25 @@ public class AgentRowTests {
         await Assert.That(row.WorktreePath).IsEqualTo(cwd);
     }
 
+    /// A session started in a directory below the worktree still names the worktree, not that directory.
+    [Test]
+    public async Task Server_row_whose_cwd_is_inside_an_agent_worktree_names_the_worktree_root() {
+        var row = AgentRow.FromServer(Listed(cwd: "/u/shop-api/.capacitor/worktrees/agent-1/src/api"), hostedPresentation: false);
+
+        await Assert.That(row.RepoPath).IsEqualTo("/u/shop-api");
+        await Assert.That(row.WorktreePath).IsEqualTo("/u/shop-api/.capacitor/worktrees/agent-1");
+    }
+
+    /// Without a repository label the rail groups by path; two agents of one checkout share its group.
+    [Test]
+    public async Task Server_rows_without_a_label_group_agent_worktrees_under_their_checkout() {
+        var first = AgentRow.FromServer(Listed(id: "s1", repoOwner: null, cwd: "/u/shop-api/.capacitor/worktrees/agent-1"), hostedPresentation: false);
+        var second = AgentRow.FromServer(Listed(id: "s2", repoOwner: null, cwd: "/u/shop-api/.capacitor/worktrees/agent-2"), hostedPresentation: false);
+
+        await Assert.That(first.RepoGroupKey).IsEqualTo(second.RepoGroupKey);
+        await Assert.That(first.RepoGroupLabel).IsEqualTo("shop-api");
+    }
+
     /// Any other cwd may be a linked worktree too; naming it as one would call it the main checkout.
     [Test]
     public async Task Server_row_whose_cwd_is_no_agent_worktree_names_no_worktree() {
