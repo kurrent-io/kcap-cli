@@ -113,11 +113,13 @@ public class ToolSummaryTests {
     [Arguments("LS", ToolCategory.Search, """{"path":"src"}""", "Listed files")]
     [Arguments("Grep", ToolCategory.Search, """{"pattern":"foo"}""", "Searched files")]
     [Arguments("Bash", ToolCategory.Command, """{"command":"git status"}""", "Ran command")]
+    [Arguments("exec_command", ToolCategory.Command, """{"cmd":"git status"}""", "Ran command")]
+    [Arguments("shell", ToolCategory.Command, """{"command":["bash","-lc","git status"]}""", "Ran command")]
     [Arguments("BashOutput", ToolCategory.Command, """{"bash_id":"b1"}""", "Read shell output")]
     [Arguments("KillShell", ToolCategory.Command, """{"shell_id":"b1"}""", "Stopped shell")]
     [Arguments("write_stdin", ToolCategory.Command, """{"session_id":1}""", "Sent input")]
-    [Arguments("Bash", ToolCategory.Command, """{"command":"git status","description":"Check repo status"}""", null)]
-    [Arguments("Task", ToolCategory.Agent, """{"prompt":"Reply pong","description":"Reply pong"}""", null)]
+    [Arguments("Bash", ToolCategory.Command, """{"command":"git status","description":"Check repo status"}""", "Ran command")]
+    [Arguments("Task", ToolCategory.Agent, """{"prompt":"Reply pong","description":"Reply pong"}""", "Ran agent")]
     [Arguments("Task", ToolCategory.Agent, """{"prompt":"Inspect src/"}""", "Ran agent")]
     [Arguments("TaskOutput", ToolCategory.Agent, """{"task_id":"a1"}""", "Read agent output")]
     [Arguments("TaskStop", ToolCategory.Agent, """{"task_id":"a1"}""", "Stopped agent")]
@@ -128,7 +130,7 @@ public class ToolSummaryTests {
     [Arguments("resume_agent", ToolCategory.Agent, """{"id":"a1"}""", "Resumed agent")]
     [Arguments("list_agents", ToolCategory.Agent, """{}""", "Listed agents")]
     [Arguments("AskUserQuestion", ToolCategory.Question, """{"questions":[{"question":"Pick one"}]}""", null)]
-    public async Task Row_label_names_built_in_tools_without_their_own_prose_description(string name, ToolCategory category, string? input, string? expected) {
+    public async Task Row_label_names_built_in_tools_with_a_past_tense_verb(string name, ToolCategory category, string? input, string? expected) {
         await Assert.That(ToolSummary.RowLabel(name, category, input)).IsEqualTo(expected);
     }
 

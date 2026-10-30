@@ -107,9 +107,10 @@ public static class ToolSummary {
         _                      => "Tool",
     };
 
-    /// Human verb for a built-in tool row whose input carries no prose description of its own.
+    /// The past-tense verb a built-in tool row opens with, whichever vendor recorded it. A prose
+    /// description the call carries is the row's detail, never its verb; a question has no verb.
     public static string? RowLabel(string name, ToolCategory category, string? inputJson) {
-        if (category == ToolCategory.Question || ToolDetail.RawForKey(inputJson, "description").Length > 0) return null;
+        if (category == ToolCategory.Question) return null;
         switch (name.ToLowerInvariant()) {
             case "write" or "write_file":                       return "Wrote file";
             case "ls":                                          return "Listed files";
