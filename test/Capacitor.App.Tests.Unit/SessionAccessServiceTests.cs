@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using Capacitor.App.Services;
 using Microsoft.Extensions.Time.Testing;
 using static Capacitor.App.Tests.Unit.WorkspaceFixtures;
@@ -41,6 +42,108 @@ public class SessionAccessServiceTests {
         var lease = h.Service.Acquire("s1");
         await WaitUntilAsync(async () => await Harness.Current(lease) == SessionAccessState.Denied, "denied");
         await Assert.That(h.Lane.ChatSubscribes).DoesNotContain("s1");
+    }
+
+    /// The recorded session's workspace is built while the hosted one still holds its lease, so it
+    /// joins that entry: a refusal the first lease got must be asked again, not handed on.
+    [Test]
+    public async Task A_lease_joining_a_denied_entry_asks_the_server_again() {
+        using var h = new Harness();
+        h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
+        h.Connect();
+        using var first = h.Service.Acquire("s1");
+        await WaitUntilAsync(async () => await Harness.Current(first) == SessionAccessState.Denied, "first denied");
+
+        h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Ok);
+        using var second = h.Service.Acquire("s1");
+
+        await WaitUntilAsync(async () => await Harness.Current(second) == SessionAccessState.Established, "second re-asked");
+        await Assert.That(h.Lane.AccessWatches.Count(s => s == "s1")).IsEqualTo(2);
+    }
+
+    /// Asking again is not a way past a real refusal: the joining lease reads the server's answer.
+    [Test]
+    public async Task A_lease_joining_a_denied_entry_stays_denied_when_the_server_still_refuses() {
+        using var h = new Harness();
+        h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
+        h.Connect();
+        using var first = h.Service.Acquire("s1");
+        await WaitUntilAsync(async () => await Harness.Current(first) == SessionAccessState.Denied, "first denied");
+
+        using var second = h.Service.Acquire("s1");
+
+        await WaitUntilAsync(() => h.Lane.AccessWatches.Count(s => s == "s1") == 2, what: "second asked");
+        await WaitUntilAsync(async () => await Harness.Current(second) == SessionAccessState.Denied, "still denied");
+        await Assert.That(h.Lane.ChatSubscribes).DoesNotContain("s1");
+    }
+
+    /// The re-ask must not lift a refusal it has not overturned: a failed attempt or a lane drop
+    /// would read as Offline, which shows the withheld transcript again.
+    [Test]
+    public async Task A_refusal_stands_through_a_failed_re_ask_and_a_lane_drop_until_access_is_established() {
+        using var h = new Harness();
+        h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
+        h.Connect();
+        using var first = h.Service.Acquire("s1");
+        await WaitUntilAsync(async () => await Harness.Current(first) == SessionAccessState.Denied, "first denied");
+        var seen = new List<SessionAccessState>();
+        using var watch = first.State.Subscribe(s => { lock (seen) seen.Add(s); });
+
+        h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Failed("transient"));
+        using var second = h.Service.Acquire("s1");
+        await WaitUntilAsync(() => h.Lane.AccessWatches.Count(s => s == "s1") == 2, what: "the re-ask");
+        await Task.Delay(50);
+        h.Drop();
+        await Task.Delay(50);
+        List<SessionAccessState> states;
+        lock (seen) states = [.. seen.Distinct()];
+        await Assert.That(states).IsEquivalentTo([SessionAccessState.Denied]);
+
+        h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Ok);
+        h.Connect(epoch: 2);
+        await WaitUntilAsync(async () => await Harness.Current(second) == SessionAccessState.Established, "established");
+    }
+
+    /// A subscriber can release its lease from inside the state replayed to it, which the subject
+    /// delivers under its own gate, while an attempt finishes on another thread: the attempt must
+    /// not need that gate while it holds the service's lock, or the two wait on each other.
+    [Test]
+    public async Task Releasing_a_lease_inside_its_replayed_state_does_not_deadlock_a_finishing_attempt() {
+        using var h = new Harness();
+        h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
+        h.Connect();
+        using var first = h.Service.Acquire("s1");
+        await WaitUntilAsync(async () => await Harness.Current(first) == SessionAccessState.Denied, "first denied");
+        var answer = new TaskCompletionSource<HubCallOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.Lane.AccessWatchHandler = _ => answer.Task;
+        var second = h.Service.Acquire("s1");
+        await WaitUntilAsync(() => h.Lane.AccessWatches.Count(s => s == "s1") == 2, what: "the re-ask in flight");
+
+        var released = Task.Run(() => {
+            using var _ = second.State.Take(1).Subscribe(_ => {
+                answer.SetResult(HubCallOutcome.Denied("Session not visible to caller"));
+                // Long enough for the attempt to resume on the pool and reach its publish.
+                Thread.Sleep(200);
+                second.Dispose();
+            });
+        });
+
+        await Assert.That(await Task.WhenAny(released, Task.Delay(TimeSpan.FromSeconds(10)))).IsSameReferenceAs(released);
+        await WaitUntilAsync(async () => await Harness.Current(first) == SessionAccessState.Denied, "still denied");
+    }
+
+    /// An established entry is shared as is: joining it costs no hub call.
+    [Test]
+    public async Task A_lease_joining_an_established_entry_does_not_ask_again() {
+        using var h = new Harness();
+        h.Connect();
+        using var first = h.Service.Acquire("s1");
+        await WaitUntilAsync(async () => await Harness.Current(first) == SessionAccessState.Established, "established");
+
+        using var second = h.Service.Acquire("s1");
+
+        await Assert.That(await Harness.Current(second)).IsEqualTo(SessionAccessState.Established);
+        await Assert.That(h.Lane.AccessWatches.Count(s => s == "s1")).IsEqualTo(1);
     }
 
     [Test]

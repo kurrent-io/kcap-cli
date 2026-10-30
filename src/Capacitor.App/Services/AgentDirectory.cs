@@ -90,7 +90,15 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
     /// Session id → when its hosted presentation lapses; written while a daemon row suppresses the
     /// server row, read once none does.
     readonly Dictionary<string, DateTime> _hostedUntil = new(StringComparer.Ordinal);
+    /// Listed session id → the checkout its daemon row reported. The listing names only the cwd, so
+    /// the server row that replaces a daemon row keeps these after the agent stops.
+    readonly Dictionary<string, Checkout> _checkouts = new(StringComparer.Ordinal);
+    /// Sessions whose daemon row completed within the hand-over grace; held until the grace lapses,
+    /// since the daemon can drop the completed row before the listing says the session ended.
+    readonly HashSet<string> _endedByDaemon = new(StringComparer.Ordinal);
     bool _disposed;
+
+    readonly record struct Checkout(string? RepoPath, string? WorktreePath, string? WorkLocation, string? BorrowedFrom, string? Branch);
 
     public AgentDirectory(
             IDaemonClientService local, IRemoteAgentsService remote, IServerLane lane,
@@ -421,6 +429,13 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
         for (var i = 0; i < next.Count; i++) {
             var row = next[i];
             if (!Matchable(row) || listedIdOf.GetValueOrDefault(row.Key) is not { } sid || !listed.TryGetValue(sid, out var dto)) continue;
+            // An unproven twin pair lists one session on both lanes, and the registry row names no
+            // worktree: what a row leaves out keeps the value another row reported.
+            if (row.RepoPath is { Length: > 0 }) {
+                var known = _checkouts.GetValueOrDefault(sid);
+                _checkouts[sid] = new(row.RepoPath, row.WorktreePath ?? known.WorktreePath, row.WorkLocation ?? known.WorkLocation,
+                    row.BorrowedFrom ?? known.BorrowedFrom, row.Branch ?? dto.Branch ?? known.Branch);
+            }
             next[i] = row with {
                 OwnerUserId = dto.Owner?.UserId,
                 OwnerName = dto.Owner?.DisplayName ?? dto.Owner?.Username,
@@ -469,18 +484,32 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
                     return false;
                 }
                 switch (row.Status) {
-                    case "Completed": return true;
+                    case "Completed": _endedByDaemon.Add(sid); return true;
                     case "Failed": suppressServer = true; return false;
                     default: suppressServer = true; hostedNow = true; return false;
                 }
             });
-            if (hostedNow) _hostedUntil[sid] = now + HandoverGrace;
+            if (hostedNow) {
+                _hostedUntil[sid] = now + HandoverGrace;
+                _endedByDaemon.Remove(sid);
+            }
             if (suppressServer) continue;
             var hosted = _hostedUntil.TryGetValue(sid, out var until) && until > now;
-            next.Add(AgentRow.FromServer(dto, hosted) with { OwnerIsViewer = Ownership(dto, sid) });
+            // Within the hand-over grace the daemon that hosted the session is fresher than a
+            // listing still calling it active: it ended where it ran.
+            if (serverEnded) _endedByDaemon.Remove(sid);
+            var shown = hosted && _endedByDaemon.Contains(sid) ? dto with { Status = "ended" } : dto;
+            var server = AgentRow.FromServer(shown, hosted) with { OwnerIsViewer = Ownership(dto, sid) };
+            if (_checkouts.TryGetValue(sid, out var checkout))
+                server = server with {
+                    RepoPath = checkout.RepoPath, WorktreePath = checkout.WorktreePath, WorkLocation = checkout.WorkLocation,
+                    BorrowedFrom = checkout.BorrowedFrom, Branch = server.Branch ?? checkout.Branch,
+                };
+            next.Add(server);
         }
 
         foreach (var sid in _hostedUntil.Where(kv => kv.Value <= now).Select(kv => kv.Key).ToList()) _hostedUntil.Remove(sid);
+        _endedByDaemon.RemoveWhere(sid => !_hostedUntil.ContainsKey(sid));
         var nextLapse = _hostedUntil.Count == 0 ? Timeout.InfiniteTimeSpan : _hostedUntil.Values.Min() - now;
         _graceExpiry.Change(nextLapse, Timeout.InfiniteTimeSpan);
     }
