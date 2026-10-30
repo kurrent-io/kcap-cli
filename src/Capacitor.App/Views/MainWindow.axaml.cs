@@ -154,6 +154,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
             if (watchedScreens is not null) watchedScreens.Changed -= OnScreensChanged;
         };
         BindRefreshShortcuts();
+        BindSearchShortcuts();
         BindSettingsShortcut();
         KeepContentClearOfCaptionButtons();
         BindFullScreenShortcut();
@@ -198,7 +199,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
         if (RefreshShortcut.FromTerminal is { } fromTerminal) {
             KeyBindings.Add(new KeyBinding {
                 Gesture = RefreshShortcut.Primary,
-                Command = new RefreshUnlessTerminalFocused(this),
+                Command = new UnlessTerminalFocused(this, vm => vm.RefreshWorkCommand),
             });
             Add(fromTerminal);
         }
@@ -215,6 +216,24 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
             bindings.Add(binding);
             KeyBindings.Add(binding);
         }
+    }
+
+    // ⌘K everywhere on macOS. Off macOS Ctrl+K is a terminal key, so it yields to a focused terminal.
+    void BindSearchShortcuts() {
+        var meta = new KeyBinding { Gesture = new KeyGesture(Key.K, KeyModifiers.Meta) };
+        KeyBindings.Add(meta);
+        if (!ShortcutLabels.UsesCommandKey) {
+            KeyBindings.Add(new KeyBinding {
+                Gesture = new KeyGesture(Key.K, KeyModifiers.Control),
+                Command = new UnlessTerminalFocused(this, vm => vm.OpenSearchCommand),
+            });
+        }
+
+        void Apply() {
+            if ((DataContext as MainWindowViewModel)?.OpenSearchCommand is { } command) meta.Command = command;
+        }
+        Apply();
+        DataContextChanged += (_, _) => Apply();
     }
 
     // Windows draws its caption buttons over the top-right of the extended client area, so the

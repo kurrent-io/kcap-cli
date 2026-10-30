@@ -4,9 +4,9 @@ using Capacitor.App.ViewModels;
 
 namespace Capacitor.App.Views;
 
-/// Ctrl+R on Linux and Windows. CanExecute is false while focus is inside the terminal, so the
-/// key stays unhandled and the terminal sends it. The menu and Ctrl+Shift+R use the real command.
-sealed class RefreshUnlessTerminalFocused(TopLevel window) : ICommand {
+/// A Ctrl shortcut on Linux and Windows that is also a terminal key. CanExecute is false while
+/// focus is inside the terminal, so the key stays unhandled and the terminal sends it.
+sealed class UnlessTerminalFocused(TopLevel window, Func<MainWindowViewModel, ICommand> pick) : ICommand {
     public bool CanExecute(object? parameter) =>
         !FocusedInTerminal() && Inner?.CanExecute(parameter) == true;
 
@@ -17,7 +17,7 @@ sealed class RefreshUnlessTerminalFocused(TopLevel window) : ICommand {
 
     public event EventHandler? CanExecuteChanged { add { } remove { } }
 
-    ICommand? Inner => (window.DataContext as MainWindowViewModel)?.RefreshWorkCommand;
+    ICommand? Inner => window.DataContext is MainWindowViewModel vm ? pick(vm) : null;
 
     bool FocusedInTerminal() => TerminalFocus.Has(window);
 }

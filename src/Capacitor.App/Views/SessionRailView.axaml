@@ -72,6 +72,15 @@
             <Setter Property="Padding" Value="10,6" />
             <Setter Property="FontSize" Value="13" />
         </Style>
+        <Style Selector="Button#RailFilterButton.active /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapSelectionBrush}" />
+        </Style>
+        <Style Selector="TextBlock#RailSearchText">
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        </Style>
+        <Style Selector="TextBlock#RailSearchText.query">
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
         <Style Selector="TextBlock.footerValue">
             <Setter Property="FontSize" Value="12" />
             <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
@@ -155,7 +164,7 @@
 
                 <!-- Deselects the workspace: the pane's empty state IS the launcher. -->
                 <Button x:Name="RailNewSessionButton" Classes="kcapChip" HorizontalAlignment="Stretch" Margin="10,0,10,10"
-                        Command="{Binding CloseWorkspaceCommand}"
+                        Command="{Binding NewSessionCommand}"
                         Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                         BorderThickness="1" CornerRadius="7" Padding="11,7" AutomationProperties.Name="New session">
                     <DockPanel>
@@ -169,9 +178,34 @@
                     </DockPanel>
                 </Button>
 
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4" Margin="10,0,10,8">
+                    <Button x:Name="RailSearchButton" Classes="kcapField" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                            Command="{Binding OpenSearchCommand}" AutomationProperties.Name="Search sessions">
+                        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6">
+                            <TextBlock x:Name="RailSearchText" Text="Search…" FontSize="13"
+                                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                            <TextBlock x:Name="RailSearchShortcut" Grid.Column="1" Text="{x:Static views:ShortcutLabels.Search}" FontSize="11"
+                                       Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center" />
+                            <views:AppIcon Grid.Column="2" Kind="Search" Size="14" Foreground="{StaticResource KcapMutedBrush}" />
+                        </Grid>
+                    </Button>
+                    <Button x:Name="RailFilterButton" Grid.Column="1" Classes="kcapGhost kcapIcon"
+                            DataContext="{Binding Rail}" x:DataType="vm:SessionRailViewModel"
+                            Command="{Binding ToggleFiltersCommand}" Classes.active="{Binding FiltersOpen}"
+                            IsVisible="{Binding Converter={x:Static ObjectConverters.IsNotNull}}"
+                            ToolTip.Tip="Filter sessions" AutomationProperties.Name="Filter sessions">
+                        <Panel>
+                            <views:AppIcon Kind="ListFilter" Size="14" Foreground="{StaticResource KcapMutedBrush}" />
+                            <Ellipse x:Name="RailFilterDot" Width="6" Height="6" Fill="{StaticResource KcapInfoBrush}"
+                                     HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-3,-3,0"
+                                     IsVisible="{Binding FiltersDiffer}" />
+                        </Panel>
+                    </Button>
+                </Grid>
+
                 <!-- Scope and state are one tap each; grouping and sort open pickers. -->
                 <StackPanel x:Name="RailControls" DataContext="{Binding Rail}" x:DataType="vm:SessionRailViewModel"
-                            Margin="10,0,10,8" Spacing="6" IsVisible="{Binding Converter={x:Static ObjectConverters.IsNotNull}}">
+                            Margin="10,0,10,8" Spacing="6" IsVisible="{Binding FiltersOpen, FallbackValue=False}">
                     <Grid ColumnDefinitions="Auto,*,Auto">
                         <Border x:Name="RailScopeSegment" Classes="kcapSegment railScopeSegment" HorizontalAlignment="Left"
                                 IsEnabled="{Binding CanChangeScope}" ToolTip.Tip="{Binding ScopeTip}" ToolTip.ShowOnDisabled="True">

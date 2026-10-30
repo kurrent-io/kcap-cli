@@ -2967,6 +2967,7 @@ public class HomeViewModelTests {
         public IObservable<IReadOnlyDictionary<string, string>> SessionAgents =>
             Observable.Return((IReadOnlyDictionary<string, string>)FrozenDictionary<string, string>.Empty);
         public string? VendorOfSession(string sessionId) => null;
+        public (string Id, AgentOrigin Origin)? RowForSession(string sessionId) => null;
         public bool IsProvenLocalTwin(string agentId) => false;
         public bool IsHostedNow(AgentRow row) => false;
         public void AddPlaceholder(string agentId, string vendor, string repoPath, string? title, string? model) { }
