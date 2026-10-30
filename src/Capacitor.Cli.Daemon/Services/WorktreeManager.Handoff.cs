@@ -197,23 +197,28 @@ public partial class WorktreeManager {
         return created;
     }
 
+    public const int HandoffCommitCheckCap = 200;
+
     /// <summary>Checks the session's commits against the starting point. <paramref name="sessionCommits"/>
     /// null means they are unknown; <paramref name="mayHaveUnpushedWork"/> means the session may have left
     /// work that no commit list can show. A missing commit outranks any uncertainty.</summary>
     public async Task<HandoffWork> CheckHandoffWorkAsync(
-            string repoPath, string startSha, IReadOnlyList<string>? sessionCommits, bool mayHaveUnpushedWork) {
+            string repoPath, string startSha, IReadOnlyList<string>? sessionCommits, bool mayHaveUnpushedWork,
+            int checkCap = HandoffCommitCheckCap) {
         var missing = new List<string>();
 
         var reverted = false;
 
-        foreach (var commit in sessionCommits ?? []) {
+        // Each commit costs up to two git processes on the launch lane; the rest are left unconfirmed.
+        foreach (var commit in (sessionCommits ?? []).Take(checkCap)) {
             if (!IsFullSha(commit) || !await IsReachableAsync(commit)) missing.Add(commit);
             else if (await IsNamedByRevertAsync(commit)) reverted = true;
         }
 
-        var completeness = missing.Count > 0                                        ? HandoffCompleteness.PartlyMissing
-                         : sessionCommits is null || mayHaveUnpushedWork || reverted ? HandoffCompleteness.Unconfirmed
-                         :                                                              HandoffCompleteness.Complete;
+        var uncapped     = sessionCommits is not null && sessionCommits.Count <= checkCap;
+        var completeness = missing.Count > 0                                 ? HandoffCompleteness.PartlyMissing
+                         : !uncapped || mayHaveUnpushedWork || reverted      ? HandoffCompleteness.Unconfirmed
+                         :                                                     HandoffCompleteness.Complete;
 
         return new(completeness, missing);
 

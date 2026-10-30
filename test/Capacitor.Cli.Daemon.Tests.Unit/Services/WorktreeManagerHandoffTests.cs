@@ -365,6 +365,31 @@ public class WorktreeManagerHandoffTests {
     static Task<HandoffWork> CheckAsync(Fixture f, string startSha, IReadOnlyList<string>? commits, bool mayHaveUnpushedWork = false) =>
         Manager().CheckHandoffWorkAsync(f.Clone, startSha, commits, mayHaveUnpushedWork);
 
+    /// <summary>Each commit costs a git process on the launch lane, so only the first ones are checked.</summary>
+    [Test]
+    public async Task only_the_first_capped_session_commits_are_listed_as_missing() {
+        using var f       = Fixture.Create();
+        var       start   = await ResolveAsync(f, new HandoffTarget("main", null, false));
+        var       commits = Enumerable.Range(0, WorktreeManager.HandoffCommitCheckCap + 1).Select(i => $"not-a-sha-{i}").ToList();
+
+        var work = await CheckAsync(f, start.Sha, commits);
+
+        await Assert.That(work.Completeness).IsEqualTo(HandoffCompleteness.PartlyMissing);
+        await Assert.That(work.MissingCommits).IsEquivalentTo(commits.Take(WorktreeManager.HandoffCommitCheckCap));
+    }
+
+    [Test]
+    public async Task commits_past_the_cap_leave_the_work_unconfirmed() {
+        using var f     = Fixture.Create();
+        var       first = f.CommitOnOrigin("feature", "b.txt");
+        var       start = await ResolveAsync(f, new HandoffTarget("feature", null, false));
+
+        var work = await Manager().CheckHandoffWorkAsync(f.Clone, start.Sha, [first, "not-a-sha"], mayHaveUnpushedWork: false, checkCap: 1);
+
+        await Assert.That(work.Completeness).IsEqualTo(HandoffCompleteness.Unconfirmed);
+        await Assert.That(work.MissingCommits).IsEmpty();
+    }
+
     [Test]
     public async Task all_session_commits_reachable_and_nothing_unpushed_is_complete() {
         using var f      = Fixture.Create();
