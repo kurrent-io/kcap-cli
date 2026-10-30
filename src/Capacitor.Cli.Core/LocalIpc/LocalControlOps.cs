@@ -29,6 +29,8 @@ public interface ILocalControlOps {
     Task<DaemonSettingsAckDto> PutDaemonSettingsAsync(DaemonSettingsPutDto put, CancellationToken ct);
     /// Transport failure is returned as Ok=false with SessionRenameReasons.Transport, never thrown.
     Task<SessionRenameAckDto> RenameSessionAsync(SessionRenameDto rename, CancellationToken ct);
+    /// Null when the request or the reply never crossed the socket.
+    Task<HandoffProbeReplyDto?> ProbeHandoffAsync(HandoffProbeRequestDto request, CancellationToken ct);
 }
 
 /// One-shot Core IPC operations behind a fresh socket per call — no Hello negotiation (callers
@@ -44,6 +46,8 @@ public sealed class LocalControlOps(DaemonStore store, string daemonName, TimePr
     internal TimeSpan ReplyTimeout = TimeSpan.FromSeconds(10);
     internal TimeSpan StopReplyTimeout    = TimeSpan.FromSeconds(40); // StopAck lands only after graceful stop (~25s worst case)
     internal TimeSpan RenameReplyTimeout  = TimeSpan.FromSeconds(30); // the daemon makes a server round trip before it acks
+
+    internal TimeSpan HandoffReplyTimeout = TimeSpan.FromSeconds(60); // the daemon fetches from origin before it answers
 
     const string DaemonUnreachable = "daemon_unreachable";
     const string DaemonRejected    = "daemon_rejected";
@@ -215,6 +219,22 @@ public sealed class LocalControlOps(DaemonStore store, string daemonName, TimePr
                 ?? new SessionRenameAckDto(false, SessionRenameReasons.Transport, null);
         } catch (JsonException) {
             return new SessionRenameAckDto(false, SessionRenameReasons.Transport, null);
+        }
+    }
+
+    public async Task<HandoffProbeReplyDto?> ProbeHandoffAsync(HandoffProbeRequestDto request, CancellationToken ct) {
+        var json = JsonSerializer.Serialize(request, HandoffIpcJsonContext.Default.HandoffProbeRequestDto);
+        LocalFrame reply;
+        try {
+            reply = await ExchangeAsync(LocalFrame.HandoffJson(FrameType.HandoffProbe, json), HandoffReplyTimeout, ct);
+        } catch (LocalControlOpsException) {
+            return null;
+        }
+        if (reply.Type != FrameType.HandoffProbeReply) return null;
+        try {
+            return JsonSerializer.Deserialize(reply.Text, HandoffIpcJsonContext.Default.HandoffProbeReplyDto);
+        } catch (JsonException) {
+            return null;
         }
     }
 

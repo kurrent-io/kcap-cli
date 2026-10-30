@@ -51,6 +51,8 @@ public enum FrameType : byte {
     AccountsSubscribe = 32, // long-lived: push an AccountsSnapshot (immediate + on change)
     // Session rename — one-shot; acked on SessionRenameAck.
     SessionRename = 33, // Text = SessionRenameDto JSON
+    // Hand-off probe — one-shot; answered on HandoffProbeReply.
+    HandoffProbe = 34, // Text = HandoffProbeRequestDto JSON
     // daemon → client
     Attached  = 64,
     Stdout    = 65,
@@ -79,4 +81,5 @@ public enum FrameType : byte {
     AgentSessionReply = 86, // Text = the agent's session id; empty when the daemon hosts no such agent or it has none yet
     AccountsSnapshot = 87, // Text = AccountsSnapshotDto JSON, pushed on AccountsSubscribe
     SessionRenameAck = 88, // Text = SessionRenameAckDto JSON, reply to SessionRename
+    HandoffProbeReply = 89, // Text = HandoffProbeReplyDto JSON, reply to HandoffProbe
 }

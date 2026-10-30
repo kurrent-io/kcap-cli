@@ -138,6 +138,13 @@ sealed class ScriptedLocalControlOps : ILocalControlOps {
             ?? throw new InvalidOperationException("ScriptedLocalControlOps: unscripted RenameSession call");
     }
 
+    /// Answers ProbeHandoff; unset, a probe throws as any unscripted call does.
+    public Func<HandoffProbeRequestDto, Task<HandoffProbeReplyDto?>>? ProbeHandoff { get; set; }
+
+    public Task<HandoffProbeReplyDto?> ProbeHandoffAsync(HandoffProbeRequestDto request, CancellationToken ct) =>
+        ProbeHandoff?.Invoke(request)
+            ?? throw new InvalidOperationException("ScriptedLocalControlOps: unscripted ProbeHandoff call");
+
     public Task<DaemonSettingsAckDto> PutDaemonSettingsAsync(DaemonSettingsPutDto put, CancellationToken ct) {
         Record(_putSettingsPayloads, put, ref PutSettingsCalls);
         SettingsPutStarted?.Invoke();

@@ -67,6 +67,30 @@ public class LocalControlOpsTests {
         if (f?.Type == FrameType.ConsentRulesGet)
             await FrameCodec.WriteAsync(s, LocalFrame.ConsentJson(FrameType.ConsentRules, json), ct);
     };
+    [Test]
+    public async Task ProbeHandoffAsync_returns_the_daemons_reply() {
+        if (OperatingSystem.IsWindows()) return;
+        ConnScript answer = async (_, s, ct) => {
+            await FrameCodec.ReadAsync(s, ct);
+            await FrameCodec.WriteAsync(s, LocalFrame.HandoffJson(FrameType.HandoffProbeReply,
+                """{"refusal":"repo_mismatch","fetch_error":null,"start":null,"completeness":null,"missing_commits":null}"""), ct);
+        };
+        await WithOpsAsync([answer], async ops => {
+            var reply = await ops.ProbeHandoffAsync(new HandoffProbeRequestDto("/r", "o", "n", "b", null, false, null, null, null), CancellationToken.None);
+            await Assert.That(reply!.Refusal).IsEqualTo(HandoffRefusals.RepoMismatch);
+        });
+    }
+
+    [Test]
+    public async Task ProbeHandoffAsync_returns_null_when_the_daemon_never_answers() {
+        if (OperatingSystem.IsWindows()) return;
+
+        await WithOpsAsync([Stall()], async ops => {
+            var reply = await ops.ProbeHandoffAsync(new HandoffProbeRequestDto("/r", "o", "n", "b", null, false, null, null, null), CancellationToken.None);
+            await Assert.That(reply).IsNull();
+        }, configure: ops => ops.HandoffReplyTimeout = TimeSpan.FromMilliseconds(100));
+    }
+
     static ConnScript ConsentAckThen(string json) => async (_, s, ct) => {
         var f = await FrameCodec.ReadAsync(s, ct);                       // expect ConsentRulesPut
         if (f?.Type == FrameType.ConsentRulesPut)

@@ -40,6 +40,9 @@ public sealed class LateBoundLocalControlOps(Func<ILocalControlOps> bind) : ILoc
 
     public Task<SessionRenameAckDto> RenameSessionAsync(SessionRenameDto rename, CancellationToken ct) =>
         bind().RenameSessionAsync(rename, ct);
+
+    public Task<HandoffProbeReplyDto?> ProbeHandoffAsync(HandoffProbeRequestDto request, CancellationToken ct) =>
+        bind().ProbeHandoffAsync(request, ct);
 }
 
 /// <summary>
