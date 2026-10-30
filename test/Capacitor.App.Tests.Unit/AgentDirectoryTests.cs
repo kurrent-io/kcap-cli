@@ -631,6 +631,28 @@ public class AgentDirectoryTests {
         await Assert.That(row.Branch).IsEqualTo("feature");
     }
 
+    /// Until the twin is proven both lanes can list one session; the registry row carries no
+    /// worktree, so it must not replace the checkout the local row reported.
+    [Test]
+    public async Task An_unproven_twins_registry_row_leaves_the_local_checkout_in_place() {
+        var (local, remote, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        LocalConnected(local);
+        local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "S") with { WorktreePath = "/r/.wt/a1", WorkLocation = "owned" });
+        remote.Cache.AddOrUpdate(Remote("a1", daemon: "unproven", owner: "me", sessionId: "S") with { RepoPath = "/r" });
+        MineLive(sessions, "S");
+        await Assert.That(dir.Rows.Lookup("remote:a1").HasValue).IsTrue();
+
+        local.Agents.RemoveKey("a1");
+        remote.Cache.RemoveKey("a1");
+        sessions.LiveCache.RemoveKey("S");
+        sessions.MineLiveCache.RemoveKey("S");
+        sessions.EndedCache.AddOrUpdate(Listed("S"));
+
+        await Assert.That(dir.Rows.Lookup("server:S").Value.WorktreePath).IsEqualTo("/r/.wt/a1");
+    }
+
     /// A remote launch's registry row leaves the registry when it stops; its repository stays on the server row.
     [Test]
     public async Task The_server_row_that_replaces_a_registry_row_keeps_its_repository() {

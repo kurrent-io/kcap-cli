@@ -397,8 +397,13 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
         for (var i = 0; i < next.Count; i++) {
             var row = next[i];
             if (!Matchable(row) || listedIdOf.GetValueOrDefault(row.Key) is not { } sid || !listed.TryGetValue(sid, out var dto)) continue;
-            if (row.RepoPath is { Length: > 0 })
-                _checkouts[sid] = new(row.RepoPath, row.WorktreePath, row.WorkLocation, row.BorrowedFrom, row.Branch ?? dto.Branch);
+            // An unproven twin pair lists one session on both lanes, and the registry row names no
+            // worktree: what a row leaves out keeps the value another row reported.
+            if (row.RepoPath is { Length: > 0 }) {
+                var known = _checkouts.GetValueOrDefault(sid);
+                _checkouts[sid] = new(row.RepoPath, row.WorktreePath ?? known.WorktreePath, row.WorkLocation ?? known.WorkLocation,
+                    row.BorrowedFrom ?? known.BorrowedFrom, row.Branch ?? dto.Branch ?? known.Branch);
+            }
             next[i] = row with {
                 OwnerUserId = dto.Owner?.UserId,
                 OwnerName = dto.Owner?.DisplayName ?? dto.Owner?.Username,
