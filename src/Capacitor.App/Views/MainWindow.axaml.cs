@@ -112,20 +112,57 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
         ScaleHost.LayoutTransform = scale == UiScale.Default ? null : new ScaleTransform(scale, scale);
         ApplyMinimumSize();
         ApplyCaptionInset();
+        if (Onboarding is not null) KeepOnboardingOnScreen();
     }
 
-    // A closed window has no platform window to ask a screen about.
+    // A larger minimum grows the frame from its top-left corner, which can push setup's footer off
+    // the screen; the frame is pulled back inside the work area.
+    void KeepOnboardingOnScreen() {
+        if (!IsVisible || WindowState != WindowState.Normal || double.IsNaN(Width) || double.IsNaN(Height)) return;
+        if ((Screens?.ScreenFromWindow(this) ?? Screens?.Primary) is not { } screen) return;
+        var size = new Size(Math.Max(Width, MinWidth), Math.Max(Height, MinHeight));
+        if (WindowRestore.FitOnScreen(Position, size, [new ScreenArea(screen.Bounds, screen.WorkingArea, screen.Scaling)]) is not { } fit) return;
+        Position = fit.Position;
+        Width = fit.Size.Width;
+        Height = fit.Size.Height;
+    }
+
+    // A closed window has no platform window to ask a screen about. Setup's minimum depends on the
+    // screen at any scale, since it never exceeds the work area.
     void RefreshMinimumSize() {
-        if (_scale != UiScale.Default && PlatformImpl is not null) ApplyMinimumSize();
+        if ((_scale != UiScale.Default || Onboarding is not null) && PlatformImpl is not null) ApplyMinimumSize();
     }
 
     // Bounded by the screen the window is on.
     void ApplyMinimumSize() {
         var area = Screens?.ScreenFromWindow(this) ?? Screens?.Primary;
         var available = area is null ? (Size?)null : area.WorkingArea.Size.ToSize(area.Scaling);
-        var onboarding = Onboarding is not null;
-        MinWidth  = UiScale.Minimum(onboarding ? WindowSizeMemory.OnboardingMinWidth : WindowSizeMemory.MinWidth, _scale, available?.Width);
-        MinHeight = UiScale.Minimum(onboarding ? WindowSizeMemory.OnboardingMinHeight : WindowSizeMemory.MinHeight, _scale, available?.Height);
+        if (Onboarding is not null) {
+            var minimum = WizardPlacement.Minimum(_scale, available);
+            MinWidth  = minimum.Width;
+            MinHeight = minimum.Height;
+            return;
+        }
+
+        MinWidth  = UiScale.Minimum(WindowSizeMemory.MinWidth, _scale, available?.Width);
+        MinHeight = UiScale.Minimum(WindowSizeMemory.MinHeight, _scale, available?.Height);
+    }
+
+    /// Call before the first Show(): sizes setup to the work area of the screen it opens on and centres it there.
+    public void PlaceOnboarding() {
+        var scale = _contentScale?.Current ?? _scale;
+        if ((Screens?.ScreenFromWindow(this) ?? Screens?.Primary) is not { } screen) {
+            Width = WizardPlacement.PreferredWidth;
+            Height = WizardPlacement.PreferredHeight;
+            WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            return;
+        }
+
+        var (position, size) = WizardPlacement.Place(scale, new ScreenArea(screen.Bounds, screen.WorkingArea, screen.Scaling));
+        WindowStartupLocation = WindowStartupLocation.Manual;
+        Position = position;
+        Width = size.Width;
+        Height = size.Height;
     }
 
     // The inset is in window units and the pane sits inside the scale, so it is divided back out.
