@@ -1,3 +1,5 @@
+using Capacitor.Cli.Core.Handoff;
+
 namespace Capacitor.Cli.Daemon.Services;
 
 public partial class WorktreeManager {
@@ -59,6 +61,13 @@ public partial class WorktreeManager {
             : new(new(HandoffSource.DefaultBranch, HandoffCheckout.Detached, defaultSha, defaultBranch, HandoffDetachReason.BranchAbsent, null), null);
     }
 
+    /// <summary>True for the refusals <see cref="ResolveHandoffStartAsync"/> raises about the target itself,
+    /// as opposed to a git failure while reading the repository.</summary>
+    public static bool IsHandoffTargetRefusal(Exception ex) =>
+        ex is ArgumentException
+     || ex is InvalidOperationException { Message: var m }
+     && (m.StartsWith("invalid_handoff_target:", StringComparison.Ordinal) || m.StartsWith("invalid_base_ref:", StringComparison.Ordinal));
+
     async Task<(string? Sha, string? Error)> FetchOriginBranchAsync(string repoPath, string branch) {
         var tracking = $"refs/remotes/origin/{branch}";
         var fetched = await RunGitCaptureResult(repoPath, FetchTimeout, time, false, HandoffFetchConfig(),
@@ -104,7 +113,9 @@ public partial class WorktreeManager {
     /// <summary>Materialises a start from <see cref="ResolveHandoffStartAsync"/>. The local branch is
     /// re-read first and creation refuses with <c>handoff_start_changed</c> if it moved or was checked out
     /// since; a pre-existing branch is never owned, so no rollback or removal deletes it.</summary>
-    public async Task<WorktreeInfo> CreateHandoffAsync(string repoPath, HandoffStart start, string? name = null) {
+    public async Task<WorktreeInfo> CreateHandoffAsync(
+            string repoPath, HandoffStart start, string? name = null, CancellationToken ct = default) {
+        ct.ThrowIfCancellationRequested();
         name ??= $"agent-{Guid.NewGuid():N}"[..20];
 
         var worktreeRoot = Path.Combine(repoPath, ".capacitor", "worktrees");
@@ -129,6 +140,7 @@ public partial class WorktreeManager {
 
         try {
             await WithWorktreeMetadataGate(repoPath, time, async () => {
+                ct.ThrowIfCancellationRequested();
                 if (!detached) {
                     var (tip, checkedOut) = await ReadLocalBranchUngatedAsync(repoPath, branch);
                     if (tip != start.LocalBranchSha) throw StartChanged($"{branch} is at {tip ?? "nothing"}, not {start.LocalBranchSha ?? "nothing"}");
@@ -188,23 +200,29 @@ public partial class WorktreeManager {
         return created;
     }
 
+    public const int HandoffCommitCheckCap = 200;
+
     /// <summary>Checks the session's commits against the starting point. <paramref name="sessionCommits"/>
     /// null means they are unknown; <paramref name="mayHaveUnpushedWork"/> means the session may have left
     /// work that no commit list can show. A missing commit outranks any uncertainty.</summary>
     public async Task<HandoffWork> CheckHandoffWorkAsync(
-            string repoPath, string startSha, IReadOnlyList<string>? sessionCommits, bool mayHaveUnpushedWork) {
+            string repoPath, string startSha, IReadOnlyList<string>? sessionCommits, bool mayHaveUnpushedWork,
+            int checkCap = HandoffCommitCheckCap, CancellationToken ct = default) {
         var missing = new List<string>();
 
         var reverted = false;
 
-        foreach (var commit in sessionCommits ?? []) {
+        // Each commit costs up to two git processes on the launch lane; the rest are left unconfirmed.
+        foreach (var commit in (sessionCommits ?? []).Take(checkCap)) {
+            ct.ThrowIfCancellationRequested();
             if (!IsFullSha(commit) || !await IsReachableAsync(commit)) missing.Add(commit);
             else if (await IsNamedByRevertAsync(commit)) reverted = true;
         }
 
-        var completeness = missing.Count > 0                                        ? HandoffCompleteness.PartlyMissing
-                         : sessionCommits is null || mayHaveUnpushedWork || reverted ? HandoffCompleteness.Unconfirmed
-                         :                                                              HandoffCompleteness.Complete;
+        var uncapped     = sessionCommits is not null && sessionCommits.Count <= checkCap;
+        var completeness = missing.Count > 0                                 ? HandoffCompleteness.PartlyMissing
+                         : !uncapped || mayHaveUnpushedWork || reverted      ? HandoffCompleteness.Unconfirmed
+                         :                                                     HandoffCompleteness.Complete;
 
         return new(completeness, missing);
 

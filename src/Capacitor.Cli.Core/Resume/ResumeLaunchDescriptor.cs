@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Handoff;
 using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.Cli.Core.Resume;
@@ -36,5 +37,7 @@ public sealed record ResumeLaunchDescriptor(
     bool? ScratchWorkspace = null,
     // Null for an entry written before the field, which owned its branch.
     bool? WorktreeOwnsBranch = null,
-    string? AccountLabel = null
+    string? AccountLabel = null,
+    // The ended session a hand-off successor takes over; null in an entry written without it, which has none to finish.
+    HandoffSourceContext? HandoffSource = null
 );

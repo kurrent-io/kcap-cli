@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Handoff;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -67,6 +68,44 @@ sealed class CaptureServerConnection : ServerConnection {
         if (RegisterDaemonThrow is { } ex) return Task.FromException(ex);
         attempt.Sending(_config.Advertisement);
         attempt.Accept();
+        return Task.CompletedTask;
+    }
+
+    /// <summary>The server's answer to each takeover begin, which may throw as the hub would; unset, the server
+    /// lacks the method.</summary>
+    public Func<string, string, HandoffTakeoverAdmission?>? BeginHandoff { get; set; }
+
+    /// <summary>The server's answer to each lease renewal; unset, every renewal succeeds.</summary>
+    public Func<string, CancellationToken, Task<bool>>? RenewHandoff { get; set; }
+
+    public ConcurrentQueue<(string Source, string Successor, HandoffTakeoverAdmission? Admission)> HandoffBegins { get; } = new();
+    public ConcurrentQueue<string> HandoffRenews { get; } = new();
+    public ConcurrentQueue<string> HandoffEnds   { get; } = new();
+
+    internal override Task<HandoffTakeoverAdmission?> InvokeBeginHandoffTakeoverRawAsync(string source, string successor, CancellationToken ct) {
+        HandoffTakeoverAdmission? admission = null;
+        try {
+            if (BeginHandoff is null)
+                throw new Microsoft.AspNetCore.SignalR.HubException(
+                    $"Failed to invoke '{BeginHandoffTakeoverMethod}' due to an error on the server. HubException: Method does not exist.");
+
+            admission = BeginHandoff(source, successor);
+        } finally {
+            HandoffBegins.Enqueue((source, successor, admission));
+        }
+
+        return Task.FromResult(admission);
+    }
+
+    public override Task<bool> RenewHandoffTakeoverAsync(string token, CancellationToken ct) {
+        HandoffRenews.Enqueue(token);
+
+        return RenewHandoff?.Invoke(token, ct) ?? Task.FromResult(true);
+    }
+
+    public override Task EndHandoffTakeoverAsync(string token) {
+        HandoffEnds.Enqueue(token);
+
         return Task.CompletedTask;
     }
 

@@ -1,4 +1,4 @@
-namespace Capacitor.Cli.Daemon.Services;
+namespace Capacitor.Cli.Core.Handoff;
 
 /// <summary>What a hand-off continues: the ended session's branch and, when it has one, the pull request
 /// whose head to start from.</summary>
