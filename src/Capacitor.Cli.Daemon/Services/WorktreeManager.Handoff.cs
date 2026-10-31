@@ -127,6 +127,7 @@ public partial class WorktreeManager {
             throw new InvalidOperationException($"invalid_base_ref: {branch}");
 
         Directory.CreateDirectory(worktreeRoot);
+        await ExcludeWorktreeRootAsync(repoPath);
 
         // Pinning the start under the worktree's own ref keeps a fork head out of the unsaved-work count,
         // and removal deletes it.

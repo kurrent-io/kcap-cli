@@ -1835,13 +1835,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         }
     }
 
-    /// <summary>Phase B (D4): this daemon's stable logical id = a hash of its name, written
-    /// into each child's <c>KCAP_DAEMON_ID</c> marker. Per-name so a different daemon under the same
-    /// user is never mistaken for ours by the env-marker scan.</summary>
-    static string ComputeDaemonId(string name) =>
-        Convert.ToHexString(
-            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(name ?? "")))
-        [..16].ToLowerInvariant();
+    /// <summary>Written into each child's <see cref="HostedAgent.DaemonIdVar"/> marker, for the env-marker scan.</summary>
+    static string ComputeDaemonId(string name) => HostedAgent.DaemonId(name);
 
     /// <summary>Phase B (D4 §6.4(2)/(2a)); L1-managed(b) extends this for Unix: capture the child's
     /// EXACT start-identity ONCE, store it on the agent (teardown reuses it — never re-captures a

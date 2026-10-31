@@ -132,31 +132,33 @@ public partial class WorktreeManager(
     /// operation, alongside the <c>worktree</c> command it guards.</remarks>
     static async Task<string> ResolveGateKeyAsync(string repoPath, TimeProvider time) {
         try {
-            // NOT sourceReadOnly: that sets GIT_CONFIG_NOSYSTEM=1, so a repository trusted only through
-            // a SYSTEM-scoped safe.directory would fail this probe while the mutation it guards
-            // succeeds — silently demoting us to a checkout-path key and re-splitting the very gate this
-            // resolution exists to unify. rev-parse is a read, so it needs neither the maintenance
-            // suppression nor the lock avoidance that flag also carries.
-            //
-            // --path-format=absolute needs git 2.31+; on older git this exits non-zero and we resolve
-            // the (possibly relative) plain form against the checkout instead.
-            var absolute = await RunGitCaptureResult(
-                repoPath, GitTimeout, time, sourceReadOnly: false, config: [],
-                "rev-parse", "--path-format=absolute", "--git-common-dir");
-
-            if (absolute.ExitCode == 0 && absolute.Stdout.Trim() is { Length: > 0 } fromAbsolute)
-                return NormalizePathKey(fromAbsolute);
-
-            var plain = await RunGitCaptureResult(
-                repoPath, GitTimeout, time, sourceReadOnly: false, config: [], "rev-parse", "--git-common-dir");
-
-            if (plain.ExitCode == 0 && plain.Stdout.Trim() is { Length: > 0 } fromPlain)
-                return NormalizePathKey(Path.IsPathRooted(fromPlain) ? fromPlain : Path.Combine(repoPath, fromPlain));
+            if (await ResolveGitCommonDirAsync(repoPath, time) is { } common) return NormalizePathKey(common);
         } catch {
-            // git missing / timed out / not a repo — fall through to the path-based key.
+            // git missing / timed out — fall through to the path-based key.
         }
 
         return NormalizePathKey(repoPath);
+    }
+
+    /// <summary>The shared git directory of the checkout at <paramref name="repoPath"/>, absolute; null when it
+    /// is not in a repository. Linked worktrees and the main checkout agree on it, and a submodule has its own.
+    /// <para>Not <c>sourceReadOnly</c>: that sets <c>GIT_CONFIG_NOSYSTEM=1</c>, so a repository trusted only
+    /// through a system-scoped <c>safe.directory</c> would fail this read while the mutations after it
+    /// succeed.</para></summary>
+    static async Task<string?> ResolveGitCommonDirAsync(string repoPath, TimeProvider time) {
+        // --path-format=absolute needs git 2.31+; an older git answers the plain form, relative to the checkout.
+        var absolute = await RunGitCaptureResult(
+            repoPath, GitTimeout, time, sourceReadOnly: false, config: [],
+            "rev-parse", "--path-format=absolute", "--git-common-dir");
+
+        if (absolute.ExitCode == 0 && absolute.Stdout.Trim() is { Length: > 0 } fromAbsolute) return fromAbsolute;
+
+        var plain = await RunGitCaptureResult(
+            repoPath, GitTimeout, time, sourceReadOnly: false, config: [], "rev-parse", "--git-common-dir");
+
+        return plain.ExitCode == 0 && plain.Stdout.Trim() is { Length: > 0 } fromPlain
+            ? Path.IsPathRooted(fromPlain) ? fromPlain : Path.Combine(repoPath, fromPlain)
+            : null;
     }
 
     /// <summary>Makes a gate key out of a directory: absolute, <c>.</c>/<c>..</c> collapsed, trailing
@@ -244,6 +246,7 @@ public partial class WorktreeManager(
             // symlink is FOLLOWED by this call, so a check placed after the branch decision would run once
             // the snapshot had already been rooted wherever the source tree chose.
             Directory.CreateDirectory(worktreeRoot);
+            await ExcludeWorktreeRootAsync(repoPath);
 
             var noHooks = NoBranchHooks();
 
@@ -323,7 +326,10 @@ public partial class WorktreeManager(
         }
 
         // Standalone: copy files + git init.
-        return await CreateStandaloneAsync(repoPath, name, worktreeRoot, worktreePath);
+        var standalone = await CreateStandaloneAsync(repoPath, name, worktreeRoot, worktreePath);
+        await ExcludeWorktreeRootAsync(repoPath);
+
+        return standalone;
     }
 
     /// <summary>Validates, claims, and builds a standalone snapshot.

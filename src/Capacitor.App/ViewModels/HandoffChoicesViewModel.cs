@@ -83,6 +83,11 @@ public sealed class HandoffChoicesViewModel : ReactiveObject, ILaunchChoices, ID
         set => this.RaiseAndSetIfChanged(ref _selectedPermissionMode, value);
     }
 
+    public Task ChoosePermissionModeAsync(string mode) {
+        SelectedPermissionMode = mode;
+        return Task.CompletedTask;
+    }
+
     string _selectedCodexSandbox = HostedHarnessCatalog.DefaultCodexSandbox;
     public string SelectedCodexSandbox {
         get => _selectedCodexSandbox;

@@ -20,6 +20,7 @@ public interface ILaunchChoices : INotifyPropertyChanged {
 
     string? SelectedEffort { get; set; }
     string SelectedPermissionMode { get; set; }
+    Task ChoosePermissionModeAsync(string mode);
     string SelectedCodexSandbox { get; set; }
     string SelectedCodexApproval { get; set; }
 

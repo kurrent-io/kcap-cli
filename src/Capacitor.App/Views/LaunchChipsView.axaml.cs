@@ -84,7 +84,7 @@ public partial class LaunchChipsView : UserControl {
             var token = mode.Token;
             var selected = string.Equals(vm.SelectedPermissionMode, token, StringComparison.Ordinal);
             rows.Children.Add(this.ChoiceRow(mode.Label, selected, () => {
-                vm.SelectedPermissionMode = token;
+                _ = vm.ChoosePermissionModeAsync(token);
                 flyout.Hide();
             }));
         }

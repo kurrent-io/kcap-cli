@@ -194,6 +194,29 @@ public class DaemonMutationLaneTests {
         await Assert.That(cli.StartVerifiedCallCount).IsEqualTo(0);
     }
 
+    /// A probe that throws is an unknown version, so the replace prompt still shows and claims no version change.
+    [Test]
+    public async Task A_throwing_version_probe_reads_as_unknown_and_the_prompt_still_shows() {
+        var cli = new FakeKcapCli { VersionBehavior = _ => Task.FromException<string?>(new IOException("kcap vanished")) };
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli });
+
+        var version = await lane.CliVersionAsync(Req(MutationVerb.Replace), CancellationToken.None);
+
+        await Assert.That(version).IsNull();
+        var prompt = new LifecyclePrompt(LifecyclePrompt.KindTakeover, null, null, false, DaemonLifecycleController.TakeoverDisclosure);
+        await Assert.That(DaemonLifecycleController.WithVersionChange(prompt, "1.4.1", version)).IsSameReferenceAs(prompt);
+    }
+
+    [Test]
+    public async Task A_cancelled_version_probe_still_throws() {
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        var cli = new FakeKcapCli { VersionBehavior = Task.FromCanceled<string?> };
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli });
+
+        await Assert.That(async () => await lane.CliVersionAsync(Req(MutationVerb.Replace), cts.Token)).Throws<OperationCanceledException>();
+    }
+
     [Test]
     public async Task Identical_concurrent_requests_coalesce_into_one_probe_and_one_mutation() {
         var request = Req();

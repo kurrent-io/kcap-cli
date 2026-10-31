@@ -200,7 +200,7 @@ internal static class EnsureFlowMap {
         // Rows the ladder will not touch, plus the whole start-gate family: that gate refuses in its
         // first phase, before the marker write, so nothing was mutated — and every reason it gives means
         // something else owns or has invalidated the install, which no retry can change.
-        "status_unknown" or "orphan_label" or "stale_marker" or "running_unconfirmed"
+        "hosted_caller" or "status_unknown" or "orphan_label" or "stale_marker" or "running_unconfirmed"
             or "directive_missing" or "directive_invalid" or "identity_mismatch" or "foreign_binary"
             or "evidence_unreadable" or "package_inconsistent" =>
             Refused(FirstRunMachineActionReasons.NeedsAttention),
