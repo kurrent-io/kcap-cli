@@ -354,13 +354,18 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
         return false;
     }
 
-    /// <summary>The work items the session holds, or null when they cannot be read.</summary>
+    /// <summary>The work items the session holds, none on a plan without work items, or null when they cannot be read.</summary>
     static async Task<HashSet<string>?> ReadHeldWorkItemsAsync(HttpClient client, string baseUrl, string sessionWire, CancellationToken ct) {
         var (read, _) = await ReadAsync(client, $"{baseUrl}/api/work-items/session/{Uri.EscapeDataString(sessionWire)}", ct);
         using var response = read;
-        if (response is not { IsSuccessStatusCode: true }) return null;
+        if (response is null) return null;
 
-        return ParseArray(await response.Content.ReadAsStringAsync(ct)) is { } list
+        var body = await response.Content.ReadAsStringAsync(ct);
+        if (response.StatusCode == HttpStatusCode.Forbidden && WorkContextReader.IsPlanGate((int)response.StatusCode, ParseWorkItemError(body)))
+            return [];
+        if (!response.IsSuccessStatusCode) return null;
+
+        return ParseArray(body) is { } list
             ? [.. list.Select(i => Str(i?["work_item_id"])).OfType<string>()]
             : null;
     }

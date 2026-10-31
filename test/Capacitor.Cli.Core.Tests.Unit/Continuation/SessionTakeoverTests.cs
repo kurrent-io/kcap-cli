@@ -195,6 +195,21 @@ public class SessionTakeoverTests {
         await Assert.That(routes.Posts).IsEmpty();
     }
 
+    /// <summary>A plan without work items holds none, so plans are still carried.</summary>
+    [Test]
+    public async Task Skipping_attached_items_still_adopts_plans_when_work_items_are_outside_the_plan() {
+        const string gate = """{"type":"https://tools.ietf.org/html/rfc9110#section-15.5.4","title":"Forbidden","status":403,"error":"work_items_not_in_plan","message":"Work Items require the Team or Enterprise plan."}""";
+        var routes = Server(Ended(), items: null, plans: $"[{Plan("p1", true, $"[{Task("t1", 1, "in_progress")}]")}]");
+        routes.Get($"/api/work-items/session/{Previous}", 403, gate);
+        routes.Get($"/api/work-items/session/{Current}", 403, gate);
+        routes.Post("/api/plans/p1/tasks/t1", 200, "{}");
+
+        var r = await Run(routes, skipAttached: true);
+
+        await Assert.That(r).IsTypeOf<TakeoverResult.Completed>();
+        await Assert.That(Outcome(r)["current_plan_id"]!.GetValue<string>()).IsEqualTo("p1");
+    }
+
     /// <summary>An adoption makes its plan current here, over one the agent switched to after the earlier run.</summary>
     [Test]
     public async Task Skipping_attached_items_leaves_out_plans_the_current_session_already_works_on() {
