@@ -265,13 +265,14 @@ public class ChatTabViewModelTests {
         public Harness(IChatTranscriptProjection? projection, Action<FakePermissionService>? seed = null,
                        ChatInput? input = null, string? unavailableNote = null, IAttachmentUploader? uploader = null,
                        Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null, LocalTranscripts? transcripts = null,
-                       IObservable<AccountsSnapshotDto?>? accountReadings = null, IObservable<DateTimeOffset>? usageClock = null) {
+                       IObservable<AccountsSnapshotDto?>? accountReadings = null, IObservable<DateTimeOffset>? usageClock = null,
+                       Action<string>? openLink = null) {
             seed?.Invoke(Permissions);
             Runs = new SessionRuns(Time);
             Terminal = new TerminalTabViewModel("a1", Daemon, Factory.Factory, () => new FakeTerminalSurface(), Time);
             Chat = new ChatTabViewModel(
                 "a1", Daemon, input ?? new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), uploader ?? new NoAttachmentUploader(), projection, Opener, Time, Permissions, Runs, unavailableNote, planActivity: Plan, openCard: openCard, drafts: drafts, transcripts: transcripts,
-                accountReadings: accountReadings, usageClock: usageClock);
+                accountReadings: accountReadings, usageClock: usageClock, openLink: openLink);
         }
 
         public async Task PushAsync(AgentStatusDto dto) {
@@ -293,6 +294,21 @@ public class ChatTabViewModelTests {
 
     static Harness Claude(Action<FakePermissionService>? seed = null, Action<ToolCard>? openCard = null) =>
         new(TranscriptChat.For("claude"), seed, openCard: openCard);
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_message_link_goes_to_the_session_link_handler_instead_of_the_browser() {
+        await RunOnUiAsync(async () => {
+            var routed = new List<string>();
+            var h = new Harness(TranscriptChat.For("claude"), openLink: routed.Add);
+
+            await h.Chat.OpenLinkCommand.Execute("https://a.kcap.ai/pages/abc");
+
+            await Assert.That(routed).IsEquivalentTo(new[] { "https://a.kcap.ai/pages/abc" });
+            await Assert.That(h.Opener.Opened).IsEmpty();
+            await h.TeardownAsync();
+        });
+    }
 
     [Test]
     [NotInParallel("AvaloniaSession")]

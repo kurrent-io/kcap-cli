@@ -68,7 +68,7 @@
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="vm:PageRow">
-                                    <Button Classes="artefactRow"
+                                    <Button Classes="artefactRow" Classes.selected="{Binding IsSelected}"
                                             Command="{Binding $parent[ItemsControl].((vm:ArtefactsTabViewModel)DataContext).OpenPageCommand}"
                                             CommandParameter="{Binding}" ToolTip.Tip="{Binding Url}" AutomationProperties.Name="{Binding Title}">
                                         <Grid ColumnDefinitions="*,Auto">
@@ -77,7 +77,8 @@
                                                 <TextBlock Text="{Binding UpdatedLabel}" FontSize="11" Foreground="{StaticResource KcapFaintBrush}" />
                                             </StackPanel>
                                             <views:AppIcon Grid.Column="1" Kind="ExternalLink" Size="12" Margin="8,0,0,0"
-                                                           Foreground="{StaticResource KcapMutedBrush}" />
+                                                           Foreground="{StaticResource KcapMutedBrush}"
+                                                           IsVisible="{Binding !$parent[ItemsControl].((vm:ArtefactsTabViewModel)DataContext).PagesOpenInApp}" />
                                         </Grid>
                                     </Button>
                                 </DataTemplate>
@@ -97,9 +98,16 @@
                     </DataTemplate>
                 </ContentControl.ContentTemplate>
             </ContentControl>
+            <ContentControl x:Name="PageViewerHost" Content="{Binding PageViewer}">
+                <ContentControl.ContentTemplate>
+                    <DataTemplate x:DataType="vm:PageViewerViewModel">
+                        <views:PageViewer />
+                    </DataTemplate>
+                </ContentControl.ContentTemplate>
+            </ContentControl>
             <TextBlock Text="{Binding EmptyReaderNote}" FontSize="13.5" Foreground="{StaticResource KcapMutedBrush}"
                        HorizontalAlignment="Center" VerticalAlignment="Center"
-                       IsVisible="{Binding Reader, Converter={x:Static ObjectConverters.IsNull}}" />
+                       IsVisible="{Binding ShowsReaderNote}" />
         </Panel>
     </Grid>
 </UserControl>

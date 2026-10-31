@@ -60,10 +60,13 @@ public class RemoteSessionViewModelTests {
 
         public RemoteSessionViewModel Build(AgentRow row, IPlanArtifactSource? planArtifacts = null,
                 Capacitor.Cli.Core.PullRequests.IPullRequestSource? pullRequests = null, IPlanSource? plans = null,
-                BackgroundCommandActivity? commands = null, SubagentEventsReader? readSubagent = null, AccountReadings? readings = null) {
+                BackgroundCommandActivity? commands = null, SubagentEventsReader? readSubagent = null, AccountReadings? readings = null,
+                IPageContentSource? pageContent = null, IUrlOpener? opener = null, bool? webView = null) {
             Directory.Rows.AddOrUpdate(row);
-            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time, WorkSource, () => new FakeTerminalSurface(), planArtifacts, commands, pullRequests: pullRequests, plans: plans, readSubagent: readSubagent, readings: readings,
-                remoteAgents: Remote, notifier: Notifier, serverSessions: Sessions);
+            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), opener ?? new RecordingOpener(), Time, WorkSource, () => new FakeTerminalSurface(), planArtifacts, commands, pullRequests: pullRequests, plans: plans, readSubagent: readSubagent, readings: readings,
+                remoteAgents: Remote, notifier: Notifier, serverSessions: Sessions,
+                pageContent: pageContent, pageLinks: webView is null ? null : new PageLinkRouter(() => "https://a.kcap.ai"),
+                webView: webView is { } available ? new FixedWebViewAvailability(available) : null);
         }
 
         /// One chat poll: the pane reads its feed on the timer this harness owns.
@@ -1777,5 +1780,57 @@ public class RemoteSessionViewModelTests {
             await Assert.That(vm.TitleEditor.ShowsPencil).IsEqualTo(shows);
             await vm.TeardownAsync();
         });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Page_links_from_chat_and_cards_open_in_the_viewer() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var opener = new RecordingOpener();
+            var vm = h.Build(Harness.Row(sessionId: "0123456789abcdef0123456789abcdef"), new FakePlanArtifactSource(), pageContent: new FakePageContentSource(),
+                opener: opener, webView: true);
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            await ArtefactReadsSettledAsync(vm);
+
+            await vm.Chat.OpenLinkCommand.Execute("https://a.kcap.ai/pages/pg-chat");
+            await Assert.That(vm.Artefacts.PageViewer!.ArtefactId).IsEqualTo("pg-chat");
+            await Assert.That(vm.ActiveTab).IsEqualTo(RemoteTab.Artefacts);
+
+            vm.OpenCard(new ToolCard(ToolCardKind.Page, "Published page", "Brief", "v1 · Org", "https://a.kcap.ai/artefacts/pg-card", null));
+            await Assert.That(vm.Artefacts.PageViewer!.ArtefactId).IsEqualTo("pg-card");
+
+            vm.OpenCard(new ToolCard(ToolCardKind.Page, "Published page", "Brief", "v1 · Org", "https://evil.test/pages/pg-card", null));
+            await vm.Chat.OpenLinkCommand.Execute("https://evil.test/pages/pg-chat");
+            await Assert.That(opener.Opened).IsEquivalentTo(new[] { "https://evil.test/pages/pg-card", "https://evil.test/pages/pg-chat" });
+            await (vm.Artefacts.PendingPageLoadForTesting ?? Task.CompletedTask);
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Without_a_webview_a_chat_page_link_opens_the_browser_and_reads_nothing() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var opener = new RecordingOpener();
+            var content = new FakePageContentSource();
+            var vm = h.Build(Harness.Row(sessionId: "0123456789abcdef0123456789abcdef"), new FakePlanArtifactSource(), pageContent: content,
+                opener: opener, webView: false);
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            await ArtefactReadsSettledAsync(vm);
+
+            await vm.Chat.OpenLinkCommand.Execute("https://a.kcap.ai/pages/pg-chat");
+
+            await Assert.That(opener.Opened).IsEquivalentTo(new[] { "https://a.kcap.ai/pages/pg-chat" });
+            await Assert.That(vm.Artefacts.PageViewer).IsNull();
+            await Assert.That(content.ContentRequested).IsEmpty();
+            await vm.TeardownAsync();
+        });
+    }
+
+    static async Task ArtefactReadsSettledAsync(RemoteSessionViewModel vm) {
+        await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+        await (vm.Artefacts.PendingPagesForTesting ?? Task.CompletedTask);
     }
 }

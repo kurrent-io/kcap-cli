@@ -11,7 +11,7 @@ using ReactiveUI.Reactive;
 namespace Capacitor.App.ViewModels;
 
 /// The Artefacts tab: the documents a session declared or wrote, read from plan-artifacts with
-/// their bodies, the one that is open, and the published pages citing the session. The session id is
+/// their bodies, the published pages citing the session, and the one document or page that is open. The session id is
 /// each read's identity; a lease owns one id, its cancellation and its pending read, a result applies
 /// only for the current lease, and every lease transition happens on the UI thread.
 public sealed class ArtefactsTabViewModel : ReactiveObject {
@@ -22,6 +22,12 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
     readonly SingleFlightReader<(DocumentRow Row, string? Root), DriftRead> _driftReads;
     readonly PlanActivity _activity;
     readonly TimeProvider _time;
+    readonly IUrlOpener? _opener;
+    readonly IPageViewer? _pageViewer;
+    readonly IPageContentSource? _pageContent;
+    readonly PageLinkRouter? _pageLinks;
+    CancellationTokenSource? _viewerLifetime;
+    int _viewerListedVersion;
     const long MaxHashedBytes = 4 * 1024 * 1024;
 
     readonly Func<string, Stream?> _openWorkingCopy;
@@ -42,12 +48,14 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
     internal bool LastReadFailed => _documentsFailed || _pagesFailed;
     public bool HasDocuments => _documents.Count > 0;
     public bool HasPages => _pages.Count > 0;
-    public bool HasAny => HasDocuments || HasPages;
+    /// An open page counts: a link can open one this session does not list.
+    public bool HasAny => HasDocuments || HasPages || PageViewer is not null;
     /// True while a session lease is open and has not yet applied a result — distinct from a settled empty list.
     public bool IsLoading => _reads.IsLoading;
     public bool IsLoadingPages => _pageReads.IsLoading;
     /// Right-pane prompt when nothing is open: loading, settled empty, or pick a row.
     public string EmptyReaderNote => IsLoading ? "Loading documents…"
+        : HasPages && PagesOpenInApp ? HasDocuments ? "Select a document or page." : "Select a page to open it."
         : HasDocuments ? "Select a document to read it."
         : HasPages ? "Pages open in your browser."
         : "No documents yet.";
@@ -70,7 +78,28 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
     public DocumentRow? Selected { get => _selected; private set => this.RaiseAndSetIfChanged(ref _selected, value); }
 
     DocumentReaderViewModel? _reader;
-    public DocumentReaderViewModel? Reader { get => _reader; private set => this.RaiseAndSetIfChanged(ref _reader, value); }
+    public DocumentReaderViewModel? Reader {
+        get => _reader;
+        private set {
+            this.RaiseAndSetIfChanged(ref _reader, value);
+            this.RaisePropertyChanged(nameof(ShowsReaderNote));
+        }
+    }
+
+    PageViewerViewModel? _openPage;
+    /// The page open in the right pane in place of the reader; at most one of the two is set.
+    public PageViewerViewModel? PageViewer {
+        get => _openPage;
+        private set {
+            this.RaiseAndSetIfChanged(ref _openPage, value);
+            this.RaisePropertyChanged(nameof(ShowsReaderNote));
+            this.RaisePropertyChanged(nameof(HasAny));
+        }
+    }
+
+    public bool ShowsReaderNote => Reader is null && PageViewer is null;
+    /// Page rows open in the right pane rather than the browser.
+    public bool PagesOpenInApp => _pageViewer is InAppPageViewer;
 
     bool _isShown;
     /// Set by the workspace while the tab is the active one; the pane's poll refreshes only then.
@@ -79,17 +108,22 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
     public ReactiveCommand<DocumentRow, Unit> SelectCommand { get; }
     public ReactiveCommand<string, Unit> OpenLinkCommand { get; }
     public ReactiveCommand<PageRow, Unit> OpenPageCommand { get; }
-    /// Something asked for the tab: a card's Open, a pane row, the pane summary.
+    /// Something asked for the tab: a card's Open, a pane row, the pane summary, a page link.
     public event Action? OpenRequested;
 
     /// Test-only seam: the current lease's read, or the last one started.
     internal Task? PendingReadForTesting => _reads.PendingReadForTesting;
     internal Task? PendingPagesForTesting => _pageReads.PendingReadForTesting;
     internal Task? PendingDriftForTesting => _driftReads.PendingReadForTesting;
+    internal Task? PendingPageLoadForTesting { get; private set; }
 
     public ArtefactsTabViewModel(IPlanArtifactSource? source, PlanActivity activity, TimeProvider time, Func<string, Stream?>? openWorkingCopy = null,
-            IUrlOpener? opener = null, IPageViewer? pageViewer = null) {
+            IUrlOpener? opener = null, IPageViewer? pageViewer = null, IPageContentSource? pageContent = null,
+            PageLinkRouter? pageLinks = null, IWebViewAvailability? webView = null) {
         _source = source;
+        _opener = opener;
+        _pageContent = pageContent;
+        _pageLinks = pageLinks;
         _reads = new SingleFlightReader<(string SessionId, string? Root), PlanArtifactsRead>(
             (state, ct) => _source!.ReadAsync(state.SessionId, ct),
             ex => {
@@ -119,9 +153,12 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
             ApplyDrift,
             "document drift");
         SelectCommand = ReactiveCommand.Create<DocumentRow>(Select);
-        OpenLinkCommand = ReactiveCommand.Create<string>(url => { if (opener is not null) LinkPolicy.Open(opener, url); });
-        pageViewer ??= opener is null ? null : new BrowserPageViewer(opener);
-        OpenPageCommand = ReactiveCommand.Create<PageRow>(row => pageViewer?.Open(row.Id, row.Url));
+        OpenLinkCommand = ReactiveCommand.Create<string>(OpenLink);
+        // In-app only where a WebView can confine the page; elsewhere the browser shows it.
+        pageViewer ??= pageContent is not null && opener is not null && webView?.IsAvailable == true ? new InAppPageViewer(this)
+            : opener is null ? null : new BrowserPageViewer(opener);
+        _pageViewer = pageViewer;
+        OpenPageCommand = ReactiveCommand.Create<PageRow>(row => _pageViewer?.Open(row.Id, row.Url));
         _settle = time.CreateTimer(_ => RxSchedulers.MainThreadScheduler.Schedule(Refresh), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         _activity.PlanWritten += OnArtefactWritten;
         _activity.PagePublished += OnArtefactWritten;
@@ -156,6 +193,53 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
 
     public void RequestOpen() => OpenRequested?.Invoke();
 
+    /// A link from this session: a page on the profile's server goes to the page viewer, anything
+    /// else to the browser.
+    public void OpenLink(string url) {
+        if (_pageLinks?.PageIdFor(url) is { } id && _pageViewer is not null) _pageViewer.Open(id, url);
+        else if (_opener is not null) LinkPolicy.Open(_opener, url);
+    }
+
+    /// Shows the page in the right pane, its row selected when the session lists it, and asks for
+    /// the tab. Opening the page already shown reads it again only after a failed read.
+    internal void OpenPage(string pageId, string browserUrl) {
+        if (_tornDown || _pageContent is null || _opener is null) return;
+        var row = _pages.FirstOrDefault(p => p.Id == pageId);
+        if (PageViewer?.ArtefactId != pageId) {
+            ClosePage();
+            ClearSelection();
+            foreach (var document in _documents) document.IsSelected = false;
+            _viewerLifetime = new CancellationTokenSource();
+            _viewerListedVersion = row?.LatestVersion ?? 0;
+            PageViewer = new PageViewerViewModel(_pageContent, pageId, row?.Url ?? browserUrl, _opener, _time, webViewAvailable: true);
+            LoadPage();
+        } else if (PageViewer.State is PageViewerState.Unreachable or PageViewerState.SignedOut) {
+            LoadPage();
+        }
+        foreach (var page in _pages) page.IsSelected = page.Id == pageId;
+        RequestOpen();
+    }
+
+    void LoadPage() {
+        if (PageViewer is not { } viewer || _viewerLifetime is not { } lifetime) return;
+        PendingPageLoadForTesting = LoadSafelyAsync(viewer, lifetime.Token);
+    }
+
+    static async Task LoadSafelyAsync(PageViewerViewModel viewer, CancellationToken ct) {
+        try { await viewer.LoadAsync(ct); }
+        catch (Exception ex) { Console.Error.WriteLine($"kcap: artefacts tab page load: {ex.Message}"); }
+    }
+
+    void ClosePage() {
+        if (PageViewer is not { } viewer) return;
+        _viewerLifetime?.Cancel();
+        _viewerLifetime?.Dispose();
+        _viewerLifetime = null;
+        viewer.Close();
+        PageViewer = null;
+        foreach (var page in _pages) page.IsSelected = false;
+    }
+
     /// Selects the row whose path matches, an exact path before a suffix, and asks for the tab.
     /// Before the first read settles a miss is remembered and opened when the read lands.
     public bool OpenDocument(string path) {
@@ -177,6 +261,7 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
 
     void Select(DocumentRow row) {
         if (_tornDown) return;
+        ClosePage();
         foreach (var document in _documents) document.IsSelected = ReferenceEquals(document, row);
         Selected = row;
         var drift = _lastDrift is { } last && last.Path == row.Path && last.Hash == row.ContentHash
@@ -296,13 +381,23 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
         List<PageRow> rows = read.Kind == SessionPlansReadKind.Ready
             ? read.Pages.Where(dto => dto is not null).Select(dto => PageRow.From(dto, now)).OfType<PageRow>().Where(row => seen.Add(row.Id)).ToList()
             : [];
+        if (read.Kind == SessionPlansReadKind.SignedOut) PageViewer?.SignedOut();
         if (rows.Count == 0 && _pages.Count == 0) return;
         _pages.Clear();
         _pages.AddRange(rows);
         RaiseShape();
+        if (PageViewer is { } viewer && _pages.FirstOrDefault(p => p.Id == viewer.ArtefactId) is { } open) {
+            open.IsSelected = true;
+            // A load still in flight reads the latest anyway; only a version past the one shown reloads.
+            var shown = Math.Max(_viewerListedVersion, viewer.Version);
+            _viewerListedVersion = Math.Max(shown, open.LatestVersion);
+            if (shown > 0 && open.LatestVersion > shown) LoadPage();
+        }
     }
 
+    /// A new pages lease is a different session, so the page open for the last one closes.
     void ResetPages() {
+        ClosePage();
         _pagesFailed = false;
         _pagesKind = null;
         if (_pages.Count > 0) {
@@ -339,6 +434,7 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
 
     public async Task TeardownAsync() {
         if (_tornDown) return;
+        ClosePage();
         _tornDown = true;
         _activity.PlanWritten -= OnArtefactWritten;
         _activity.PagePublished -= OnArtefactWritten;
