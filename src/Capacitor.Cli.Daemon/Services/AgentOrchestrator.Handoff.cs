@@ -168,24 +168,36 @@ internal partial class AgentOrchestrator {
 
     /// <summary>Starts the takeover of a hand-off's source off the caller's path, once, as soon as the agent's own
     /// session exists; a terminal agent's pinned id names no session until its transcript is found. The agent runs
-    /// on whatever the outcome. A resumed successor runs it again unless its stored outcome settled: the server
-    /// admits a repeated begin for the same successor.</summary>
+    /// on whatever the outcome. A resumed successor runs it again only when a restart interrupted it, since the server
+    /// admits a repeated begin for the same successor; a <c>running</c> outcome belongs to a run in this process,
+    /// which may outlive the agent instance that started it.</summary>
     void StartHandoffTakeover(AgentInstance agent) {
         if (agent.HandoffSource is not { } source || SessionIds.Canonical(agent.SessionId) is not { } successor) return;
         if (agent.Runtime is not IAcpTranscriptSource && agent.TranscriptPath is null) return;
-        if (_handoffOutcomes.Get(successor) is { State: not ("running" or "interrupted") }) return;
         if (Interlocked.CompareExchange(ref agent.HandoffTakeoverStarted, 1, 0) != 0) return;
 
+        lock (_handoffTakeoversLock) {
+            if (_handoffTakeoverSuccessors.Contains(successor)) return;
+            if (_handoffOutcomes.Get(successor) is { State: not "interrupted" }) return;
+            _handoffTakeoverSuccessors.Add(successor);
+        }
+
         PutHandoffOutcome(successor, HandoffOutcomeDto.Running(source.SessionId, source.Title));
-        TrackHandoffTakeover(HandOffAsync(agent.Id, source, successor, _shutdownCts.Token));
+        TrackHandoffTakeover(successor, HandOffAsync(agent.Id, source, successor, _shutdownCts.Token));
     }
 
-    readonly Lock          _handoffTakeoversLock = new();
-    readonly HashSet<Task> _handoffTakeovers     = [];
+    readonly Lock            _handoffTakeoversLock      = new();
+    readonly HashSet<Task>   _handoffTakeovers          = [];
+    readonly HashSet<string> _handoffTakeoverSuccessors = [];
 
-    void TrackHandoffTakeover(Task run) {
+    void TrackHandoffTakeover(string successor, Task run) {
         lock (_handoffTakeoversLock) _handoffTakeovers.Add(run);
-        _ = run.ContinueWith(done => { lock (_handoffTakeoversLock) _handoffTakeovers.Remove(done); }, TaskScheduler.Default);
+        _ = run.ContinueWith(done => {
+            lock (_handoffTakeoversLock) {
+                _handoffTakeovers.Remove(done);
+                _handoffTakeoverSuccessors.Remove(successor);
+            }
+        }, TaskScheduler.Default);
     }
 
     /// <summary>Runs after the shutdown token is cancelled and before the hub goes, so a takeover that already

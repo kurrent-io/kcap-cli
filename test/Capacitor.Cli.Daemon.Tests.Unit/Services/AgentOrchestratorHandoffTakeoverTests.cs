@@ -93,10 +93,12 @@ public class AgentOrchestratorHandoffTakeoverTests : IDisposable {
         return new Fixture { Repo = repo, Server = server, Orch = orch, Time = time, Config = captured! };
     }
 
-    static LaunchAgentCommand Launch(GitRepo repo) =>
-        new(AgentId: AgentId, Prompt: "Finish it.", Model: "", Effort: null, RepoPath: repo.Path, Tools: null, AttachmentIds: null, Vendor: "cursor") {
+    static LaunchAgentCommand Launch(GitRepo repo, string agentId = AgentId, bool detached = false) =>
+        new(AgentId: agentId, Prompt: "Finish it.", Model: "", Effort: null, RepoPath: repo.Path, Tools: null, AttachmentIds: null, Vendor: "cursor") {
             Handoff = new HandoffLaunch(
-                new HandoffLaunchStart(Source, repo.Head, "CreateBranch", "feature", null, "Branch", "None", null, false, null, null),
+                detached
+                    ? new HandoffLaunchStart(Source, repo.Head, "Detached", "feature", null, "Branch", "CheckedOutElsewhere", null, false, null, null)
+                    : new HandoffLaunchStart(Source, repo.Head, "CreateBranch", "feature", null, "Branch", "None", null, false, null, null),
                 SourceContext, SessionCommits: [])
         };
 
@@ -562,6 +564,30 @@ public class AgentOrchestratorHandoffTakeoverTests : IDisposable {
 
         await Assert.That((await QueryAsync(f.Orch, Successor))!.State).IsEqualTo("interrupted");
         await Assert.That(f.Server.HandoffBegins).IsEmpty();
+    }
+
+    /// <summary>A takeover still running in this process holds its successor against another agent instance of the
+    /// same session.</summary>
+    [Test]
+    public async Task A_second_agent_of_a_successor_with_a_running_takeover_begins_nothing() {
+        using var release = new ManualResetEventSlim();
+        ServeSource(declare: (_, _) => {
+            release.Wait(TimeSpan.FromSeconds(30));
+
+            return null;
+        });
+        await using var f = Build();
+
+        await f.Orch.HandleLaunchAgentForTest(Launch(f.Repo));
+        await WaitHarness.PollUntilAsync(() => Declares() > 0);
+        await f.Orch.HandleLaunchAgentForTest(Launch(f.Repo, "handoff-2", detached: true));
+        await Assert.That(f.Orch.GetAgentForTest("handoff-2")!.SessionId).IsEqualTo(SuccessorWire);
+        release.Set();
+        var outcome = await SettledAsync(f);
+
+        await Assert.That(outcome.State).IsEqualTo("done");
+        await Assert.That(f.Server.HandoffBegins.Count).IsEqualTo(1);
+        await Assert.That(Declares()).IsEqualTo(1);
     }
 
     static void PutOutcome(DaemonConfig c, HandoffOutcomeDto outcome) =>
