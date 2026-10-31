@@ -82,6 +82,9 @@ internal record AgentInstance(
     /// The ended session this agent was launched to hand off from.
     public HandoffSourceContext? HandoffSource { get; set; }
 
+    /// The hand-off source came from the resume ledger, so a takeover may already have settled.
+    public bool HandoffResumed { get; init; }
+
     /// Set by the first call that starts this agent's hand-off takeover; it runs once.
     public int HandoffTakeoverStarted;
 
@@ -3276,6 +3279,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 IsPrivate           = isPrivate,
                 ContinuesAgentId    = resume?.Entry.InheritedAgentIds is [.., var predecessor] ? predecessor : null,
                 HandoffSource       = cmd.Handoff?.Source ?? resume?.Entry.Launch.HandoffSource,
+                HandoffResumed      = cmd.Handoff is null && resume?.Entry.Launch.HandoffSource is not null,
                 // Keeps the worktree and the entry through any failure until the resume is judged.
                 ResumePending       = resume is not null
             };

@@ -598,6 +598,20 @@ public class AgentOrchestratorHandoffTakeoverTests : IDisposable {
         await Assert.That(f.Server.HandoffBegins).IsEmpty();
     }
 
+    /// <summary>Only an interrupted outcome proves the earlier run never settled; one the store no longer holds may have.</summary>
+    [Test]
+    public async Task A_recovered_successor_without_an_outcome_takes_over_nothing() {
+        ServeSource();
+        await using var f = Build();
+        WriteResumableEntry(f, SourceContext);
+
+        await ResumeAsync(f);
+        await Task.Delay(200);
+
+        await Assert.That(await QueryAsync(f.Orch, Successor)).IsNull();
+        await Assert.That(f.Server.HandoffBegins).IsEmpty();
+    }
+
     /// <summary>An entry written without the source has nothing to finish the takeover with.</summary>
     [Test]
     public async Task A_recovered_successor_without_its_source_still_reads_interrupted() {
