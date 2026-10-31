@@ -1,5 +1,7 @@
 # Desktop Pages Implementation Plan
 
+> **As built:** in-app rendering is macOS-only; on Windows and Linux a page opens in the browser. WebRTC is disabled through the WKWebView configuration, since CSP cannot stop it. An outbound link the page tries to follow goes through an Open/Dismiss prompt, and a navigation to a URL `System.Uri` cannot parse is cancelled before the WebView package sees it.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** List a session's kcap Pages in the desktop Artefacts tab (AI-4775, #2154), then render and answer them inside the app (AI-4825, #2188).
@@ -26,7 +28,7 @@
 - Older server without `/api/sessions/{id}/artefacts` (404) → "Pages unavailable", never "No pages yet" (Task 2 test).
 - Sign-out mid-session → pages list cleared and the cache dropped, like plans (Task 1/2 tests).
 - Page link in chat for another server's host → opens in the browser, never read from this profile's server; a same-server link to a page the viewer cannot see shows "not found" (Task 7 tests).
-- A page that posts a 300 KB message or posts from a nested frame → dropped silently (Task 6 host-page test).
+- A page that posts a 300 KB message → dropped silently (Task 6 host-page test). A post from a nested frame → dropped silently, verified manually in the WebView harness rather than by an automated test.
 - WebView runtime missing (Linux without WebKitGTK, Windows without WebView2) → viewer falls back to "Open in browser" without throwing (Task 5 test).
 
 ---
