@@ -50,6 +50,40 @@ public class LocalStackControlTests {
     Task<string> Restart() => Control().RestartAsync(new RecordingProgress<LocalInstallEvent>(), _said.Add, CancellationToken.None);
 
     [Test]
+    public async Task Start_waits_through_an_online_cutover_and_its_supervised_restart() {
+        Publish();
+        var time = new FakeTimeProvider();
+        var pending = true;
+        Server.Override = path => path == "/healthz/ready"
+            ? new(System.Net.HttpStatusCode.OK) { Content = new StringContent(pending ? "{\"updatePending\":true}" : "{\"updatePending\":false}") }
+            : null;
+        var start = Start(time);
+        try {
+            await Assert.That(start.IsCompleted).IsFalse();
+            for (var boot = 1; boot <= 4; boot++) {
+                Service.ActivityOverride = new UnitActivity.Restarting(10) { Starts = boot };
+                time.Advance(TimeSpan.FromSeconds(1));
+                await Task.Delay(20);
+                await Assert.That(start.IsCompleted).IsFalse();
+                Service.ActivityOverride = new UnitActivity.Running(100 + boot) { Starts = boot };
+                time.Advance(TimeSpan.FromSeconds(1));
+                await Task.Delay(20);
+                await Assert.That(start.IsCompleted).IsFalse();
+            }
+            pending = false;
+            Service.ActivityOverride = new UnitActivity.Running(123);
+            while (!start.IsCompleted) {
+                time.Advance(TimeSpan.FromSeconds(1));
+                await Task.Delay(1);
+            }
+            await Assert.That(await start).IsEqualTo("Ready on http://localhost:9473");
+        } finally {
+            pending = false;
+            time.Advance(LocalServerReadiness.StartBudget);
+        }
+    }
+
+    [Test]
     public async Task Start_without_an_installation_sends_the_user_to_setup() {
         var failure = await Assert.ThrowsAsync<LocalInstallFailure>(() => Start());
 
@@ -100,6 +134,53 @@ public class LocalStackControlTests {
         var failure = await Assert.ThrowsAsync<LocalInstallFailure>(() => Start(new FakeTimeProvider()));
 
         await Assert.That(failure!.Message).Contains("Port 9473 is taken by nginx (pid 1)");
+    }
+
+    /// <summary>The OS names no holder here, as it cannot for another user's process; the 404 alone is enough,
+    /// since the kcap server's health route never returns one.</summary>
+    [Test]
+    public async Task Start_gives_up_at_once_on_a_foreign_answer_the_os_cannot_name() {
+        Publish();
+        Server.Override = path => path == "/healthz/ready" ? new HttpResponseMessage(System.Net.HttpStatusCode.NotFound) : null;
+
+        var failure = await Assert.ThrowsAsync<LocalInstallFailure>(() => Start(new FakeTimeProvider()));
+
+        await Assert.That(failure!.Message).Contains("Port 9473 answers as a web server that answers HTTP 404, not as the kcap server");
+        await Assert.That(_log).DoesNotContain("stop");
+    }
+
+    /// <summary>The server's own host answers 404 until the health route is mapped; a start waits through it rather
+    /// than calling the server a stranger.</summary>
+    [Test]
+    public async Task Start_waits_through_its_own_hosts_answers_before_the_health_route() {
+        Publish();
+        var time   = new FakeTimeProvider();
+        var mapped = false;
+        Server.Override = path => {
+            if (path != "/healthz/ready" || mapped) return null;
+
+            var response = new HttpResponseMessage(System.Net.HttpStatusCode.NotFound);
+            response.Headers.TryAddWithoutValidation("Server", "Kestrel");
+            return response;
+        };
+
+        var start = Start(time);
+        try {
+            time.Advance(TimeSpan.FromSeconds(1));
+            await Task.Delay(20);
+            await Assert.That(start.IsCompleted).IsFalse();
+
+            mapped = true;
+            while (!start.IsCompleted) {
+                time.Advance(TimeSpan.FromSeconds(1));
+                await Task.Delay(1);
+            }
+
+            await Assert.That(await start).IsEqualTo("Ready on http://localhost:9473");
+        } finally {
+            mapped = true;
+            time.Advance(LocalServerReadiness.StartBudget);
+        }
     }
 
     [Test]

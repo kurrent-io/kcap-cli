@@ -29,7 +29,12 @@ internal sealed class AccountSetupStep(AccountStore accounts, PluginEnvironment 
                 ? (env.Harnesses.Of<ClaudeHarness>().Paths.Home, env.Harnesses.Of<ClaudeHarness>().Signals.IsWired)
                 : (env.Harnesses.Of<CodexHarness>().Paths.Home, env.Harnesses.Of<CodexHarness>().Signals.IsWired);
 
-            if (wired) AccountAdoption.EnsureDefault(accounts, vendor, envHome, time);
+            if (wired) {
+                var adopted = AccountAdoption.EnsureDefault(accounts, vendor, envHome, time);
+                // The loop below skips the default directory, whose plugin the layout install already wired.
+                if (vendor is HarnessId.Claude && WireStatusLine(adopted) is var steps && !AccountWiring.Succeeded(steps))
+                    writeLine($"  [yellow]![/] Could not wire the status line of {Markup.Escape(adopted.Directory)}: {Markup.Escape(AccountWiring.FailureSummary(steps))}. Run [cyan]kcap accounts rewire[/] to retry.");
+            }
 
             foreach (var account in AccountAdoption.Of(accounts, vendor).Where(a => !AccountDirectory.Same(a.Directory, envHome)))
                 Report(account, Wire(account, options), writeLine);
@@ -66,10 +71,17 @@ internal sealed class AccountSetupStep(AccountStore accounts, PluginEnvironment 
         IReadOnlyCollection<string>? domains = options.SkipCodexNetworkAccess || env.CodexNetworkAllowDomains() is not { Count: > 0 } d ? null : d;
         var wiring = new WiringOptions(env.ResolvePluginPath(), env.Agents.UserSkillsDir, env.ResolveMcpBinaryPath, NetworkAllowDomains: domains);
 
+        return Locked(() => AccountWiring.Wire(account, env.Home, wiring, accounts));
+    }
+
+    IReadOnlyList<WiringStep> WireStatusLine(VendorAccount account) =>
+        Locked(() => [AccountWiring.WireStatusLine(account.Id, env.Home, accounts)]);
+
+    IReadOnlyList<WiringStep> Locked(Func<IReadOnlyList<WiringStep>> wiring) {
         try {
             using var _ = accounts.Lock();
 
-            return AccountWiring.Wire(account, env.Home, wiring);
+            return wiring();
         } catch (Exception ex) when (ex is TimeoutException or WaitHandleCannotBeOpenedException) {
             return [new WiringStep("registry lock", false, ex.Message)];
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {

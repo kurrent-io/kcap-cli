@@ -533,8 +533,9 @@ public sealed class CursorHookCommand(
                 return EmptyOrNull();
             }
 
-            var posted = await TryPostHookAsync(client, mapping.RouteSegment, normalized, ct);
-            if (!posted && mapping.SpoolOnFailure && sessionId is not null) {
+            var result = await TryPostHookAsync(client, mapping.RouteSegment, normalized, ct);
+            var posted = result == true;
+            if (result == false && mapping.SpoolOnFailure && sessionId is not null) {
                 spool.Append(sessionId, mapping.RouteSegment, normalized);
             }
             // Task 8: the ordering-sensitive beforeSubmitPrompt's own live POST just
@@ -574,7 +575,7 @@ public sealed class CursorHookCommand(
             // orchestration), so re-read it; sessionStart fires once per session and the read is
             // fail-open under the surrounding catch.
             var nudgeProfile   = profiles.Effective;
-            var sessionNudges  = SessionNudges.Resolve(HarnessId.Cursor, sessionId, nudgeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience);
+            var sessionNudges  = SessionNudges.Resolve(HarnessId.Cursor, sessionId, nudgeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience, workspaceRoot, home);
             var harnessNudge   = HarnessNudgeEmitter.ResolveFragmentForHook(nudgeProfile?.DisableHarnessNudge is true || !audience.GetsOnboarding, config, harnesses, clock.Time);
             var firstRunNotice = FirstRunNoticeEmitter.Resolve(nudgeProfile?.DisableFirstRunNotice is true || !audience.GetsOnboarding, config, HarnessId.Cursor, harnesses);
             return SessionStartMemoryOutputAdapters.Render(HarnessId.Cursor, fragment,
@@ -661,7 +662,7 @@ public sealed class CursorHookCommand(
                     IsTopLevel: true, ClassificationAuthoritative: true, SessionLifecycleReason.New,
                     CallbackMayRepeat: false),
                 new SessionStartMemoryContextRequest(Url, workspaceRoot, disabled, memBudget, memCts.Token,
-                    GuidelinesDisabled: guidelinesDisabled, FlowsDisabled: flowsDisabled));
+                    GuidelinesDisabled: guidelinesDisabled, Vendor: HarnessId.Cursor.VendorId, WakeUpsWanted: hosted.IsHosted, FlowsDisabled: flowsDisabled));
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
         }
@@ -804,8 +805,8 @@ public sealed class CursorHookCommand(
             return 0;
         }
 
-        var posted = await TryPostHookAsync(client, route, body!, ct);
-        if (!posted) {
+        var result = await TryPostHookAsync(client, route, body!, ct);
+        if (result != true) {
             // Task 12 — subagent-start POST failed (spooled): the child watcher must
             // NOT spawn here. Spawning now would let the watcher's own poll deliver child
             // transcript lines before SubagentStarted is ever appended (the server has no
@@ -814,7 +815,7 @@ public sealed class CursorHookCommand(
             // top-of-method spool drain (keyed on this same childSessionId) is what redelivers
             // this entry on a later hook invocation — see its "subagent-start" branch, which
             // performs the deferred spawn itself once that redelivery succeeds.
-            spool.Append(childSessionId, route, body!);
+            if (result == false) spool.Append(childSessionId, route, body!);
             return 0;
         }
 
@@ -971,7 +972,10 @@ public sealed class CursorHookCommand(
         } catch { }
     }
 
-    async Task<bool> TryPostHookAsync(
+    /// <summary>True when the server took the post, false when a later drain should retry it, and null
+    /// when the server refused it for good — a status <see cref="HookSpool.IsRetryable"/> rejects, such as
+    /// the 410 a session deleted on the server answers — so it is neither delivered nor spooled.</summary>
+    async Task<bool?> TryPostHookAsync(
             HttpClient        client,
             string            routeSegment,
             string            bodyJson,
@@ -991,7 +995,9 @@ public sealed class CursorHookCommand(
                     AuthRejectionNotice.VendorStderrLine("cursor-hook", routeSegment, 401));
             }
 
-            return resp.IsSuccessStatusCode;
+            if (resp.IsSuccessStatusCode) return true;
+
+            return HookSpool.IsRetryable((int)resp.StatusCode) ? false : null;
         } catch { return false; }
     }
 

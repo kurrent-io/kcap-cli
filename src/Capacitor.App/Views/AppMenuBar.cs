@@ -62,6 +62,7 @@ public sealed class AppMenuBar(IUrlOpener opener, Func<IReadOnlyList<Window>> wi
                 new KeyGesture(Key.F, KeyModifiers.Control | KeyModifiers.Meta), window.CanResize),
         };
         if (RefreshItem(window) is { } refresh) menu.Add(refresh);
+        if (SearchItem(window) is { } search) menu.Add(search);
         menu.Add(new NativeMenuItemSeparator());
 
         if (showMainWindow() is { } show) {
@@ -110,6 +111,18 @@ public sealed class AppMenuBar(IUrlOpener opener, Func<IReadOnlyList<Window>> wi
         var item = new NativeMenuItem("Refresh") { Gesture = RefreshShortcut.Primary, IsEnabled = false };
         void Apply() {
             item.Command = (main.DataContext as MainWindowViewModel)?.RefreshWorkCommand;
+            if (item.Command is null) item.IsEnabled = false;
+        }
+        Apply();
+        main.DataContextChanged += (_, _) => Apply();
+        return item;
+    }
+
+    static NativeMenuItem? SearchItem(Window window) {
+        if (window is not MainWindow main) return null;
+        var item = new NativeMenuItem("Search Sessions") { Gesture = new KeyGesture(Key.K, KeyModifiers.Meta), IsEnabled = false };
+        void Apply() {
+            item.Command = (main.DataContext as MainWindowViewModel)?.OpenSearchCommand;
             if (item.Command is null) item.IsEnabled = false;
         }
         Apply();

@@ -9,10 +9,13 @@ namespace Capacitor.App.Services;
 
 /// The subset of Capacitor.Cli.Commands.ServiceStatusJson the app reads; snake_case on the wire.
 /// `LoadedSpawnType` is launchd's word for the loaded job, null when the label is not loaded or the
-/// CLI predates the field; read it through SpawnTypes.
+/// CLI predates the field; read it through SpawnTypes. The `Txn*` details of a leftover marker are
+/// null from a CLI that predates them.
 public sealed record ServiceSnapshot(
     string ServiceId, bool UnitPresent, string State, string? BinaryPath, string? InstallBinaryPath,
-    int? JobPid, int? DaemonPid, bool TxnMarker, bool TxnActive, string? LoadedSpawnType = null);
+    int? JobPid, int? DaemonPid, bool TxnMarker, bool TxnActive, string? LoadedSpawnType = null,
+    string? TxnOperation = null, string? TxnPhase = null, DateTimeOffset? TxnMarkedAt = null,
+    string? Supervisor = null, bool? ServiceUpgradeAvailable = null, bool? WindowsServiceInstallable = null);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
 [JsonSerializable(typeof(ServiceSnapshot))]
@@ -39,9 +42,12 @@ public enum ImportScopeChoice { Everything, Org, Repo }
 /// <param name="Since">Only sessions started on or after this day.</param>
 /// <param name="Private">Mark every imported session as visible to its owner only.</param>
 /// <param name="SkipTitle">Leave titling to the server rather than this machine's own agent.</param>
+/// <param name="Folders">With <see cref="ImportScopeChoice.Repo"/>, folders that matched no repository to
+/// import beside <paramref name="Repos"/>.</param>
 public sealed record ImportRequest(
     ImportScopeChoice Scope, string? OrgOrRepo, IReadOnlyList<string> VendorFlags,
-    IReadOnlyList<string>? Repos = null, DateOnly? Since = null, bool Private = false, bool SkipTitle = false);
+    IReadOnlyList<string>? Repos = null, DateOnly? Since = null, bool Private = false, bool SkipTitle = false,
+    IReadOnlyList<string>? Folders = null);
 
 /// Typed facade over every CLI call the app shells out to — every daemon mutation goes through
 /// the CLI. Consumed by the lifecycle controller and faked in tests behind
@@ -70,6 +76,10 @@ public interface IKcapCli {
 
     Task<ProcessResult> ServiceInstallVerifiedAsync(bool replace, CancellationToken ct, string? retireServiceId = null);
 
+    /// `daemon service install --system --verify`: installs or updates the machine's Windows service behind the
+    /// UAC prompt, then hands this daemon to it. Bounded by the time a person may take to answer the prompt.
+    Task<ProcessResult> ServiceInstallWindowsServiceAsync(CancellationToken ct);
+
     /// <c>daemon start -d --name &lt;name&gt;</c>, bounded + ProcessOnly-kill, stamped with a boot-attempt id
     /// for the daemon's own boot-carrier correlation — the lane always mints a fresh one per action.
     Task<ProcessResult> DetachedStartAsync(string bootAttemptId, CancellationToken ct);
@@ -77,6 +87,8 @@ public interface IKcapCli {
     /// `plugin install` (+ vendorFlag, when non-null, then <paramref name="options"/>); null = the
     /// flagless Claude default.
     Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct, IReadOnlyList<string>? options = null);
+
+    Task<ProcessResult> PluginRemoveAsync(string? vendorFlag, CancellationToken ct);
 
     /// <c>accounts add|remove|rename|rewire … --json</c>, which prints one AccountActionResultDto line.
     /// No server overlay: the account verbs touch nothing on the server.
@@ -103,13 +115,17 @@ public interface IKcapCli {
     /// `local start`, bounded above the CLI's own readiness budget.
     Task<ProcessResult> LocalStartAsync(CancellationToken ct);
 
-    /// `import --discover --json` for these vendors; null when the run failed or printed no report.
+    /// `import --discover --json` for these vendors, or every harness when none is named; null when the
+    /// run failed or printed no report.
     Task<ImportDiscoveryReport?> ImportDiscoverAsync(IReadOnlyList<string> vendorFlags, CancellationToken ct);
 }
 
 public sealed class KcapCli : IKcapCli {
     // Covers forward/rollback budgets, lock wait, crash recovery and the manual-owner kill wait.
     static readonly TimeSpan MutationTimeout = TimeSpan.FromSeconds(60);
+
+    /// The UAC prompt waits on a person; past this the install is reported unconfirmed, not failed.
+    static readonly TimeSpan ElevationTimeout = TimeSpan.FromMinutes(10);
     /// The forced refresh may wait 10 s for the service transaction lock before its own 85 s deadline starts.
     static readonly TimeSpan ReloadTimeout = TimeSpan.FromSeconds(105);
     // Discovery reads every vendor's history off disk; a large Claude projects tree takes seconds.
@@ -237,6 +253,15 @@ public sealed class KcapCli : IKcapCli {
             Timeout: retireServiceId is null ? MutationTimeout : RenameTimeout), ct).ConfigureAwait(false);
     }
 
+    public async Task<ProcessResult> ServiceInstallWindowsServiceAsync(CancellationToken ct) {
+        var mutation = MutationEnv();
+        if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);
+
+        string[] args = ["daemon", "service", "install", "--system", "--name", _daemonName, "--profile", _profileName, "--verify"];
+        var env = await EnvWithTerminalPathAsync(mutation, ct).ConfigureAwait(false);
+        return await Run(cliPath, args, new RunOptions(EnvOverlay: env, Timeout: ElevationTimeout), ct).ConfigureAwait(false);
+    }
+
     public async Task<ProcessResult> DetachedStartAsync(string bootAttemptId, CancellationToken ct) {
         var env = MutationEnv(); // throws before any spawn if the instance carries no server
         env[BootAttemptVar] = bootAttemptId;
@@ -262,12 +287,20 @@ public sealed class KcapCli : IKcapCli {
             new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: MutationTimeout), ct).ConfigureAwait(false);
     }
 
+    public async Task<ProcessResult> PluginRemoveAsync(string? vendorFlag, CancellationToken ct) {
+        if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);
+        string[] args = vendorFlag is null ? ["plugin", "remove"] : ["plugin", "remove", vendorFlag];
+        return await Run(cliPath, args,
+            new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: MutationTimeout), ct).ConfigureAwait(false);
+    }
+
     public async Task<ProcessResult> AccountsAsync(MutationVerb verb, AccountArgs args, CancellationToken ct) {
         string[] argv = verb switch {
             MutationVerb.AccountAdd    => ["accounts", "add", Required(args.Vendor), Required(args.Directory), "--json"],
             MutationVerb.AccountRemove => ["accounts", "remove", Required(args.AccountId), "--json"],
             MutationVerb.AccountRename => ["accounts", "rename", Required(args.AccountId), Required(args.Label), "--json"],
             MutationVerb.AccountRewire => args.AccountId is { } id ? ["accounts", "rewire", id, "--json"] : ["accounts", "rewire", "--json"],
+            MutationVerb.AccountRefresh => ["accounts", "refresh", Required(args.AccountId), "--json"],
             _                          => throw new ArgumentOutOfRangeException(nameof(verb), verb, "not an account verb"),
         };
         if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);
@@ -284,20 +317,23 @@ public sealed class KcapCli : IKcapCli {
             return new StreamingResult(-1, false, [new StreamedLine(ProcessStreamKind.Stderr, "kcap CLI not found")]);
 
         List<string> args = ["import"];
-        args.Add(request.Scope switch {
-            ImportScopeChoice.Everything => "--all",
-            ImportScopeChoice.Org        => "--org",
-            ImportScopeChoice.Repo       => "--repo",
-            _                            => throw new ArgumentOutOfRangeException(nameof(request)),
-        });
-        if (request is { Scope: ImportScopeChoice.Repo, Repos: { Count: > 0 } repos }) {
-            args.Add(repos[0]);
-            foreach (var repo in repos.Skip(1)) {
+        if (request is { Scope: ImportScopeChoice.Repo } && (request.Repos is { Count: > 0 } || request.Folders is { Count: > 0 })) {
+            foreach (var repo in request.Repos ?? []) {
                 args.Add("--repo");
                 args.Add(repo);
             }
-        } else if (request.Scope != ImportScopeChoice.Everything) {
-            args.Add(request.OrgOrRepo!);
+            foreach (var folder in request.Folders ?? []) {
+                args.Add("--folder");
+                args.Add(folder);
+            }
+        } else {
+            args.Add(request.Scope switch {
+                ImportScopeChoice.Everything => "--all",
+                ImportScopeChoice.Org        => "--org",
+                ImportScopeChoice.Repo       => "--repo",
+                _                            => throw new ArgumentOutOfRangeException(nameof(request)),
+            });
+            if (request.Scope != ImportScopeChoice.Everything) args.Add(request.OrgOrRepo!);
         }
         if (request.Since is { } since) {
             args.Add("--since");

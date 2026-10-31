@@ -10,6 +10,7 @@ namespace Capacitor.App.ViewModels.Onboarding;
 /// <param name="DashboardUrl">The local server's web dashboard, or null when unknown.</param>
 /// <param name="DaemonBusy">An attempt to start the service is in flight.</param>
 /// <param name="ServiceDetail">What the daemon's last outcome reported beyond the problem itself, or null.</param>
+/// <param name="PathAdded">This setup put kcap on the terminal's PATH, which only terminals opened afterwards see.</param>
 public sealed record DoneFacts(
     IReadOnlyList<string> Recording,
     bool                  CodexRecording,
@@ -22,6 +23,7 @@ public sealed record DoneFacts(
     bool                  Local = false,
     string?               DashboardUrl = null,
     bool                  DaemonBusy = false,
-    string?               ServiceDetail = null) {
+    string?               ServiceDetail = null,
+    bool                  PathAdded = false) {
     public static readonly DoneFacts Empty = new([], false, false, null, false, "this machine", null);
 }

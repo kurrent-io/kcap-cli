@@ -20,10 +20,12 @@ public sealed class ClaudeHarness : IHarness<ClaudeHarness> {
     /// override a second time.</summary>
     public ClaudePaths Paths { get; }
 
-    // PATH-only: ~/.claude exists on machines that never ran Claude — kcap's own skills
-    // install creates it — so a marker here would report a vendor that is not there.
+    // The desktop app runs a Claude Code it downloads under its own data dir, never on PATH.
     public HarnessSignals Signals => new() {
         LaunchSignal   = probe => probe.Finds(CliBinary),
+        UserDataSignal = Paths.HasUserData,
+        AppSignal      = apps => apps.Finds("Claude.app", Path.Combine("Claude", "claude-code"), "AnthropicClaude"),
+        BundledCli     = ClaudeDesktopCli.Find,
         Wired          = () => ClaudePluginInstaller.IsPluginEnabled(Paths.UserSettings),
     };
 }

@@ -79,4 +79,18 @@ public class SessionEndSpoolTests {
     public async Task Nothing_is_queued_without_a_server_to_post_to() =>
         await Assert.That(AgentHookPoster.SpoolEnds([Exited("here")], null, new HookSpool(Config.Root, TimeProvider.System), TimeProvider.System))
             .IsEqualTo(0);
+
+    [Test]
+    public async Task A_session_whose_end_the_fence_holds_is_not_queued() {
+        var spool  = new HookSpool(Config.Root, TimeProvider.System);
+        var origin = new ClaimOrigin("claude", "https://kcap.example", "/t/x.jsonl", "/repo", AgentId: "agent-1", DaemonEpoch: "epoch-1");
+
+        var queued = AgentHookPoster.SpoolEnds(
+            [new ExitedSession(SessionId.Parse("held")!, origin), Exited("here")], "https://kcap.example", spool, TimeProvider.System,
+            hold: exited => exited.Origin?.AgentId == "agent-1");
+
+        await Assert.That(queued).IsEqualTo(1);
+        await Assert.That(spool.HasBacklog("held")).IsFalse();
+        await Assert.That(spool.HasBacklog("here")).IsTrue();
+    }
 }

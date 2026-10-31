@@ -305,12 +305,16 @@ internal sealed class AgentHookPoster(
     /// that server's to close, through its own sweep. The drain delivers the end like any spooled one,
     /// and a server that already ended the session ignores it.
     /// </summary>
-    internal static int SpoolEnds(IReadOnlyList<ExitedSession> exited, string? url, HookSpool spool, TimeProvider time) {
+    internal static int SpoolEnds(
+            IReadOnlyList<ExitedSession> exited, string? url, HookSpool spool, TimeProvider time, Func<ExitedSession, bool>? hold = null) {
         if (url is null) return 0;
+
+        hold ??= SessionEndFence.ShouldHold;
 
         var spooled = 0;
         foreach (var session in exited) {
             if (session.Origin is not { Vendor: { } vendor, Server: { } server } origin || !AgentSessions.SameServer(server, url)) continue;
+            if (hold(session)) continue;
 
             // The fields every vendor's session-end binding requires, as the watcher's own end sends them.
             var body = new JsonObject {

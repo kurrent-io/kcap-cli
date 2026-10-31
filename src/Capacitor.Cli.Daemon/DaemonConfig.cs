@@ -5,6 +5,7 @@ using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Daemon.Harness.Claude;
+using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.Cli.Daemon;
@@ -14,6 +15,9 @@ public class DaemonConfig {
     public string   ServerUrl           { get; set; } = "";
     public string[] AllowedRepoPaths    { get; set; } = [];
     public int      MaxConcurrentAgents { get; set; } = 5;
+
+    /// <summary>The daemon's own binary as it stood at process start, the restart poll's first baseline.</summary>
+    public BinaryStat? LaunchBinary { get; set; }
 
     /// <summary>How long a self-detected restart waits for interactive agents to reach a turn boundary.</summary>
     public TimeSpan RestartTurnWait { get; set; } = TimeSpan.FromMinutes(5);
@@ -136,6 +140,10 @@ public class DaemonConfig {
     /// acquisition.
     /// </summary>
     public string? InstanceId { get; set; }
+
+    /// <summary>The instance of the boot just before this one, as the daemon lock witnessed it; null when
+    /// the lock could not tell. A flow participant resumes only from that instance's planned stop.</summary>
+    public string? PriorInstanceId { get; set; }
 
     /// <summary>
     /// Daemon binary version (<c>AssemblyInformationalVersion</c>). Sent

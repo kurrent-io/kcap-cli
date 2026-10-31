@@ -51,6 +51,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     /// had one shows its chat before a session.
     bool _hadSession;
     AgentRow _row;
+    readonly BehaviorSubject<AgentRow> _rows;
+    readonly BehaviorSubject<string> _titles;
     string? _viewerSubject;
 
     public string AgentId { get; }
@@ -116,6 +118,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     string _title = "";
     public string Title { get => _title; private set => this.RaiseAndSetIfChanged(ref _title, value); }
+
+    public SessionTitleEditorViewModel TitleEditor { get; }
 
     string _repoLabelText = "";
     public string RepoLabelText { get => _repoLabelText; private set => this.RaiseAndSetIfChanged(ref _repoLabelText, value); }
@@ -257,6 +261,9 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         _ => "",
     };
 
+    /// Still on the launch's stand-in row: the registry has not listed the agent yet.
+    public bool IsPlaceholder => _row.IsPlaceholder;
+
     public RemoteSessionViewModel(
             AgentRow row, IAgentDirectory directory, SessionAccessService access, IPermissionService permissions,
             AgentActionService actions, IServerLane lane, SessionDetailReader readDetail, IUrlOpener opener, TimeProvider time, IWorkContextSource workContext,
@@ -265,12 +272,16 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             Action? requestSignIn = null, Action? linkGitHub = null, IObservable<Unit>? signInCompleted = null, IPlanSource? plans = null,
             ComposerDrafts? drafts = null, Func<string, Action>? inputSending = null,
             LastReads<PullRequestSnapshot>? pullRequestSnapshots = null, Action<string>? pullRequestLinksChanged = null,
-            SubagentEventsReader? readSubagent = null, IMessageSenderSource? senders = null) {
+            SubagentEventsReader? readSubagent = null, AccountReadings? readings = null, IMessageSenderSource? senders = null,
+            IRemoteAgentsService? remoteAgents = null, IAppNotifier? notifier = null, IObservable<string?>? appSubject = null,
+            IServerSessionsService? serverSessions = null, WorkContextLayout? workContextLayout = null) {
         _drafts = drafts;
         _time = time;
         _permissions = permissions;
         _readSubagent = readSubagent;
         _row = row;
+        _rows = new BehaviorSubject<AgentRow>(row);
+        _titles = new BehaviorSubject<string>(row.Title ?? row.Vendor);
         _opener = opener;
         _access = access;
         AgentId = row.Id;
@@ -285,11 +296,12 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
                 ShowsArtefactsTab = show;
                 if (!show && IsArtefactsActive) ActiveTab = RemoteTab.Chat;
             }).DisposeWith(_disposables);
-        var runs = _runs = new SessionRuns(time);
+        var runs = _runs = new SessionRuns(time) { OpensSubagents = readSubagent is not null };
         commands?.Track($"remote:{row.Id}", runs).DisposeWith(_disposables);
         WorkContext = new WorkContextViewModel(_presence, workContext, time, opener, runs,
             requestSignIn, signInCompleted, actions.OpenWorkItemInWeb, plans, planActivity,
-            artefacts: Artefacts, isRemote: true);
+            artefacts: Artefacts, isRemote: true, sessionOnly: row.Origin == AgentOrigin.Server, serverLane: lane.Status,
+            layout: workContextLayout);
         WorkContext.RunOpened += OpenSubagent;
         _disposables.Add(Disposable.Create(() => WorkContext.RunOpened -= OpenSubagent));
         // An open subagent belongs to the session it was opened from.
@@ -309,7 +321,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
                 }).DisposeWith(_disposables);
         lane.Status.Select(s => s.State).DistinctUntilChanged().Skip(1)
             .Where(state => state == ServerLaneState.Connected).ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(_ => { PullRequests?.Reconnected(); WorkContext.Reconnected(); }).DisposeWith(_disposables);
+            .Subscribe(_ => PullRequests?.Reconnected()).DisposeWith(_disposables);
 
         WorkContext.PullRequests = PullRequests;
         _accessStates.Where(s => s == SessionAccessState.Established)
@@ -329,6 +341,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
                     ? Observable.Empty<IReadOnlyList<QueuedInputItem>>()
                     : lane.PendingInputChanged.Where(u => u.SessionId == sid).Select(u => u.Items))),
             planActivity: planActivity, openCard: OpenCard, drafts: drafts, senders: senders,
+            accountReadings: row.MachineBadge is { } daemon ? readings?.Remote(daemon) : null, usageClock: readings?.Clock,
             signInCompleted: signInCompleted) { InputSending = inputSending };
         lane.Status.Select(s => s.Subject).DistinctUntilChanged()
             .ObserveOn(RxSchedulers.MainThreadScheduler)
@@ -343,6 +356,26 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             : null;
         if (Terminal is not null) Chat.ShowTerminal = () => ActiveTab = RemoteTab.Terminal;
         Apply(row);
+
+        // The server re-checks ownership on every write; this only avoids offering a rename that
+        // would be refused. A listed session is the server's own record, so it stays renamable
+        // after it ends; the listing folds the owner through the account's aliases.
+        var canRename = remoteAgents is null
+            ? Observable.Return(false)
+            : _rows.CombineLatest(_sessionEndedChanges, _originChangedChanges, appSubject ?? SignedInSubject.From(lane.Status),
+                (r, ended, movedLocal, viewer) => (!ended || r.Origin == AgentOrigin.Server) && !movedLocal
+                    && r.SessionId is { Length: > 0 } && viewer is not null
+                    && (r.OwnerUserId == viewer || (r.Origin == AgentOrigin.Server && r.OwnerIsViewer == true)))
+                .ObserveOn(RxSchedulers.MainThreadScheduler);
+        TitleEditor = new SessionTitleEditorViewModel(_titles, canRename, async (title, ct) => {
+                if (remoteAgents is null || _row.SessionId is not { Length: > 0 } sessionId)
+                    return new SessionRenameResult(false, null, SessionRenameReasons.NotFound);
+                var result = await remoteAgents.RenameAsync(row.Id, sessionId, title, ct);
+                if (result.Applied) serverSessions?.ApplyRename(sessionId, result.Title is { Length: > 0 } shown ? shown : title);
+                return result;
+            },
+            notifier ?? new AppNotifier());
+        _disposables.Add(TitleEditor);
 
         directory.Rows.Connect()
             .Filter(r => r.Key == row.Key)
@@ -423,6 +456,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         }
         if (_sessionIds.Value != sessionId) _sessionIds.OnNext(sessionId);
         Title = row.Title ?? row.Vendor;
+        _titles.OnNext(Title);
+        _rows.OnNext(row);
         RepoLabelText = row.Origin == AgentOrigin.Server
             ? row.OwnerName is { Length: > 0 } owner ? $"{row.RepoGroupLabel} · {owner}" : row.RepoGroupLabel
             : $"{row.RepoGroupLabel} · on {row.MachineBadge}";
@@ -470,8 +505,14 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         var sessionId = _workAccessDenied ? null : _row.SessionId;
         _presence.OnNext(new AgentStatusDto(_row.Id, _row.Kind, _row.Vendor, _row.RepoPath, _row.Status,
             null, null, null, _row.CreatedAt, _row.Model, _row.RequesterDisplay,
-            Title: _row.Title, SessionId: sessionId));
+            Title: _row.Title, WorktreePath: _row.WorktreePath, WorkLocation: _row.WorkLocation,
+            BorrowedFrom: _row.BorrowedFrom, SessionId: sessionId, Branch: _row.Branch));
         if (string.IsNullOrEmpty(sessionId)) PullRequests?.ClearSession();
+    }
+
+    /// Reopening a refused session asks the server again; a genuine revocation answers Denied again.
+    public void RecheckAccess() {
+        if (Access == RemoteSessionAccess.Denied && _leasedSession is { } sessionId) _access.RecheckDenied(sessionId);
     }
 
     void AcquireLease(string sessionId) {

@@ -1,5 +1,6 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
@@ -89,6 +90,40 @@ public class StatusAuthResolutionTests {
         await Assert.That(auth.State).IsEqualTo(StatusAuthState.None);
     }
 
+    /// <summary>A sign-in cannot reach a server that gave no answer, so a missing token is not
+    /// reported as the problem to fix.</summary>
+    [Test]
+    public async Task No_token_against_an_unanswering_server_is_not_sent_to_login() {
+        var auth = await ResolveAsync(server: new StatusCommand.ServerReach(Server, false, null, Failure: ConnectionFailure.Refused));
+        var line = StatusCommand.FormatAuthLine(auth, DateTimeOffset.UtcNow);
+
+        await Assert.That(auth.State).IsEqualTo(StatusAuthState.None);
+        await Assert.That(auth.ServerUnanswered).IsTrue();
+        await Assert.That(line).DoesNotContain("kcap login");
+        await Assert.That(line).Contains("the server gave no answer");
+    }
+
+    [Test]
+    public async Task An_expired_token_against_an_unanswering_server_waits_for_the_server() {
+        await SaveTokenAsync(Server, TimeSpan.FromHours(-1));
+
+        var auth = await ResolveAsync(server: new StatusCommand.ServerReach(Server, false, null, Failure: ConnectionFailure.TimedOut));
+        var line = StatusCommand.FormatAuthLine(auth, DateTimeOffset.UtcNow);
+
+        await Assert.That(auth.State).IsEqualTo(StatusAuthState.Expired);
+        await Assert.That(line).IsEqualTo("alice ✗ token expired; it cannot be renewed until the server answers");
+    }
+
+    /// <summary>A server that answered, even with a failure status, can take a login: the advice stays.</summary>
+    [Test]
+    public async Task A_server_that_answered_keeps_the_login_advice() {
+        var answered = await ResolveAsync(server: new StatusCommand.ServerReach(Server, false, 502));
+        var reached  = await ResolveAsync();
+
+        await Assert.That(StatusCommand.FormatAuthLine(answered, DateTimeOffset.UtcNow)).IsEqualTo("not authenticated (run: kcap login)");
+        await Assert.That(StatusCommand.FormatAuthLine(reached, DateTimeOffset.UtcNow)).IsEqualTo("not authenticated (run: kcap login)");
+    }
+
     [Test]
     [Arguments("client-id", null)]
     [Arguments(null, "client-secret")]
@@ -161,6 +196,15 @@ public class StatusAuthResolutionTests {
         var auth = await ResolveAsync(server: new StatusCommand.ServerReach(null, false, null));
 
         await Assert.That(auth.State).IsEqualTo(StatusAuthState.Valid);
+    }
+
+    /// <summary>A fresh or uninstalled configuration has no server for `kcap login` to sign in to.</summary>
+    [Test]
+    public async Task With_no_server_and_no_token_the_auth_line_points_at_setup() {
+        var auth = await ResolveAsync(server: new StatusCommand.ServerReach(null, false, null));
+
+        await Assert.That(auth.State).IsEqualTo(StatusAuthState.None);
+        await Assert.That(StatusCommand.FormatAuthLine(auth, DateTimeOffset.UtcNow)).IsEqualTo("not set up (run: kcap setup)");
     }
 
     [Test]

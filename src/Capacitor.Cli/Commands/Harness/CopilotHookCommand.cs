@@ -124,7 +124,7 @@ sealed class CopilotHookCommand(
                     IsTopLevel: true, ClassificationAuthoritative: true,
                     SessionStartMemoryHookSupport.ReasonFor(source), CallbackMayRepeat: false),
                 new SessionStartMemoryContextRequest(Url, scopeRoot, disabled, budget, CancellationToken.None,
-                    GuidelinesDisabled: guidelinesDisabled, FlowsDisabled: flowsDisabled),
+                    GuidelinesDisabled: guidelinesDisabled, Vendor: HarnessId.Copilot.VendorId, WakeUpsWanted: hosted.IsHosted, FlowsDisabled: flowsDisabled),
                 commitGate);
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
@@ -326,7 +326,7 @@ sealed class CopilotHookCommand(
         // Copilot parses this hook's stdout as its (optional) single JSON result document. Silent when
         // there is neither a fragment nor a nudge, which keeps all pre-existing paths byte-identical.
         var workItemsNudge = HarnessNudgeEmitter.Combine(
-            SessionNudges.Resolve(HarnessId.Copilot, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience),
+            SessionNudges.Resolve(HarnessId.Copilot, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience, cwd, home),
             HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true || !audience.GetsOnboarding, config, harnesses, clock.Time),
             FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true || !audience.GetsOnboarding, config, HarnessId.Copilot, harnesses));
         WriteSessionStartOutput(Console.Out, fragment, workItemsNudge);

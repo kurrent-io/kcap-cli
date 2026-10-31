@@ -25,14 +25,62 @@ using Capacitor.Cli.Core.PullRequests;
 using Capacitor.Cli.Core.WorkItems;
 using DynamicData;
 using Microsoft.Extensions.Time.Testing;
-using TUnit.Assertions.Enums;
 using static Capacitor.App.Tests.Unit.FakeDaemonClientService;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// Headless rendering of MainWindow against a fake Connected snapshot: the rail footer shows
-/// connection and tenant on one line, then the daemon's name, version and agent count.
+/// Headless rendering of MainWindow against a fake Connected snapshot.
 public class MainWindowSmokeTests {
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Update_footer_keeps_identity_without_connection_churn_and_restores_live_status() => AvaloniaSession.DispatchAsync(async () => {
+        using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+        var service = new FakeDaemonClientService();
+        service.SnapshotsSubject.OnNext(Snap(daemon: "daemon-a", connection: "connected", active: 1, max: 5));
+        service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+        using var home = new HomeViewModel(service, new AppStateStore(path), new NeverLaunchClient(),
+            () => Task.FromResult(Array.Empty<string>()), TimeProvider.System);
+        using var progress = new BehaviorSubject<(bool, string?)>((false, null));
+        home.AttachUpdateProgress(progress);
+        var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+            tenantName: "kurrent", home: home);
+        var window = new MainWindow { DataContext = vm };
+        try {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            var rail = window.FindDescendantOfType<SessionRailView>()!;
+            var status = rail.FindControl<TextBlock>("RailTenantText")!;
+            await Assert.That(status.IsEffectivelyVisible).IsTrue();
+
+            progress.OnNext((true, "Restarting the daemon"));
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, ExpectedDaemonRestart.Reason, null));
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            await Assert.That(status.IsEffectivelyVisible).IsFalse();
+            var footerText = rail.FindControl<StackPanel>("RailFooterPanel")!.GetVisualDescendants().OfType<TextBlock>()
+                .Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToArray();
+            await Assert.That(footerText).Contains("kurrent");
+            await Assert.That(footerText).Contains("daemon-a");
+            var help = rail.FindControl<Button>("RailHelpButton")!;
+            await Assert.That(help.IsEffectivelyVisible && help.IsEffectivelyEnabled).IsTrue();
+
+            var longName = "engineering-workstation-" + new string('a', 100);
+            service.SnapshotsSubject.OnNext(Snap(daemon: longName, connection: "connected", active: 1, max: 5));
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            var context = rail.FindControl<StackPanel>("RailUpdateContext")!;
+            var nameText = context.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Text == longName);
+            await Assert.That(nameText.Bounds.Width).IsLessThan(context.Bounds.Width);
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            progress.OnNext((false, null));
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(status.IsEffectivelyVisible).IsTrue();
+            await Assert.That(vm.Alert).IsNull();
+        } finally { window.Close(); }
+        return true;
+    });
+
     sealed class NeverLaunchClient : ILaunchClient {
         public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) =>
             Task.FromResult(new LaunchOutcome(false, null, "unexpected launch"));
@@ -70,9 +118,11 @@ public class MainWindowSmokeTests {
         return lines;
     }
 
+    /// A healthy stack renders no status, daemon name, agent count or version in the window: only
+    /// the org stays, and Settings › About holds the rest.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task MainWindow_renders_compact_footer_with_server_daemon_and_version() {
+    public async Task MainWindow_renders_no_health_line_while_everything_works() {
         // Rendered text, so no immediate scheduler: an OAPH delivered immediately notifies
         // before its value is readable, and a binding that reads on the notification keeps the
         // stale one. The dispatcher scheduler sets the value first, as it does in the app.
@@ -96,6 +146,7 @@ public class MainWindowSmokeTests {
 
             var texts = string.Join('\n', window.GetVisualDescendants()
                 .OfType<TextBlock>()
+                .Where(t => t.IsEffectivelyVisible)
                 .Select(t => t.Text is { Length: > 0 } text
                     ? text
                     : string.Concat((t.Inlines ?? []).OfType<Run>().Select(r => r.Text ?? ""))));
@@ -106,12 +157,12 @@ public class MainWindowSmokeTests {
             return texts;
         });
 
-        await Assert.That(rendered).Contains("Connected");
-        await Assert.That(rendered).Contains("1 of 5 agents");
-        await Assert.That(rendered).DoesNotContain("http://localhost:9999");
         await Assert.That(rendered).Contains("kurrent");
-        await Assert.That(rendered).Contains("daemon-a");
-        await Assert.That(rendered).Contains("1.2.3");
+        await Assert.That(rendered).DoesNotContain("Connected");
+        await Assert.That(rendered).DoesNotContain("of 5 agents");
+        await Assert.That(rendered).DoesNotContain("daemon-a");
+        await Assert.That(rendered).DoesNotContain("1.2.3");
+        await Assert.That(rendered).DoesNotContain("http://localhost:9999");
     }
 
     /// ReactiveCommand does NOT reschedule a SUPPLIED canExecute onto its outputScheduler (only
@@ -255,7 +306,7 @@ public class MainWindowSmokeTests {
                 service.StartBehavior = _ => Task.FromResult(new StartDaemonResult(false, "boom: could not bind socket"));
                 await vm.StartDaemonCommand.Execute().ToTask();
                 Dispatcher.UIThread.RunJobs();
-                var textAfter = Banner().Text;
+                var textAfter = window.GetVisualDescendants().OfType<SelectableTextBlock>().First(t => t.Name == "BannerDetailText").Text;
 
                 window.Close();
                 Dispatcher.UIThread.RunJobs();
@@ -265,7 +316,7 @@ public class MainWindowSmokeTests {
             });
 
         await Assert.That(bannerInitially).IsTrue(); // Connecting… still has a notice
-        await Assert.That(bannerTextUnreachable).IsEqualTo(HomeViewModel.DaemonDownNotice);
+        await Assert.That(bannerTextUnreachable).IsEqualTo(NoticeText.Headline(HomeViewModel.DaemonDownNotice).Title);
         await Assert.That(bannerTextAfterFailure).IsEqualTo("boom: could not bind socket");
     }
 
@@ -1229,13 +1280,14 @@ public class MainWindowSmokeTests {
         });
     }
 
-    /// Cmd+N / Ctrl+N: the window binds the advertised New session shortcut to CloseWorkspaceCommand,
-    /// which drops an open workspace back to the launcher (the new-session empty state).
+    /// Cmd+N / Ctrl+N: the window binds the advertised New session shortcut, which drops an open
+    /// workspace back to the launcher (the new-session empty state) and, pressed again there,
+    /// focuses the goal and rings its card.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task New_session_shortcut_is_bound_and_returns_to_the_launcher() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var (hadWorkspace, hasMeta, hasCtrl, afterInvoke) = await AvaloniaSession.DispatchAsync(() => {
+            var (hadWorkspace, hasMeta, hasCtrl, afterInvoke, nudged, goalFocused) = await AvaloniaSession.DispatchAsync(() => {
                 var service = new FakeDaemonClientService();
                 var (actions, _) = NewActions(service);
                 var vm = new MainWindowViewModel(
@@ -1254,19 +1306,29 @@ public class MainWindowSmokeTests {
                 var meta = Bound(KeyModifiers.Meta);
                 var ctrl = Bound(KeyModifiers.Control);
 
-                window.KeyBindings.First(k => k.Gesture is { Key: Key.N } g && g.KeyModifiers.HasFlag(KeyModifiers.Meta))
-                    .Command!.Execute(null);
+                var newSession = window.KeyBindings
+                    .First(k => k.Gesture is { Key: Key.N } g && g.KeyModifiers.HasFlag(KeyModifiers.Meta)).Command!;
+                newSession.Execute(null);
                 Dispatcher.UIThread.RunJobs();
                 var after = vm.CurrentWorkspace;
+                var nudgedOnClose = window.LauncherView.IsNudgingForTesting;
+
+                window.Focus();
+                newSession.Execute(null);
+                Dispatcher.UIThread.RunJobs();
+                var ringed = !nudgedOnClose && window.LauncherView.IsNudgingForTesting;
+                var focused = window.LauncherView.GoalInput.IsFocused;
 
                 window.Close();
                 Dispatcher.UIThread.RunJobs();
-                return (had, meta, ctrl, after);
+                return (had, meta, ctrl, after, ringed, focused);
             });
             await Assert.That(hadWorkspace).IsTrue();
             await Assert.That(hasMeta).IsTrue();
             await Assert.That(hasCtrl).IsTrue();
             await Assert.That(afterInvoke).IsNull();
+            await Assert.That(nudged).IsTrue();
+            await Assert.That(goalFocused).IsTrue();
         });
     }
 
@@ -1300,7 +1362,7 @@ public class MainWindowSmokeTests {
                 var bindings = window.KeyBindings.Where(k => k.Gesture is { Key: Key.R }).ToArray();
                 bool Bound(KeyModifiers mod) => bindings.Any(k => k.Gesture!.KeyModifiers == mod);
                 bool Can() => bindings.Single(k => k.Gesture!.KeyModifiers == KeyModifiers.Meta).Command!.CanExecute(null);
-                var yield = new RefreshUnlessTerminalFocused(window);
+                var yield = new UnlessTerminalFocused(window, m => m.RefreshWorkCommand);
 
                 await Assert.That(Bound(KeyModifiers.Meta)).IsTrue();
                 await Assert.That(Bound(KeyModifiers.Control)).IsEqualTo(RefreshShortcut.UsesControl);
@@ -1693,204 +1755,57 @@ public class MainWindowSmokeTests {
         }
     });
 
-    /// Hover copy names what each footer fragment is. Extra info the compact row dropped (URL,
-    /// lane diagnostic, pending-update copy) sits on the lighter line; the fragment's name is
-    /// the darker caption under it, or the whole tip when there is nothing extra. Visible
-    /// strings (org slug, daemon name, semver) do not repeat. Same dispatcher scheduler as the
-    /// compact-footer render test: an immediate OAPH notifies before its value is readable and
-    /// a binding keeps the stale one.
+    /// A healthy footer carries no status. A stopped daemon shows the alert with its long copy on
+    /// hover, and its Start runs the same start as the launcher's.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Rail_footer_tooltips_identify_org_daemon_version_and_server() {
-        var tips = await AvaloniaSession.DispatchAsync(() => {
-            var service = new FakeDaemonClientService();
-            var lane = new FakeServerLane();
-            service.SnapshotsSubject.OnNext(Snap(
-                daemon: "daemon-a", version: "1.2.3+abc", serverUrl: "http://localhost:9999",
-                connection: "connected", active: 1, max: 5));
-            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
-            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
-                tenantName: "kurrent", laneStatus: lane.Status);
-            var window = new MainWindow { DataContext = vm };
-            window.Show();
-            Dispatcher.UIThread.RunJobs();
-
-            var rail = window.FindDescendantOfType<SessionRailView>()!;
-            var connection = rail.FindControl<StackPanel>("RailConnectionStatus")!;
-            var tenant = rail.FindControl<TextBlock>("RailTenantText")!;
-            var daemon = rail.FindControl<TextBlock>("RailDaemonNameText")!;
-            var version = rail.FindControl<TextBlock>("RailVersionText")!;
-            var agents = rail.FindControl<TextBlock>("RailAgentCountText")!;
-            var connectionLines = VisibleTipLines(connection);
-            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Diagnostic: "diagnostic-marker"));
-            Dispatcher.UIThread.RunJobs();
-            var connectionDetailLines = VisibleTipLines(connection);
-            var result = (
-                ConnectionLines: connectionLines,
-                ConnectionDetailLines: connectionDetailLines,
-                TenantLines: VisibleTipLines(tenant),
-                TenantText: tenant.Text,
-                DaemonLines: VisibleTipLines(daemon),
-                DaemonText: daemon.Text,
-                VersionText: version.Text,
-                VersionLines: VisibleTipLines(version),
-                AgentLines: VisibleTipLines(agents));
-
-            window.Close();
-            Dispatcher.UIThread.RunJobs();
-            return result;
-        });
-
-        await Assert.That(tips.ConnectionLines).IsEquivalentTo(
-            new[] { MainWindowViewModel.AttachStatusTip }, CollectionOrdering.Matching);
-        await Assert.That(tips.ConnectionDetailLines).IsEquivalentTo(
-            new[] { "diagnostic-marker", MainWindowViewModel.AttachStatusTip }, CollectionOrdering.Matching);
-        await Assert.That(tips.TenantLines).IsEquivalentTo(
-            new[] { "http://localhost:9999", MainWindowViewModel.ServerUrlTip }, CollectionOrdering.Matching);
-        await Assert.That(tips.TenantText).IsEqualTo("kurrent");
-        await Assert.That(tips.DaemonLines).IsEquivalentTo(
-            new[] { MainWindowViewModel.DaemonNameTip }, CollectionOrdering.Matching);
-        await Assert.That(tips.DaemonText).IsEqualTo("daemon-a");
-        await Assert.That(tips.VersionText).IsEqualTo("kcap 1.2.3");
-        await Assert.That(tips.VersionLines).IsEquivalentTo(
-            new[] { MainWindowViewModel.VersionIdentityTip }, CollectionOrdering.Matching);
-        await Assert.That(string.Join('\n', tips.VersionLines)).DoesNotContain("1.2.3+abc");
-        await Assert.That(tips.AgentLines).IsEquivalentTo(
-            new[] { MainWindowViewModel.AgentCountTip }, CollectionOrdering.Matching);
-    }
-
-    /// No daemon identity yet: the help chip shares the status line. A second row with nothing
-    /// in it would leave the chip sitting under "Unreachable".
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Rail_help_shares_the_status_line_when_the_daemon_line_is_absent() {
-        var (sharesLine, rowHidden) = await AvaloniaSession.DispatchAsync(() => {
-            var service = new FakeDaemonClientService();
-            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
-            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
-                tenantName: "kurrent");
-            var window = new MainWindow { DataContext = vm };
-            window.Show();
-            Dispatcher.UIThread.RunJobs();
-            window.UpdateLayout();
-
-            var rail = window.FindDescendantOfType<SessionRailView>()!;
-            var status = rail.FindControl<StackPanel>("RailConnectionStatus")!;
-            var help = rail.FindControl<Button>("RailHelpButton")!;
-            var daemon = rail.FindControl<Panel>("RailDaemonRow")!;
-            var statusMid = status.TranslatePoint(new Point(0, status.Bounds.Height / 2), rail)!.Value.Y;
-            var helpMid = help.TranslatePoint(new Point(0, help.Bounds.Height / 2), rail)!.Value.Y;
-            var shares = Math.Abs(statusMid - helpMid) <= help.Bounds.Height / 2;
-            var hidden = !daemon.IsVisible;
-
-            window.Close();
-            Dispatcher.UIThread.RunJobs();
-            return (shares, hidden);
-        });
-
-        await Assert.That(rowHidden).IsTrue();
-        await Assert.That(sharesLine).IsTrue();
-    }
-
-    /// Name, then the agent count, then the version. The dot shares the count's parent, so a
-    /// wrap cannot leave it on the line above. Both leave when the attach drops; the snapshot
-    /// stays, so the name and version remain with nothing between them.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Rail_daemon_row_separators_leave_with_the_fragment_they_precede() {
-        static IEnumerable<string> VisibleFooterTexts(Control control) {
-            if (!control.IsVisible) yield break;
-            if (control is TextBlock block) {
-                yield return block.Text ?? "";
-                yield break;
-            }
-            if (control is Panel panel)
-                foreach (var child in panel.Children.OfType<Control>())
-                    foreach (var text in VisibleFooterTexts(child))
-                        yield return text;
-        }
-
-        var (connected, detached, dotSharesCountParent) = await AvaloniaSession.DispatchAsync(() => {
-            var service = new FakeDaemonClientService();
-            service.SnapshotsSubject.OnNext(Snap(
-                daemon: "daemon-a", version: "1.2.3", serverUrl: "http://localhost:9999",
-                connection: "connected", active: 1, max: 5));
-            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
-            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
-                tenantName: "kurrent");
-            var window = new MainWindow { DataContext = vm };
-            window.Show();
-            Dispatcher.UIThread.RunJobs();
-
-            var row = window.FindDescendantOfType<SessionRailView>()!.FindControl<Panel>("RailDaemonRow")!;
-            string[] Fragments() => VisibleFooterTexts(row).ToArray();
-
-            var whileConnected = Fragments();
-            var count = row.FindControl<TextBlock>("RailAgentCountText")!;
-            var sharesParent = count.Parent is Panel parent
-                && !ReferenceEquals(parent, row)
-                && parent.Children.OfType<TextBlock>().Any(t => t.Classes.Contains("footerDot"));
-            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
-            Dispatcher.UIThread.RunJobs();
-            var whileDetached = Fragments();
-
-            window.Close();
-            Dispatcher.UIThread.RunJobs();
-            return (whileConnected, whileDetached, sharesParent);
-        });
-
-        await Assert.That(connected).IsEquivalentTo(
-            new[] { "daemon-a", "\u00b7", "1 of 5 agents", "kcap 1.2.3" }, CollectionOrdering.Matching);
-        await Assert.That(dotSharesCountParent).IsTrue();
-        await Assert.That(detached).IsEquivalentTo(
-            new[] { "daemon-a", "kcap 1.2.3" }, CollectionOrdering.Matching);
-    }
-
-    /// A queued daemon update is the version's own status: warning paint on the semver, the
-    /// pending copy on its hover, and no extra fragment that would collide with the help chip.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Rail_version_warns_when_an_update_is_pending() {
+    public async Task Rail_footer_shows_an_alert_and_its_action_only_when_something_needs_the_user() {
         var shown = await AvaloniaSession.DispatchAsync(() => {
             var service = new FakeDaemonClientService();
-            var restartPending = new BehaviorSubject<bool>(true);
-            service.SnapshotsSubject.OnNext(Snap(
-                daemon: "nortonandreev", version: "1.1.0", serverUrl: "http://localhost:9999",
-                connection: "connected", active: 2, max: 5));
+            service.SnapshotsSubject.OnNext(Snap(daemon: "daemon-a", connection: "connected", active: 1, max: 5));
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
             var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
-                tenantName: "kurrent", restartPending: restartPending);
+                tenantName: "kurrent");
             var window = new MainWindow { DataContext = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
-            window.UpdateLayout();
 
             var rail = window.FindDescendantOfType<SessionRailView>()!;
-            var help = rail.FindControl<Button>("RailHelpButton")!;
-            var version = rail.FindControl<TextBlock>("RailVersionText")!;
-            var tipLines = VisibleTipLines(version);
-            var helpOrigin = help.TranslatePoint(new Point(0, 0), rail)!.Value;
-            var versionOrigin = version.TranslatePoint(new Point(0, 0), rail)!.Value;
+            var row = rail.FindControl<StackPanel>("RailAlertRow")!;
+            var footer = rail.FindControl<StackPanel>("RailFooterPanel")!;
+            var healthyRow = row.IsEffectivelyVisible;
+            var healthyTexts = footer.GetVisualDescendants().OfType<TextBlock>()
+                .Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToArray();
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            var text = rail.FindControl<TextBlock>("RailAlertText")!;
+            var action = rail.FindControl<Button>("RailAlertActionButton")!;
             var result = (
-                PendingLabel: rail.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "update pending" && t.IsVisible),
-                VersionText: version.Text,
-                Warning: ReferenceEquals(version.Foreground, window.FindResource("KcapWarningBrush")),
-                TipLines: tipLines,
-                OverlapsHelp: new Rect(helpOrigin, help.Bounds.Size)
-                    .Intersects(new Rect(versionOrigin, version.Bounds.Size)));
+                HealthyRow: healthyRow,
+                HealthyTexts: healthyTexts,
+                Text: row.IsEffectivelyVisible ? text.Text : null,
+                Tip: ToolTip.GetTip(text) as string,
+                ActionVisible: action.IsEffectivelyVisible,
+                ActionLabel: action.Content as string,
+                Starts: 0);
+            ClickFlyoutButton(action);
+            result.Starts = service.StartDaemonCallCount;
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
             return result;
         });
 
-        await Assert.That(shown.PendingLabel).IsFalse();
-        await Assert.That(shown.VersionText).IsEqualTo("kcap 1.1.0");
-        await Assert.That(shown.Warning).IsTrue();
-        await Assert.That(shown.TipLines).IsEquivalentTo(
-            new[] { MainWindowViewModel.RestartPendingMessage, MainWindowViewModel.VersionIdentityTip },
-            CollectionOrdering.Matching);
-        await Assert.That(shown.OverlapsHelp).IsFalse();
+        await Assert.That(shown.HealthyRow).IsFalse();
+        await Assert.That(shown.HealthyTexts).Contains("kurrent");
+        await Assert.That(shown.HealthyTexts).DoesNotContain("daemon-a");
+        await Assert.That(shown.Text).IsEqualTo(MainWindowViewModel.DaemonStoppedText);
+        await Assert.That(shown.Tip).IsEqualTo(HomeViewModel.DaemonDownNotice);
+        await Assert.That(shown.ActionVisible).IsTrue();
+        await Assert.That(shown.ActionLabel).IsEqualTo("Start daemon");
+        await Assert.That(shown.Starts).IsEqualTo(1);
     }
 
     /// Signed-out is a rail diagnosis; the launcher's Sign in is on the other pane and hidden
@@ -2026,4 +1941,189 @@ public class MainWindowSmokeTests {
         await Assert.That(shown.whileReloading.Button).IsFalse();
         await Assert.That(shown.cleared).IsFalse();
     }
+
+    static Point CentreOf(Control control, Window window) =>
+        control.TranslatePoint(new Point(control.Bounds.Width / 2, control.Bounds.Height / 2), window)!.Value;
+
+    static void Click(SearchWindowHost host, Control control) {
+        var at = CentreOf(control, host.Window);
+        host.Window.MouseMove(at);
+        host.Window.MouseDown(at, MouseButton.Left);
+        host.Window.MouseUp(at, MouseButton.Left);
+        host.Settle();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Rail_shows_search_field_and_hides_filters_until_toggled() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var host = new SearchWindowHost();
+        var field = host.Named<Button>("RailSearchButton");
+        var filter = host.Named<Button>("RailFilterButton");
+        var controls = host.Named<StackPanel>("RailControls");
+        var placeholder = host.Named<TextBlock>("RailSearchText").Text;
+        var shortcut = host.Named<TextBlock>("RailSearchShortcut");
+        var collapsed = controls.IsVisible;
+
+        Click(host, filter);
+        var expanded = controls.IsVisible;
+        var active = filter.Classes.Contains("active");
+        Click(host, filter);
+
+        await Assert.That(field.IsEffectivelyVisible).IsTrue();
+        await Assert.That(AutomationProperties.GetName(field)).IsEqualTo("Search sessions");
+        await Assert.That(placeholder).IsEqualTo("Search…");
+        await Assert.That(shortcut.Text).IsEqualTo(ShortcutLabels.Search);
+        await Assert.That(shortcut.IsVisible).IsTrue();
+        await Assert.That(collapsed).IsFalse();
+        await Assert.That(expanded).IsTrue();
+        await Assert.That(active).IsTrue();
+        await Assert.That(controls.IsVisible).IsFalse();
+        await Assert.That(filter.Classes.Contains("active")).IsFalse();
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Filter_dot_follows_filters_differ() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var host = new SearchWindowHost();
+        var dot = host.Named<Ellipse>("RailFilterDot");
+        var atDefaults = dot.IsVisible;
+
+        host.Rail.Scope = RailScope.Team;
+        host.Settle();
+        var narrowed = dot.IsVisible;
+        host.Rail.Scope = RailScope.Mine;
+        host.Settle();
+
+        await Assert.That(atDefaults).IsFalse();
+        await Assert.That(narrowed).IsTrue();
+        await Assert.That(dot.IsVisible).IsFalse();
+        await Assert.That(dot.Fill).IsSameReferenceAs(Application.Current!.FindResource("KcapInfoBrush"));
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Meta_k_opens_the_cover_and_focuses_the_query() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var host = new SearchWindowHost();
+        var cover = host.Named<SessionSearchView>("SearchCover");
+        var hiddenBefore = !cover.IsVisible;
+
+        host.Window.KeyPressQwerty(PhysicalKey.K, RawInputModifiers.Meta);
+        host.Settle();
+
+        await Assert.That(hiddenBefore).IsTrue();
+        await Assert.That(host.Vm.IsSearchOpen).IsTrue();
+        await Assert.That(cover.IsEffectivelyVisible).IsTrue();
+        await Assert.That(host.Named<Grid>("LauncherPane").IsVisible).IsFalse();
+        await Assert.That(host.Focused).IsSameReferenceAs(host.Named<TextBox>("SearchQueryBox"));
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Escape_in_the_query_hides_the_cover_and_keeps_the_workspace_view() => AvaloniaSession.RunOnUiAsync(async () => {
+        WorkspaceViewModel? built = null;
+        FakeDaemonClientService? service = null;
+        using var host = new SearchWindowHost(workspaceFactory: id => built = NewWorkspace(service!, NewActions(service!).Actions, id));
+        service = host.Service;
+        host.Vm.OpenSession("0123456789abcdef0123456789abcdef");
+        host.Settle();
+        var workspaceHost = host.Named<ContentControl>("WorkspaceHost");
+        var view = workspaceHost.GetVisualDescendants().OfType<WorkspaceView>().Single();
+
+        host.Vm.OpenSearchCommand.Execute().Subscribe();
+        host.Settle();
+        var coveredHidden = !workspaceHost.IsVisible;
+        var stillInTree = view.IsAttachedToVisualTree();
+        host.Window.KeyPressQwerty(PhysicalKey.Escape, RawInputModifiers.None);
+        host.Settle();
+
+        await Assert.That(coveredHidden).IsTrue();
+        await Assert.That(stillInTree).IsTrue();
+        await Assert.That(host.Vm.IsSearchOpen).IsFalse();
+        await Assert.That(host.Named<SessionSearchView>("SearchCover").IsVisible).IsFalse();
+        await Assert.That(workspaceHost.IsVisible).IsTrue();
+        await Assert.That(host.Vm.CurrentWorkspace).IsSameReferenceAs(built);
+        await Assert.That(workspaceHost.GetVisualDescendants().OfType<WorkspaceView>().Single()).IsSameReferenceAs(view);
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Rail_field_click_while_open_selects_the_query_text() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var host = new SearchWindowHost();
+        var field = host.Named<Button>("RailSearchButton");
+        Click(host, field);
+        host.Window.KeyTextInput("auth");
+        host.Settle();
+        var label = host.Named<TextBlock>("RailSearchText").Text;
+        var query = host.Named<TextBox>("SearchQueryBox");
+        query.SelectionStart = query.SelectionEnd = query.Text!.Length;
+
+        Click(host, field);
+
+        await Assert.That(label).IsEqualTo("auth");
+        await Assert.That(host.Vm.Search!.Query).IsEqualTo("auth");
+        await Assert.That(host.Focused).IsSameReferenceAs(query);
+        await Assert.That(query.SelectedText).IsEqualTo("auth");
+    });
+
+    /// ⌘K is bound everywhere. Off macOS Ctrl+K is too, and it yields while the terminal has focus,
+    /// as Ctrl+R does; the command it wraps is the page's.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Ctrl_k_yields_to_a_focused_terminal_off_mac() => AvaloniaSession.RunOnUiAsync(async () => {
+        FakeDaemonClientService? service = null;
+        using var host = new SearchWindowHost(workspaceFactory: id => NewWorkspace(service!, NewActions(service!).Actions, id));
+        service = host.Service;
+        var bindings = host.Window.KeyBindings.Where(k => k.Gesture is { Key: Key.K }).ToArray();
+        var yield = new UnlessTerminalFocused(host.Window, m => m.OpenSearchCommand);
+
+        await Assert.That(bindings.Single(k => k.Gesture!.KeyModifiers == KeyModifiers.Meta).Command).IsSameReferenceAs(host.Vm.OpenSearchCommand);
+        await Assert.That(bindings.Any(k => k.Gesture!.KeyModifiers == KeyModifiers.Control)).IsEqualTo(!ShortcutLabels.UsesCommandKey);
+        if (!ShortcutLabels.UsesCommandKey) {
+            await Assert.That(bindings.Single(k => k.Gesture!.KeyModifiers == KeyModifiers.Control).Command).IsNotSameReferenceAs(host.Vm.OpenSearchCommand);
+        }
+
+        const string id = "0123456789abcdef0123456789abcdef";
+        host.Vm.OpenSession(id);
+        service.Agents.AddOrUpdate(WorkspaceFixtures.Agent(id, "claude", true, "/repo/myproj", sessionId: id));
+        host.Settle();
+        var workspace = (WorkspaceViewModel)host.Vm.CurrentWorkspace!;
+        await Assert.That(yield.CanExecute(null)).IsTrue();
+        workspace.ShowTerminalCommand.Execute().Subscribe();
+        host.Settle();
+        var terminal = host.Window.GetVisualDescendants().OfType<TerminalControl>().Single();
+        await Assert.That(terminal.Focus()).IsTrue();
+
+        var passedThrough = new KeyEventArgs { Key = Key.K, KeyModifiers = KeyModifiers.Control };
+        new KeyBinding { Gesture = new KeyGesture(Key.K, KeyModifiers.Control), Command = yield }.TryHandle(passedThrough);
+
+        await Assert.That(yield.CanExecute(null)).IsFalse();
+        await Assert.That(passedThrough.Handled).IsFalse();
+        await Assert.That(host.Vm.IsSearchOpen).IsFalse();
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Search_menu_item_runs_the_open_search_command() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var host = new SearchWindowHost();
+        var windowMenu = new AppMenuBar(new RecordingOpener(), () => [], () => null).Build(host.Window)
+            .Items.OfType<NativeMenuItem>().Single(i => i.Header == "Window").Menu!;
+        var items = windowMenu.Items.OfType<NativeMenuItem>().ToList();
+        var search = items.Single(i => i.Header == "Search Sessions");
+
+        await Assert.That(search.Command).IsSameReferenceAs(host.Vm.OpenSearchCommand);
+        await Assert.That(search.Gesture).IsEqualTo(new KeyGesture(Key.K, KeyModifiers.Meta));
+        await Assert.That(items.IndexOf(search)).IsEqualTo(items.FindIndex(i => i.Header == "Refresh") + 1);
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task New_session_button_and_shortcut_run_new_session() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var host = new SearchWindowHost();
+        var button = host.Named<Button>("RailNewSessionButton");
+        var shortcuts = host.Window.KeyBindings.Where(k => k.Gesture is { Key: Key.N }).ToArray();
+
+        await Assert.That(button.Command).IsSameReferenceAs(host.Vm.NewSessionCommand);
+        await Assert.That(shortcuts.Length).IsEqualTo(2);
+        await Assert.That(shortcuts.All(k => ReferenceEquals(k.Command, host.Vm.NewSessionCommand))).IsTrue();
+    });
 }

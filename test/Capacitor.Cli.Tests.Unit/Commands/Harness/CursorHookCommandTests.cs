@@ -116,8 +116,8 @@ public class CursorHookCommandTests {
         await Assert.That(capture.GetCapturedError()).DoesNotContain("kcap login");
     }
 
-    /// <summary>Cursor's live post spools any non-2xx, so the drain is the only place a 401 can lose an
-    /// entry: it must stay spooled and land once the server accepts the credential again.</summary>
+    /// <summary>Cursor's live post spools a 401, so the drain is the only place one can lose an entry: it
+    /// must stay spooled and land once the server accepts the credential again.</summary>
     [Test]
     public async Task spooled_entry_that_hits_a_401_on_drain_is_replayed_once_the_server_accepts() {
         using var rejecting = new Fixture(Config.Root, postStatus: HttpStatusCode.Unauthorized);
@@ -143,6 +143,17 @@ public class CursorHookCommandTests {
         var files = fx.SpoolFiles.ToList();
         await Assert.That(files.Count).IsEqualTo(1);
         await Assert.That(files[0]).EndsWith(Sid + ".jsonl");
+    }
+
+    /// <summary>A 410 is the server saying the owner deleted the session: a replay would be refused the
+    /// same way, so the event is not kept for one.</summary>
+    [Test]
+    public async Task a_post_refused_for_good_is_not_spooled() {
+        using var fx = new Fixture(Config.Root, postStatus: HttpStatusCode.Gone);
+        await fx.HandleAsync($$"""{"hook_event_name":"sessionEnd","session_id":"{{Sid}}"}""");
+
+        await Assert.That(fx.SentToHook("session-end/cursor")).IsNotNull();
+        await Assert.That(fx.SpoolFiles).IsEmpty();
     }
 
     [Test]

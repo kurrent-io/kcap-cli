@@ -8,6 +8,7 @@ namespace Capacitor.Remote.Models;
 [JsonSerializable(typeof(List<DaemonInfo>))]
 [JsonSerializable(typeof(DaemonAccountsDto))]
 [JsonSerializable(typeof(List<DaemonAccountsDto>))]
+[JsonSerializable(typeof(ListedAccountDto))]
 [JsonSerializable(typeof(AcpInteractionOption))]
 [JsonSerializable(typeof(AcpInteractionOption[]))]
 [JsonSerializable(typeof(PermissionResponsePayload))]
@@ -18,5 +19,8 @@ namespace Capacitor.Remote.Models;
 [JsonSerializable(typeof(DiscardQueuedInputRequest))]
 [JsonSerializable(typeof(Dictionary<string, VendorModelOptionDto[]>))]
 [JsonSerializable(typeof(RepoSessionsResponseDto))]
+[JsonSerializable(typeof(RepoSessionPullRequestDto[]))]
 [JsonSerializable(typeof(SessionOwnerOptionDto[]))]
+[JsonSerializable(typeof(SearchResponseDto))]
+[JsonSerializable(typeof(ActivitySessionDto))]
 public partial class RemoteModelsJsonContext : JsonSerializerContext;

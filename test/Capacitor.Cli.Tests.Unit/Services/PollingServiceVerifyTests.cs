@@ -24,6 +24,8 @@ public class PollingServiceVerifyTests {
         public bool OldRunning;
         public int? OldJobPid = OldDaemonPid;
         public bool OldUninstallFails;
+        public bool InstallEndsOldDaemon;
+        public bool InstallEndsReplacedDaemon { get; init; }
         public bool Unanswered;
         public bool OldUnanswered;
         public IReadOnlyDictionary<string, string>? OldEnv;
@@ -47,6 +49,7 @@ public class PollingServiceVerifyTests {
         public bool Install(ServiceSpec spec, bool startNow, out string? error) {
             Calls.Add("install");
             Registered = UnitPresent = true;
+            if (InstallEndsOldDaemon) OldRunning = false;
             if (startNow) Launch();
             error = null;
             return true;
@@ -136,6 +139,60 @@ public class PollingServiceVerifyTests {
 
     static Dictionary<string, string> Retired(string? profile) =>
         profile is null ? [] : new() { ["KCAP_PROFILE"] = profile };
+
+    /// A daemon started by hand holds the name with no unit: replacing asks it to end before installing,
+    /// or the service's own daemon would be refused the name
+    [Test]
+    public async Task Replace_ends_a_daemon_started_by_hand_before_installing() {
+        var manager = new FakeManager();
+        int? manualPid = 777;
+        var ended = new List<string>();
+        var verify = new PollingServiceVerify(Daemons.Store, manager,
+            _ => manager.Running ? DaemonPid : manualPid,
+            (_, _) => Task.FromResult(manager.Running ? Hello() : new HelloProbeResult(false, null, null, null)),
+            TimeProvider.System, () => true, ShortBudget, endsManualOwner: true, endDaemon: (name, _) => {
+                ended.Add(name);
+                manager.Calls.Add("end-manual");
+                manualPid = null;
+                return Task.CompletedTask;
+            });
+
+        var exit = await verify.InstallVerifiedAsync(Spec(), replace: true, expectedVersion: null);
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.Ok);
+        await Assert.That(ended).IsEquivalentTo([Id]);
+        await Assert.That(manager.Calls).IsEquivalentTo(["end-manual", "install"], TUnit.Assertions.Enums.CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task A_daemon_started_by_hand_that_will_not_end_stops_the_replace_before_anything_is_installed() {
+        var manager = new FakeManager();
+        var verify = new PollingServiceVerify(Daemons.Store, manager,
+            _ => 777,
+            (_, _) => Task.FromResult(new HelloProbeResult(false, null, null, null)),
+            TimeProvider.System, () => true, ShortBudget, endsManualOwner: true, endDaemon: (_, _) => Task.CompletedTask);
+
+        var exit = await verify.InstallVerifiedAsync(Spec(), replace: true, expectedVersion: null);
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.StopUnconfirmed);
+        await Assert.That(manager.Calls).IsEmpty();
+    }
+
+    /// Off Windows a replace never ends a daemon started by hand: systemd's path is the one it always was
+    [Test]
+    public async Task Without_the_windows_flag_a_daemon_started_by_hand_is_left_alone() {
+        var manager = new FakeManager();
+        var ended = 0;
+        var verify = new PollingServiceVerify(Daemons.Store, manager,
+            _ => manager.Running ? DaemonPid : 777,
+            (_, _) => Task.FromResult(manager.Running ? Hello() : new HelloProbeResult(false, null, null, null)),
+            TimeProvider.System, () => true, ShortBudget, endDaemon: (_, _) => { ended++; return Task.CompletedTask; });
+
+        await verify.InstallVerifiedAsync(Spec(), replace: true, expectedVersion: null);
+
+        await Assert.That(ended).IsEqualTo(0);
+        await Assert.That(manager.Calls[0]).IsEqualTo("install");
+    }
 
     /// Hello and the pid are separate readings, so a single agreeing reading can pair a hello from one
     /// daemon with its replacement's pid. A pid file that changes on every read must never be confirmed.
@@ -302,6 +359,34 @@ public class PollingServiceVerifyTests {
         await Assert.That(exit).IsEqualTo(VerifyExit.RetireRefused);
         await Assert.That(manager.Calls).DoesNotContain("uninstall:old-name");
         await Assert.That(manager.OldRegistered).IsTrue();
+    }
+
+    /// The Windows service's install stops the old daemon itself, which closes the fence before its commit
+    [Test]
+    public async Task A_rename_retires_the_old_name_when_the_install_already_ended_its_daemon() {
+        var manager = new FakeManager { OldRegistered = true, OldRunning = true, InstallEndsOldDaemon = true, InstallEndsReplacedDaemon = true };
+        var fence   = new FakeFence(manager) { CommitAnswers = false };
+
+        var exit = await Verify(manager, retired: Retired("work"), fence: fence)
+            .InstallVerifiedAsync(Spec(), replace: true, expectedVersion: null, retireServiceId: "old-name");
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.Ok);
+        await Assert.That(manager.Calls).IsEquivalentTo(
+            ["fence-acquire:old-name", "install", "fence-commit", "uninstall:old-name", "fence-close"],
+            TUnit.Assertions.Enums.CollectionOrdering.Matching);
+    }
+
+    /// An old daemon that vanished under a manager that did not end it may be its supervisor's relaunch on the way
+    [Test]
+    public async Task A_rename_keeps_refusing_an_unanswered_commit_when_the_manager_did_not_end_the_old_daemon() {
+        var manager = new FakeManager { OldRegistered = true, OldRunning = true, InstallEndsOldDaemon = true };
+        var fence   = new FakeFence(manager) { CommitAnswers = false };
+
+        var exit = await Verify(manager, retired: Retired("work"), fence: fence)
+            .InstallVerifiedAsync(Spec(), replace: true, expectedVersion: null, retireServiceId: "old-name");
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.RetireRefused);
+        await Assert.That(manager.Calls).DoesNotContain("uninstall:old-name");
     }
 
     /// A failed uninstall leaves the old daemon running, so the fence it committed is undone.

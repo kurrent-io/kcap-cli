@@ -114,7 +114,7 @@ public class WizardCompositionLocalPathTests {
         public ShimPreflight Preflight(string target) => ShimPreflight.Installable;
         public Task<ShimResult> InstallAsync(string target, CancellationToken ct) {
             Targets.Add(target);
-            return Task.FromResult(new ShimResult(ShimOutcome.Installed, null, null));
+            return Task.FromResult(new ShimResult(ShimOutcome.Installed, null));
         }
     }
 
@@ -212,7 +212,7 @@ public class WizardCompositionLocalPathTests {
         harness.Cli.SetupLocalBehavior = async (onLine, _, _) => {
             await release.Task;
             File.Delete(root.JournalPath);
-            onLine(new StreamedLine(ProcessStreamKind.Stdout, LocalSetupScript.Failed("start_failed")));
+            onLine(new StreamedLine(ProcessStreamKind.Stdout, LocalSetupScript.Failed("download_failed")));
 
             return new StreamingResult(1, false, []);
         };

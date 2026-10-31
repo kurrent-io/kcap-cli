@@ -173,7 +173,7 @@ sealed class OpenCodeHookCommand(
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
         var workItemsNudge = canConsumeFragment
             ? HarnessNudgeEmitter.Combine(
-                SessionNudges.Resolve(HarnessId.OpenCode, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience),
+                SessionNudges.Resolve(HarnessId.OpenCode, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience, cwd, home),
                 // Inside the gate, unlike the harness nudge below: resolving takes the one-shot
                 // marker, and an older plugin discards this stdout, so outside it the notice would be
                 // spent on a session that never shows it.
@@ -264,7 +264,7 @@ sealed class OpenCodeHookCommand(
             return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 LifecycleFor(sessionId),
                 new SessionStartMemoryContextRequest(Url, scopeRoot, disabled, budget, CancellationToken.None,
-                    GuidelinesDisabled: guidelinesDisabled, FlowsDisabled: flowsDisabled));
+                    GuidelinesDisabled: guidelinesDisabled, Vendor: HarnessId.OpenCode.VendorId, WakeUpsWanted: hosted.IsHosted, FlowsDisabled: flowsDisabled));
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
         }

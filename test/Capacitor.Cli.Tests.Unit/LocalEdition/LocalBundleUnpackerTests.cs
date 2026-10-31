@@ -20,7 +20,7 @@ public class LocalBundleUnpackerTests {
         await Assert.That(ex.Message).Contains(entryFragment);
     }
 
-    static (string Name, TarEntryType Type, string? Content, string? LinkName) Server => RegularFile($"./{LocalServerUnit.ServerFileName}", "#!/bin/sh\n");
+    static (string Name, TarEntryType Type, string? Content, string? LinkName) Server => RegularFile($"./{LocalServerConditions.ServerFileName}", "#!/bin/sh\n");
 
     [Test]
     public async Task A_dot_prefixed_tree_with_a_hard_link_unpacks() {

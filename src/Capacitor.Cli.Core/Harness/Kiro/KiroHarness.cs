@@ -35,6 +35,7 @@ public sealed class KiroHarness : IHarness<KiroHarness> {
     public HarnessSignals Signals => new() {
         LaunchSignal   = probe => probe.Finds(CliBinary) || probe.Finds(IdeBinary),
         UserDataSignal = Paths.HasUserData,
+        AppSignal      = apps => apps.Finds("Kiro.app", "Kiro CLI.app", "KiroCrew.app", "Kiro", "kiro-cli", "kirocrew-desktop"),
         Wired          = () => KiroHooksInstaller.IsInstalled(Paths.KcapAgentJson),
     };
 }

@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -175,9 +176,13 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
         if (exit != 0 || scope != "user") return exit;
 
+        var defaultHome   = env.Harnesses.Of<ClaudeHarness>().Paths.Home;
         var accountsWired = await WireUserAccountsAsync(
-            HarnessId.Claude, env.Harnesses.Of<ClaudeHarness>().Paths.Home,
+            HarnessId.Claude, defaultHome,
             adoptDefault: !refreshOnly || defaultInstalled, refreshOnly, enableNetwork: false);
+
+        // After adoption, which is what registers the default directory.
+        if (!skipDefault) accountsWired &= await DefaultStatusLineAsync(defaultHome, install: true);
 
         return accountsWired || refreshOnly ? 0 : 1;
     }
@@ -188,8 +193,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (pluginPath is null) {
             if (refreshOnly) { _refreshFailed = true; return 0; }
 
-            await env.Stderr.WriteLineAsync("Plugin directory not found. Re-install kcap:");
-            await env.Stderr.WriteLineAsync("  " + InstallProvenance.ReinstallCommand());
+            await env.Stderr.WriteLineAsync("Plugin directory not found. " + InstallProvenance.ReinstallHint());
 
             return 1;
         }
@@ -231,12 +235,47 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             ? Path.Combine(workdir.Path, ".claude", "settings.local.json")
             : env.Harnesses.Of<ClaudeHarness>().Paths.UserSettings;
 
+        var defaultHome = env.Harnesses.Of<ClaudeHarness>().Paths.Home;
+
+        // Before the layout goes, while the default directory is still registered.
+        var statusLineRestored = scope != "user" || await DefaultStatusLineAsync(defaultHome, install: false);
+
         var exit = await RemoveClaudeLayout(settingsPath, scope);
 
-        if (scope == "user" && !await UnwireUserAccountsAsync(HarnessId.Claude, env.Harnesses.Of<ClaudeHarness>().Paths.Home))
+        if (scope == "user" && !await UnwireUserAccountsAsync(HarnessId.Claude, defaultHome))
             exit = 1;
 
+        if (!statusLineRestored) exit = 1;
+
         return exit;
+    }
+
+    /// <summary>The registered default directory's status line, which <see cref="UserAccountsAsync"/> leaves out.
+    /// False only for a fatal failure; an unusable registry is the usual warning.</summary>
+    async Task<bool> DefaultStatusLineAsync(string defaultDirectory, bool install) {
+        if (env.Accounts is not { } store) return true;
+
+        WiringStep? step;
+        try {
+            step = await LockedAsync(() =>
+                store.Load().Accounts.FirstOrDefault(a => a.Vendor == HarnessId.Claude && AccountDirectory.Same(a.Directory, defaultDirectory)) is { } account
+                    ? install ? AccountWiring.WireStatusLine(account.Id, env.Home, store) : AccountWiring.UnwireStatusLine(account.Id, env.Home, store)
+                    : new WiringStep("statusline", true, "default directory not registered"));
+        } catch (Exception ex) when (IsRegistryFailure(ex)) {
+            await RegistryUnavailableAsync(ex);
+
+            return true;
+        }
+
+        if (step is null || step.Succeeded) return true;
+
+        var fatal = AccountWiring.HasFatalFailure([step]);
+        _refreshFailed |= fatal;
+        await env.Stderr.WriteLineAsync(fatal
+            ? $"Could not {(install ? "wire" : "restore")} the Claude status line in {defaultDirectory}: {step.Name}: {step.Detail}"
+            : $"Warning: the Claude status line in {defaultDirectory}: {step.Name}: {step.Detail}");
+
+        return !fatal;
     }
 
     async Task<int> RemoveClaudeLayout(string settingsPath, string scope) {
@@ -320,7 +359,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
             await env.Stderr.WriteLineAsync(
                 "Cannot install agent skills: kcap plugin folder not found. " +
-                "Re-install kcap: " + InstallProvenance.ReinstallCommand()
+                InstallProvenance.ReinstallHint()
             );
 
             return 1;
@@ -333,11 +372,13 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
             await env.Stderr.WriteLineAsync(
                 $"Cannot install agent skills: 'skills' folder missing from {pluginPath}. " +
-                "Re-install kcap: " + InstallProvenance.ReinstallCommand()
+                InstallProvenance.ReinstallHint()
             );
 
             return 1;
         }
+
+        var consumers = refreshOnly ? null : SharedSkillsConsumers.Read(env.Agents.UserSkillsDir, ConfiguredSkillsConsumers);
 
         if (!AgentsSkillsInstaller.Install(skillsSource, env.Agents.UserSkillsDir)) {
             if (refreshOnly) { _refreshFailed = true; return 0; }
@@ -346,6 +387,9 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
             return 1;
         }
+
+        if (consumers is not null)
+            SharedSkillsConsumers.Write(env.Agents.UserSkillsDir, consumers.Append(SharedSkillsConsumers.Explicit));
 
         await env.Stdout.WriteLineAsync(
             refreshOnly
@@ -358,12 +402,19 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         return 0;
     }
 
+    /// <summary>The explicit removal: every consumer is forgotten, so the integrations still configured
+    /// lose the skills too, and the output names them.</summary>
     async Task<int> RemoveSkills(string[] _) {
-        var agents = AgentsSkillsInstaller.Remove(env.Agents.UserSkillsDir);
+        var others = (SharedSkillsConsumers.ReadRecorded(env.Agents.UserSkillsDir) ?? FrozenSet<string>.Empty)
+            .Where(c => c != SharedSkillsConsumers.Explicit)
+            .ToList();
+        var agents = SharedSkillsConsumers.Clear(env.Agents.UserSkillsDir);
 
-        if (agents.RemovedAny) {
-            await env.Stdout.WriteLineAsync($"Agent skills removed (user: {env.Agents.UserSkillsDir})");
-        }
+        await ReportSharedSkillsRemovalAsync(agents);
+
+        if (agents.RemovedAny && others.Count > 0)
+            await env.Stdout.WriteLineAsync(
+                $"{ConsumerNames(others)} also used them; reinstall that integration to put them back.");
 
         var legacy = AgentsSkillsInstaller.CleanLegacyCodexSkills(env.Harnesses.Of<CodexHarness>().Paths.SkillsDir);
 
@@ -373,7 +424,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             return 0;
         }
 
-        if (!agents.RemovedAny && !legacy.RemovedAny) {
+        if (!agents.RemovedAny && !legacy.RemovedAny && agents.Preserved.Count == 0) {
             await env.Stdout.WriteLineAsync("Nothing to remove — agent skills were not installed.");
         }
 
@@ -439,7 +490,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (pluginPath is null) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install Codex plugin: kcap plugin folder not found. " +
-                "Re-install kcap: " + InstallProvenance.ReinstallCommand()
+                InstallProvenance.ReinstallHint()
             );
 
             return 1;
@@ -450,7 +501,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!Directory.Exists(skillsSource)) {
             await env.Stderr.WriteLineAsync(
                 $"Cannot install Codex plugin: 'skills' folder missing from {pluginPath}. " +
-                "Re-install kcap: " + InstallProvenance.ReinstallCommand()
+                InstallProvenance.ReinstallHint()
             );
 
             return 1;
@@ -468,7 +519,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             await env.Stderr.WriteLineAsync(
                 $"Cannot install Codex plugin: missing skill folder(s) under {skillsSource}: "
               + string.Join(", ", missingSkills)
-              + ". Re-install kcap: " + InstallProvenance.ReinstallCommand()
+              + ". " + InstallProvenance.ReinstallHint()
             );
 
             return 1;
@@ -490,11 +541,15 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
         // Skills are user-scoped only. Written to ~/.agents/skills/ so they
         // work across Codex and other compatible agents.
+        var skillsConsumers = SharedSkillsConsumers.Read(env.Agents.UserSkillsDir, ConfiguredSkillsConsumers);
+
         if (!AgentsSkillsInstaller.Install(skillsSource, env.Agents.UserSkillsDir)) {
             await env.Stderr.WriteLineAsync("Could not install agent skills.");
 
             return 1;
         }
+
+        SharedSkillsConsumers.Write(env.Agents.UserSkillsDir, skillsConsumers.Append(HarnessId.Codex.VendorId));
 
         await env.Stdout.WriteLineAsync($"Agent skills installed (user: {env.Agents.UserSkillsDir})");
 
@@ -606,11 +661,8 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             await env.Stdout.WriteLineAsync($"Codex hooks removed ({scope}: {hooksPath})");
         }
 
-        // Remove the kcap MCP server entries we wrote to config.toml. These live in the
-        // user-scoped ~/.codex/config.toml, so ONLY a user-scope uninstall removes them — a
-        // project-scope remove must not nuke the user-global servers that every other repo
-        // relies on. (Mirrors the sandbox network policy, which is user-global and also
-        // deliberately left in place on remove.)
+        // config.toml is user-global, so only a user-scope remove touches its MCP servers and
+        // sandbox network keys: every other repository relies on them.
         var mcpChange = scope == "user"
             ? CodexConfigToml.UnregisterKcapMcpServers(codex.ConfigToml)
             : CodexConfigToml.Change.Unchanged;
@@ -634,27 +686,57 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             await env.Stderr.WriteLineAsync($"Could not update {codex.ConfigToml} to remove Codex MCP servers.");
         }
 
-        var agents = AgentsSkillsInstaller.Remove(env.Agents.UserSkillsDir);
+        var network = scope == "user"
+            ? CodexConfigToml.RestoreNetworkAccess(codex.ConfigToml, env.CodexNetworkAllowDomains())
+            : CodexNetworkRestore.Nothing;
+        var networkFailed = network.Change == CodexConfigToml.Change.Failed;
 
-        if (agents.RemovedAny) {
-            await env.Stdout.WriteLineAsync($"Agent skills removed (user: {env.Agents.UserSkillsDir})");
-        }
+        await ReportNetworkRestoreAsync(network, codex.ConfigToml);
+
+        if (scope == "user") CodexConfigToml.DeleteEmptyOwnershipLedger(codex.ConfigToml);
+
+        // The skills are user-wide, so a project remove leaves them to a user-scope Codex still installed.
+        var agents = scope == "user" || !CodexHooksInstaller.IsInstalled(codex.UserHooksJson)
+            ? await ReleaseSharedSkillsAsync(HarnessId.Codex)
+            : new RemovalResult(false, false);
 
         var legacy = AgentsSkillsInstaller.CleanLegacyCodexSkills(codex.SkillsDir);
 
         var accountsFailed = scope == "user" && !await UnwireUserAccountsAsync(HarnessId.Codex, codex.Home);
 
-        if (hooksFailed || mcpFailed || agents.HadErrors || legacy.HadErrors || accountsFailed) {
+        if (hooksFailed || mcpFailed || networkFailed || agents.HadErrors || legacy.HadErrors || accountsFailed) {
             await env.Stdout.WriteLineAsync("Removal incomplete — see errors above.");
 
             return 1;
         }
 
-        if (!hooksRemoved && !mcpChanged && !mcpPreserved && !agents.RemovedAny && !legacy.RemovedAny) {
+        if (!hooksRemoved && !mcpChanged && !mcpPreserved && network.Restored.Count == 0 && network.Kept.Count == 0
+         && !agents.RemovedAny && !legacy.RemovedAny) {
             await env.Stdout.WriteLineAsync("Nothing to remove — hooks and skills were not installed.");
         }
 
         return 0;
+    }
+
+    async Task ReportNetworkRestoreAsync(CodexNetworkRestore network, string configPath) {
+        if (network.Change == CodexConfigToml.Change.Failed) {
+            await env.Stderr.WriteLineAsync(
+                $"Could not update {configPath} to undo kcap's Codex sandbox network settings; they were left in place.");
+
+            return;
+        }
+
+        if (network.Restored.Count > 0)
+            await env.Stdout.WriteLineAsync($"Codex sandbox network settings restored ({configPath}): {string.Join("; ", network.Restored)}");
+
+        if (network.Kept.Count == 0) return;
+
+        await env.Stderr.WriteLineAsync(
+            $"Warning: kept Codex sandbox network settings in {configPath} that kcap cannot prove are safe to undo:");
+        foreach (var kept in network.Kept)
+            await env.Stderr.WriteLineAsync($"  {kept}");
+        await env.Stderr.WriteLineAsync(
+            "Review [sandbox_workspace_write] and [features.network_proxy] there and change them if you no longer want the sandbox to reach these hosts.");
     }
 
     /// <summary>Every registered account of <paramref name="vendor"/> other than the
@@ -742,14 +824,14 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             if (account.Vendor != HarnessId.Claude && MarkerIsCurrent(account) && !RefusedByCodex(account)) return [];
         }
 
-        return AccountWiring.Wire(account, env.Home, options);
+        return AccountWiring.Wire(account, env.Home, options, env.Accounts!);
     }
 
     async Task<bool> UnwireUserAccountsAsync(HarnessId vendor, string defaultDirectory) {
         var ok = true;
 
         foreach (var account in await UserAccountsAsync(vendor, defaultDirectory, adoptDefault: false)) {
-            var steps = await LockedAsync(() => AccountWiring.Unwire(account, env.Home));
+            var steps = await LockedAsync(() => AccountWiring.Unwire(account, env.Home, env.Accounts!));
             if (steps is null) break;
 
             ok &= await ReportAsync(account, steps, "Unwired", "unwire");
@@ -838,7 +920,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             if (!refreshOnly && !KcapOnPath) {
                 await env.Stderr.WriteLineAsync(
                     "Cannot install Cursor hooks: 'kcap' is not on PATH. "
-                  + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
+                  + InstallProvenance.NotOnPathHint()
                 );
                 return 1;
             }
@@ -861,8 +943,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!args.Contains("--skip-cursor-mcp"))
             await RegisterCursorMcpServersAsync();
 
-        if (!args.Contains("--skip-cursor-skills"))
-            await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
+        await SharedSkillsAsync(HarnessId.Cursor, args, refreshOnly);
 
         if (toolsOnly && !refreshOnly) await NoteCaptureSkippedAsync("Cursor");
 
@@ -928,7 +1009,9 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             await env.Stderr.WriteLineAsync($"Could not update {cursor.UserMcpJson} to remove Cursor MCP servers.");
         }
 
-        return hooksFailed || mcpFailed ? 1 : 0;
+        var skills = await ReleaseSharedSkillsAsync(HarnessId.Cursor);
+
+        return hooksFailed || mcpFailed || skills.HadErrors ? 1 : 0;
     }
 
     /// <summary>
@@ -1019,7 +1102,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!refreshOnly && (!toolsOnly || !skipMcp) && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install the Pi extension: 'kcap' is not on PATH. "
-              + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
+              + InstallProvenance.NotOnPathHint()
             );
 
             return 1;
@@ -1060,8 +1143,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!skipInstructions)
             await InstallPiInstructionsAsync();
 
-        if (!args.Contains("--skip-pi-skills"))
-            await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
+        await SharedSkillsAsync(HarnessId.Pi, args, refreshOnly);
 
         if (toolsOnly && !refreshOnly) await NoteCaptureSkippedAsync("Pi");
 
@@ -1160,6 +1242,8 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             failed = true;
         }
 
+        if ((await ReleaseSharedSkillsAsync(HarnessId.Pi)).HadErrors) failed = true;
+
         return failed ? 1 : 0;
     }
 
@@ -1184,7 +1268,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!refreshOnly && !toolsOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install the OpenCode plugin: 'kcap' is not on PATH. "
-              + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
+              + InstallProvenance.NotOnPathHint()
             );
 
             return 1;
@@ -1230,8 +1314,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!args.Contains("--skip-opencode-instructions"))
             await InstallOpenCodeInstructionsAsync();
 
-        if (!args.Contains("--skip-opencode-skills"))
-            await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
+        await SharedSkillsAsync(HarnessId.OpenCode, args, refreshOnly);
 
         if (toolsOnly && !refreshOnly) await NoteCaptureSkippedAsync("OpenCode");
 
@@ -1324,7 +1407,9 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             await env.Stderr.WriteLineAsync($"Could not update {opencode.AgentsMd} to remove OpenCode instructions.");
         }
 
-        return pluginFailed || mcpFailed || instrFailed ? 1 : 0;
+        var skills = await ReleaseSharedSkillsAsync(HarnessId.OpenCode);
+
+        return pluginFailed || mcpFailed || instrFailed || skills.HadErrors ? 1 : 0;
     }
 
     // ── Antigravity — a named block in Antigravity's hooks.json ────────
@@ -1347,7 +1432,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!refreshOnly && !toolsOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install Antigravity hooks: 'kcap' is not on PATH. "
-              + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
+              + InstallProvenance.NotOnPathHint()
             );
 
             return 1;
@@ -1388,8 +1473,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             await InstallAntigravityInstructionsAsync();
 
         // Install kcap skills into ~/.gemini/skills — Antigravity does NOT read ~/.agents/skills.
-        if (!args.Contains("--skip-antigravity-skills"))
-            await InstallAntigravitySkillsAsync(refreshOnly);
+        await OwnSkillsAsync(agy.SkillsDir, "Antigravity", args.Contains("--skip-antigravity-skills"), refreshOnly);
 
         if (toolsOnly && !refreshOnly) await NoteCaptureSkippedAsync("Antigravity");
 
@@ -1447,34 +1531,122 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     /// Never fails the install: hooks and MCP registration are what make capture work, so a skills
     /// copy that fails is a warning and the vendor is still wired up.
     /// </remarks>
-    async Task InstallVendorSkillsAsync(
+    async Task<bool> InstallVendorSkillsAsync(
             string targetDir, string label, bool refreshOnly) {
-        if (refreshOnly && !AgentsSkillsInstaller.IsInstalled(targetDir)) return;
+        if (refreshOnly && !AgentsSkillsInstaller.IsInstalled(targetDir)) return false;
 
         // The sweep runs even when the tree is already current: a Cursor-first install stamps the
         // marker, so gating it on the copy would mean the stale dir outlives every later install.
         if (targetDir == env.Agents.UserSkillsDir)
             AgentsSkillsInstaller.CleanLegacyCodexSkills(env.Harnesses.Of<CodexHarness>().Paths.SkillsDir);
 
-        if (AgentsSkillsInstaller.IsCurrent(targetDir)) return;
+        if (AgentsSkillsInstaller.IsCurrent(targetDir)) return true;
 
         var pluginPath = env.ResolvePluginPath();
         var src        = pluginPath is null ? null : Path.Combine(pluginPath, "skills");
         if (src is null || !Directory.Exists(src)) {
             if (!refreshOnly)
                 await env.Stderr.WriteLineAsync($"Warning: could not install {label} skills — kcap plugin 'skills' folder not found.");
+            return false;
+        }
+
+        if (AgentsSkillsInstaller.Install(src, targetDir)) {
+            await env.Stdout.WriteLineAsync($"{label} skills installed ({targetDir}).");
+            return true;
+        }
+
+        await env.Stderr.WriteLineAsync($"Warning: could not install {label} skills to {targetDir}.");
+        return false;
+    }
+
+    /// <summary>
+    /// The shared <c>~/.agents/skills</c> half of a vendor install. Installing records the vendor as a
+    /// consumer; its skip flag releases it, and the skills go only once no other integration uses them.
+    /// A refresh changes neither.
+    /// </summary>
+    async Task SharedSkillsAsync(HarnessId vendor, string[] args, bool refreshOnly) {
+        var dir = env.Agents.UserSkillsDir;
+
+        if (!args.Contains($"--skip-{vendor.VendorId}-skills")) {
+            var before = refreshOnly ? null : SharedSkillsConsumers.Read(dir, ConfiguredSkillsConsumers);
+
+            if (await InstallVendorSkillsAsync(dir, "Agent", refreshOnly) && before is not null)
+                SharedSkillsConsumers.Write(dir, before.Append(vendor.VendorId));
+
             return;
         }
 
-        if (AgentsSkillsInstaller.Install(src, targetDir))
-            await env.Stdout.WriteLineAsync($"{label} skills installed ({targetDir}).");
-        else
-            await env.Stderr.WriteLineAsync($"Warning: could not install {label} skills to {targetDir}.");
+        if (!refreshOnly) await ReleaseSharedSkillsAsync(vendor);
     }
 
-    /// <summary>Antigravity reads <c>~/.gemini/skills</c>, not the agent-agnostic tree.</summary>
-    Task InstallAntigravitySkillsAsync(bool refreshOnly) =>
-        InstallVendorSkillsAsync(env.Harnesses.Of<AntigravityHarness>().Paths.SkillsDir, "Antigravity", refreshOnly);
+    IEnumerable<string> ConfiguredSkillsConsumers() => SharedSkillsConsumerProbe.Configured(env.Harnesses, env.Home);
+
+    /// <summary>
+    /// Drops <paramref name="vendor"/> as a consumer of the shared skills and reports the outcome. Every
+    /// harness reading the folder sees every skill in it, so while another consumer remains the vendor
+    /// keeps seeing them, and the output says so rather than claiming they were turned off.
+    /// </summary>
+    async Task<RemovalResult> ReleaseSharedSkillsAsync(HarnessId vendor) {
+        var dir     = env.Agents.UserSkillsDir;
+        var release = SharedSkillsConsumers.Release(dir, vendor.VendorId, ConfiguredSkillsConsumers);
+
+        if (release.Remaining.Count > 0) {
+            if (AgentsSkillsInstaller.IsInstalled(dir))
+                await env.Stdout.WriteLineAsync(
+                    $"Agent skills kept ({dir}): still used by {ConsumerNames(release.Remaining)}. "
+                  + $"{HarnessRegistry.LabelOf(vendor)} reads the same shared folder, so it can still load them until the last integration using them is removed.");
+
+            return release.Removal;
+        }
+
+        await ReportSharedSkillsRemovalAsync(release.Removal);
+
+        return release.Removal;
+    }
+
+    async Task ReportSharedSkillsRemovalAsync(RemovalResult removal) {
+        var dir = env.Agents.UserSkillsDir;
+
+        if (removal.RemovedAny)
+            await env.Stdout.WriteLineAsync($"Agent skills removed (user: {dir})");
+
+        await ReportKeptEditsAsync(removal, dir);
+    }
+
+    async Task ReportKeptEditsAsync(RemovalResult removal, string dir) {
+        if (removal.Preserved.Count > 0)
+            await env.Stdout.WriteLineAsync(
+                $"Kept {string.Join(", ", removal.Preserved)} in {dir}: changed since kcap installed {(removal.Preserved.Count == 1 ? "it" : "them")}.");
+    }
+
+    static string ConsumerNames(IEnumerable<string> consumers) =>
+        string.Join(", ", consumers.Select(c => HarnessNames.From(c) is { } id
+            ? HarnessRegistry.LabelOf(id)
+            : c == SharedSkillsConsumers.Explicit ? "the standalone `kcap plugin install --skills`" : c));
+
+    /// <summary>
+    /// A skills tree only one vendor reads, under that vendor's skip flag: a fresh install with the flag
+    /// takes back what an earlier install put there, as the shared tree's flag does once nobody else
+    /// needs it. A refresh never changes the choice.
+    /// </summary>
+    async Task OwnSkillsAsync(string targetDir, string label, bool skip, bool refreshOnly) {
+        if (!skip) {
+            await InstallVendorSkillsAsync(targetDir, label, refreshOnly);
+            return;
+        }
+
+        if (refreshOnly) return;
+
+        var removal = AgentsSkillsInstaller.Remove(targetDir);
+
+        if (removal.RemovedAny)
+            await env.Stdout.WriteLineAsync($"{label} skills removed ({targetDir}).");
+        await ReportKeptEditsAsync(removal, targetDir);
+        if (removal.HadErrors) {
+            _refreshFailed = true;
+            await env.Stderr.WriteLineAsync($"Warning: could not fully remove {label} skills from {targetDir}.");
+        }
+    }
 
     /// <summary>
     /// Reports the sessions sampled before the install, once that install has actually landed. Saying
@@ -1587,7 +1759,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!refreshOnly && !toolsOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install Copilot hooks: 'kcap' is not on PATH. "
-              + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
+              + InstallProvenance.NotOnPathHint()
             );
 
             return 1;
@@ -1629,8 +1801,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!args.Contains("--skip-copilot-instructions"))
             await InstallCopilotInstructionsAsync();
 
-        if (!args.Contains("--skip-copilot-skills"))
-            await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
+        await SharedSkillsAsync(HarnessId.Copilot, args, refreshOnly);
 
         if (toolsOnly && !refreshOnly) await NoteCaptureSkippedAsync("Copilot");
 
@@ -1726,7 +1897,9 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             await env.Stderr.WriteLineAsync($"Could not update {copilot.InstructionsMd} to remove Copilot instructions.");
         }
 
-        return hooksFailed || mcpFailed || instrFailed ? 1 : 0;
+        var skills = await ReleaseSharedSkillsAsync(HarnessId.Copilot);
+
+        return hooksFailed || mcpFailed || instrFailed || skills.HadErrors ? 1 : 0;
     }
 
     /// <summary>
@@ -1808,8 +1981,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (toolsOnly) {
             if (!args.Contains("--skip-kiro-mcp"))
                 await RegisterKiroMcpServersAsync(mcpPath);
-            if (!skipSkills)
-                await InstallKiroSkillsAsync(refreshOnly);
+            await KiroSkillsAsync(skipSkills, refreshOnly);
 
             await InstallKiroCrewAsync(refreshOnly, installSkills: !skipSkills, installHook: false);
 
@@ -1822,7 +1994,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!refreshOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install Kiro hooks: 'kcap' is not on PATH. "
-              + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
+              + InstallProvenance.NotOnPathHint()
             );
 
             return 1;
@@ -1869,8 +2041,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         // Install kcap's skills into ~/.kiro/skills so Kiro's agent is steered toward the kcap MCP
         // tools (the cloned agent's resources include skill:///~/.kiro/skills/*/SKILL.md). Independent
         // of the agent clone; non-fatal (a copy error is a warning). Mirrors the Antigravity path.
-        if (!skipSkills)
-            await InstallKiroSkillsAsync(refreshOnly);
+        await KiroSkillsAsync(skipSkills, refreshOnly);
 
         await InstallKiroCrewAsync(refreshOnly, installSkills: !skipSkills, installHook: true);
 
@@ -1885,11 +2056,11 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     /// <summary>
     /// Installs kcap's skills into <c>~/.kiro/skills</c> (as <c>kcap-&lt;name&gt;/SKILL.md</c>) so Kiro's
     /// agent — whose <c>resources</c> include <c>skill:///~/.kiro/skills/*/SKILL.md</c> — is steered
-    /// toward the kcap MCP tools. Fast-path skips when already at the current version. Never fails the
+    /// toward the kcap MCP tools, or takes them back out under <c>--skip-kiro-skills</c>. Never fails the
     /// install: a copy error is a warning.
     /// </summary>
-    Task InstallKiroSkillsAsync(bool refreshOnly) =>
-        InstallVendorSkillsAsync(env.Harnesses.Of<KiroHarness>().Paths.SkillsDir, "Kiro", refreshOnly);
+    Task KiroSkillsAsync(bool skip, bool refreshOnly) =>
+        OwnSkillsAsync(env.Harnesses.Of<KiroHarness>().Paths.SkillsDir, "Kiro", skip, refreshOnly);
 
     /// <summary>
     /// Wires Kiro Crew when it is present: its agents run this same <c>kiro-cli</c> under profiles
@@ -1904,7 +2075,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!crew.IsPresent()) return;
 
         if (!installHook) {
-            if (installSkills) await InstallVendorSkillsAsync(crew.SkillsDir, "Kiro Crew", refreshOnly);
+            await OwnSkillsAsync(crew.SkillsDir, "Kiro Crew", skip: !installSkills, refreshOnly);
 
             return;
         }
@@ -1932,7 +2103,11 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 break;
         }
 
-        if (!installSkills) return;
+        if (!installSkills) {
+            await OwnSkillsAsync(crew.SkillsDir, "Kiro Crew", skip: true, refreshOnly);
+
+            return;
+        }
 
         if (!refreshOnly)
             await InstallVendorSkillsAsync(crew.SkillsDir, "Kiro Crew", refreshOnly: false);
@@ -2263,7 +2438,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!refreshOnly && !toolsOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install Gemini hooks: 'kcap' is not on PATH. "
-              + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
+              + InstallProvenance.NotOnPathHint()
             );
 
             return 1;
@@ -2318,8 +2493,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!args.Contains("--skip-gemini-instructions"))
             await InstallGeminiInstructionsAsync();
 
-        if (!args.Contains("--skip-gemini-skills"))
-            await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
+        await SharedSkillsAsync(HarnessId.Gemini, args, refreshOnly);
 
         if (toolsOnly && !refreshOnly) await NoteCaptureSkippedAsync("Gemini");
 
@@ -2424,7 +2598,9 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             await env.Stderr.WriteLineAsync($"Could not update {gemini.GeminiMd} to remove Gemini instructions.");
         }
 
-        return hooksFailed || mcpFailed || instrFailed ? 1 : 0;
+        var skills = await ReleaseSharedSkillsAsync(HarnessId.Gemini);
+
+        return hooksFailed || mcpFailed || instrFailed || skills.HadErrors ? 1 : 0;
     }
 
     async Task<int> InstallGrok(string[] args) {
@@ -2436,7 +2612,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         // The hook file names the bare `kcap hook --grok` command, so Grok must find kcap on PATH.
         if (!refreshOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
-                "Cannot install Grok hooks: 'kcap' is not on PATH. Re-install kcap: " + InstallProvenance.ReinstallCommand());
+                "Cannot install Grok hooks: 'kcap' is not on PATH. " + InstallProvenance.NotOnPathHint());
             return 1;
         }
 
@@ -2448,8 +2624,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
         await env.Stdout.WriteLineAsync(refreshOnly ? $"Grok hooks refreshed ({hooksPath})" : $"Grok hooks installed ({hooksPath})");
 
-        if (!args.Contains("--skip-grok-skills"))
-            await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
+        await SharedSkillsAsync(HarnessId.Grok, args, refreshOnly);
 
         return 0;
     }
@@ -2457,15 +2632,19 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     async Task<int> RemoveGrok(string[] args) {
         var hooksPath = GetArg(args, "--grok-hooks-path") ?? env.Harnesses.Of<GrokHarness>().Paths.KcapHooksJson;
 
+        var hooksFailed = false;
         try {
             await env.Stdout.WriteLineAsync(GrokHooksInstaller.Remove(hooksPath)
                 ? $"Grok hooks removed ({hooksPath})"
                 : "Grok hooks were not installed.");
-            return 0;
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             await env.Stderr.WriteLineAsync($"Could not remove Grok hooks at {hooksPath}: {ex.Message}");
-            return 1;
+            hooksFailed = true;
         }
+
+        var skills = await ReleaseSharedSkillsAsync(HarnessId.Grok);
+
+        return hooksFailed || skills.HadErrors ? 1 : 0;
     }
 
     async Task<int> InstallVibe(string[] args) {
@@ -2482,7 +2661,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!refreshOnly && !toolsOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install Vibe hooks: 'kcap' is not on PATH. "
-              + "Re-install kcap: " + InstallProvenance.ReinstallCommand());
+              + InstallProvenance.NotOnPathHint());
             return 1;
         }
 
@@ -2511,8 +2690,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!args.Contains("--skip-mistral-vibe-mcp"))
             await RegisterVibeMcpServersAsync(configPath);
 
-        if (!args.Contains("--skip-mistral-vibe-skills"))
-            await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
+        await SharedSkillsAsync(HarnessId.MistralVibe, args, refreshOnly);
 
         if (toolsOnly && !refreshOnly) await NoteCaptureSkippedAsync("Vibe");
 
@@ -2546,7 +2724,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!refreshOnly && !toolsOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install Muse hooks: 'kcap' is not on PATH. "
-              + "Re-install kcap: " + InstallProvenance.ReinstallCommand());
+              + InstallProvenance.NotOnPathHint());
             return 1;
         }
 
@@ -2587,8 +2765,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!freshHookFailure && !hooksIncomplete && !args.Contains("--skip-muse-mcp"))
             await RegisterMuseMcpServersAsync(settingsPath);
 
-        if (!args.Contains("--skip-muse-skills"))
-            await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
+        await SharedSkillsAsync(HarnessId.Muse, args, refreshOnly);
 
         if (toolsOnly && !refreshOnly) await NoteCaptureSkippedAsync("Muse");
 
@@ -2636,7 +2813,9 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         else if (mcpFailed)
             await env.Stderr.WriteLineAsync($"Could not update {settingsPath} to remove Muse MCP servers.");
 
-        return hooksFailed || mcpFailed ? 1 : 0;
+        var skills = await ReleaseSharedSkillsAsync(HarnessId.Muse);
+
+        return hooksFailed || mcpFailed || skills.HadErrors ? 1 : 0;
     }
 
     async Task<int> RemoveVibe(string[] args) {
@@ -2663,7 +2842,9 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         else if (mcpFailed)
             await env.Stderr.WriteLineAsync($"Could not update {configPath} to remove Vibe MCP servers.");
 
-        return hooksFailed || mcpFailed ? 1 : 0;
+        var skills = await ReleaseSharedSkillsAsync(HarnessId.MistralVibe);
+
+        return hooksFailed || mcpFailed || skills.HadErrors ? 1 : 0;
     }
 
     /// <summary>

@@ -26,6 +26,10 @@ public class ServerSessionsServiceTests {
             lock (_lock) _answers[(state, owner, offset)] = new(null, 0);
         }
 
+        public void Refuse(string state, string? owner, int offset, TimeSpan retryAfter) {
+            lock (_lock) _answers[(state, owner, offset)] = new(null, 0, RetryAfter: retryAfter);
+        }
+
         public async Task<ServerSessionsFetch> Fetch(ServerSessionsQuery query, CancellationToken ct) {
             lock (_lock) _calls.Add(query);
             if (Gate is { } gate) await gate(query);
@@ -145,6 +149,115 @@ public class ServerSessionsServiceTests {
             .IsEquivalentTo(fresh[..40].Select(r => r.SessionId).OrderBy(k => k, StringComparer.Ordinal).ToList());
     }
 
+    /// One failed page keeps what the reconcile read before it, and does not take the rows of the
+    /// pages it never reached off the rail.
+    [Test]
+    public async Task A_reconcile_that_fails_a_page_keeps_the_pages_it_read() {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        Connect(lane);
+        await Eventually(() => service.Ended.Count == 20, "first page");
+        await service.ShowMoreAsync();
+        await Eventually(() => service.Ended.Count == 40, "second page");
+
+        listing.Answer("ended", "me", 0, 213, [Row("n1"), .. Rows("s", 1, 19)]);
+        listing.Fail("ended", "me", 20);
+        await service.ReconcileAsync();
+
+        await Assert.That(service.Ended.Lookup("n1").HasValue).IsTrue();
+        await Assert.That(Enumerable.Range(21, 20).All(i => service.Ended.Lookup($"s{i}").HasValue)).IsTrue();
+    }
+
+    /// The server refuses a read past the user's budget and says when to come back: nothing is
+    /// re-requested before then, and the requests in between fold into one read after.
+    [Test]
+    public async Task A_refused_read_holds_every_read_until_the_servers_retry_time() {
+        var (lane, listing, time, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        // Yields, so a read that re-requests without holding spins off the test's thread.
+        listing.Gate = async _ => await Task.Yield();
+        listing.Refuse("ended", "me", 0, TimeSpan.FromSeconds(30));
+        Connect(lane);
+        await Eventually(() => listing.Count("ended", "me", 0) == 1, "refused page");
+        await Eventually(() => service.Live.Count == 2, "live rows kept from the refused reconcile");
+
+        var calls = listing.Calls.Count;
+        lane.SessionPushesSubject.OnNext(new SessionPush(SessionPushKind.ActiveChanged, "live-me"));
+        lane.SessionPushesSubject.OnNext(new SessionPush(SessionPushKind.ActiveChanged, "live-other"));
+        time.Advance(TimeSpan.FromSeconds(29));
+        await Task.Delay(100);
+        await Assert.That(listing.Calls.Count).IsEqualTo(calls);
+
+        listing.Answer("ended", "me", 0, 212, Rows("s", 1, 20));
+        time.Advance(TimeSpan.FromSeconds(2));
+        await Eventually(() => service.Ended.Count == 20, "the held reconcile");
+        await Task.Delay(100);
+        await Assert.That(listing.Count("active", "me", 0)).IsEqualTo(2);
+    }
+
+    /// A refused reconcile goes again after its hold, so a zero Retry-After still waits a second
+    /// rather than re-requesting at once.
+    [Test]
+    public async Task A_zero_retry_time_still_holds_for_a_second() {
+        var (lane, listing, time, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        // Yields, so a read that re-requests without holding spins off the test's thread.
+        listing.Gate = async _ => await Task.Yield();
+        listing.Refuse("ended", "me", 0, TimeSpan.Zero);
+        Connect(lane);
+        await Eventually(() => listing.Count("ended", "me", 0) == 1, "refused page");
+        await Task.Delay(100);
+        await Assert.That(listing.Count("ended", "me", 0)).IsEqualTo(1);
+
+        time.Advance(TimeSpan.FromSeconds(1));
+        await Eventually(() => listing.Count("ended", "me", 0) == 2, "the held reconcile");
+    }
+
+    /// The hold is the refused account's budget: signing in as another account reads at once.
+    [Test]
+    public async Task Another_account_does_not_wait_on_the_previous_accounts_hold() {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        listing.Gate = async _ => await Task.Yield();
+        listing.Refuse("ended", "me", 0, TimeSpan.FromMinutes(10));
+        Connect(lane, "u1");
+        await Eventually(() => listing.Count("ended", "me", 0) == 1, "refused page");
+        await Eventually(() => service.Live.Count == 2, "the refused read published, its hold set");
+
+        listing.Answer("ended", "me", 0, 212, Rows("s", 1, 20));
+        Connect(lane, "u2", epoch: 2);
+
+        await Eventually(() => service.Ended.Count == 20, "the new account's read");
+    }
+
+    /// A refusal that answers the previous account's read, landing after the switch, holds nothing.
+    [Test]
+    public async Task A_refusal_for_the_previous_account_sets_no_hold() {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var endedReads = 0;
+        // The first account's read is held open and refused; the new account's is answered.
+        listing.Gate = async query => {
+            if (query.State == "ended" && Interlocked.Increment(ref endedReads) == 1) await release.Task;
+            else if (query.State == "ended") listing.Answer("ended", "me", 0, 212, Rows("s", 1, 20));
+            await Task.Yield();
+        };
+        listing.Refuse("ended", "me", 0, TimeSpan.FromMinutes(10));
+        Connect(lane, "u1");
+        await Eventually(() => listing.Count("ended", "me", 0) == 1, "the first account's read in flight");
+
+        Connect(lane, "u2", epoch: 2);
+        release.SetResult();
+
+        await Eventually(() => service.Ended.Count == 20, "the new account's read");
+    }
+
     [Test]
     public async Task At_cap_show_more_is_refused() {
         var (lane, listing, _, service) = Build();
@@ -164,6 +277,17 @@ public class ServerSessionsServiceTests {
         var calls = listing.Calls.Count;
         await service.ShowMoreAsync();
         await Assert.That(listing.Calls.Count).IsEqualTo(calls);
+    }
+
+    /// The rail can change scope while the app tears the service down.
+    [Test]
+    public async Task Scope_changes_after_dispose_are_ignored() {
+        var (_, listing, _, service) = Build();
+        service.Dispose();
+
+        service.Scope = RailScope.Team;
+
+        await Assert.That(listing.Calls).IsEmpty();
     }
 
     [Test]
@@ -398,6 +522,29 @@ public class ServerSessionsServiceTests {
 
         service.Keep(null);
         await Eventually(() => latest is { } s && !s.Ended.Any(r => r.SessionId == "s1"), "dropped on deselection");
+    }
+
+    /// The server takes a stopped session out of the live listing before the ended one carries it.
+    /// The open session stays on the rail through that gap, and reads as ended rather than Running.
+    [Test]
+    public async Task A_kept_live_session_the_live_listing_drops_rides_along_as_ended() {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        Connect(lane);
+        await Eventually(() => service.Live.Lookup("live-me").HasValue && service.Ended.Count == 20, "first read");
+        ServerSessionsSnapshot? latest = null;
+        using var sub = service.Snapshots.Subscribe(s => latest = s);
+
+        service.Keep("live-me");
+        listing.Answer("active", "me", 0, 0);
+        listing.Answer("active", null, 0, 1, Row("live-other", "active", "other"));
+        lane.SessionPushesSubject.OnNext(new SessionPush(SessionPushKind.ActiveRemoved, "live-me"));
+
+        await Eventually(() => latest is { } s && s.Live.All(r => r.SessionId != "live-me"), "the live listing dropped it");
+        var kept = latest!.Ended.Single(r => r.SessionId == "live-me");
+        await Assert.That(kept.Status).IsEqualTo("ended");
+        await Assert.That(kept.EndedAt).IsNotNull();
     }
 
     /// A read admitted before the deletion still lists the session; its publication must not bring it back.
@@ -711,5 +858,106 @@ public class ServerSessionsServiceTests {
         time.Advance(TimeSpan.FromSeconds(61));
         await Task.Delay(50);
         await Assert.That(listing.Count("ended", "me", 0)).IsEqualTo(reads + 1);
+    }
+
+    static string? TitleIn(IObservableCache<RepoSessionDto, string> cache, string id) => cache.Lookup(id).Value.Title;
+
+    [Test]
+    public async Task An_applied_rename_shows_in_every_set_at_once_and_holds_over_a_lagging_read() {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        Connect(lane);
+        await Eventually(() => service.Ended.Count == 20 && service.MineLive.Count == 1, "first read");
+
+        service.ApplyRename("live-me", "Renamed");
+        service.ApplyRename("s1", "First");
+        service.ApplyRename("s1", "Second");
+
+        await Assert.That(TitleIn(service.Live, "live-me")).IsEqualTo("Renamed");
+        await Assert.That(TitleIn(service.MineLive, "live-me")).IsEqualTo("Renamed");
+        await Assert.That(TitleIn(service.Ended, "s1")).IsEqualTo("Second");
+
+        listing.Answer("ended", "me", 0, 212, [Row("s1") with { Title = "First" }, .. Rows("s", 2, 19)]);
+        await service.ReconcileAsync();
+        await Assert.That(TitleIn(service.Live, "live-me")).IsEqualTo("Renamed");
+        await Assert.That(TitleIn(service.Ended, "s1")).IsEqualTo("Second");
+
+        listing.Answer("active", "me", 0, 1, Row("live-me", "active") with { Title = "Elsewhere" });
+        listing.Answer("active", null, 0, 2, Row("live-me", "active") with { Title = "Elsewhere" }, Row("live-other", "active", "other"));
+        await service.ReconcileAsync();
+        await Assert.That(TitleIn(service.Live, "live-me")).IsEqualTo("Elsewhere");
+        await Assert.That(TitleIn(service.MineLive, "live-me")).IsEqualTo("Elsewhere");
+    }
+
+    [Test]
+    public async Task An_account_change_drops_the_renames() {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        Connect(lane, "u1", 1);
+        await Eventually(() => service.Ended.Count == 20, "first read");
+        service.ApplyRename("s1", "Renamed");
+
+        Connect(lane, "u2", 2);
+        await service.ReconcileAsync();
+        await Eventually(() => service.Ended.Count == 20, "second account's read");
+
+        await Assert.That(TitleIn(service.Ended, "s1")).IsEqualTo("s1");
+    }
+
+    /// One read lists a session in more than one set; a copy still carrying the replaced title is lag,
+    /// whichever set it is in, so the rename holds in every set and survives into the next read.
+    [Test]
+    [Arguments("mine lags")]
+    [Arguments("unfiltered lags")]
+    public async Task A_rename_holds_while_any_copy_in_the_read_still_lags(string lagging) {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        Connect(lane);
+        await Eventually(() => service.Ended.Count == 20 && service.MineLive.Count == 1, "first read");
+        service.ApplyRename("live-me", "Renamed");
+
+        var old = Row("live-me", "active");
+        var renamed = old with { Title = "Renamed" };
+        listing.Answer("active", "me", 0, 1, lagging == "mine lags" ? old : renamed);
+        listing.Answer("active", null, 0, 2, lagging == "mine lags" ? renamed : old, Row("live-other", "active", "other"));
+        await service.ReconcileAsync();
+        await Assert.That(TitleIn(service.Live, "live-me")).IsEqualTo("Renamed");
+        await Assert.That(TitleIn(service.MineLive, "live-me")).IsEqualTo("Renamed");
+
+        listing.Answer("active", "me", 0, 1, old);
+        listing.Answer("active", null, 0, 2, old, Row("live-other", "active", "other"));
+        await service.ReconcileAsync();
+        await Assert.That(TitleIn(service.Live, "live-me")).IsEqualTo("Renamed");
+        await Assert.That(TitleIn(service.MineLive, "live-me")).IsEqualTo("Renamed");
+    }
+
+    /// A copy with no title has not shown the rename either: the rename holds on every copy.
+    [Test]
+    [Arguments("mine untitled")]
+    [Arguments("unfiltered untitled")]
+    public async Task A_rename_holds_while_any_copy_in_the_read_has_no_title(string untitled) {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        Connect(lane);
+        await Eventually(() => service.Ended.Count == 20 && service.MineLive.Count == 1, "first read");
+        service.ApplyRename("live-me", "Renamed");
+
+        var blank = Row("live-me", "active") with { Title = null };
+        var renamed = blank with { Title = "Renamed" };
+        listing.Answer("active", "me", 0, 1, untitled == "mine untitled" ? blank : renamed);
+        listing.Answer("active", null, 0, 2, untitled == "mine untitled" ? renamed : blank, Row("live-other", "active", "other"));
+        await service.ReconcileAsync();
+        await Assert.That(TitleIn(service.Live, "live-me")).IsEqualTo("Renamed");
+        await Assert.That(TitleIn(service.MineLive, "live-me")).IsEqualTo("Renamed");
+
+        listing.Answer("active", "me", 0, 1, blank);
+        listing.Answer("active", null, 0, 2, blank, Row("live-other", "active", "other"));
+        await service.ReconcileAsync();
+        await Assert.That(TitleIn(service.Live, "live-me")).IsEqualTo("Renamed");
+        await Assert.That(TitleIn(service.MineLive, "live-me")).IsEqualTo("Renamed");
     }
 }

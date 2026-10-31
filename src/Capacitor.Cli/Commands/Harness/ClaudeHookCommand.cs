@@ -257,12 +257,16 @@ public sealed class ClaudeHookCommand(
             toolName       = node?["tool_name"]?.GetValue<string>();
             toolInput      = node?["tool_input"]?.DeepClone();
 
+            // KCAP_SKIP normally stops kcap's own headless runs before this; the marks hold where the
+            // variable does not reach the hook. Ahead of the stamp, which claims the session.
+            if (ClaudeHelperRun.IsHelperRun(sessionId, cwd)) return 0;
+
             // Ahead of both arms below, since each claims the new session before it posts.
             if (node is JsonObject hook && PreviousSession.Stamp(hook, config, () => ProcessHelpers.GetCodingAgentPid("claude", allowFallback: false)))
                 body = hook.ToJsonString();
         } catch { }
 
-        if (command == "session-end" && ResumeEndSuppression.ShouldSuppress(hosted)) return 0;
+        if (command == "session-end" && SessionEndFence.ShouldHold(hosted, sessionId)) return 0;
 
         var budget = clock.Budget(Ceiling(command));
 
@@ -488,6 +492,8 @@ public sealed class ClaudeHookCommand(
 
     internal async Task<bool> ShouldSuppressCaptureAsync(
             string? canonicalSessionId, string body, string? command, Profile? activeProfile, HookBudget budget) {
+        if (ClaudeHelperRun.IsHelperSessionId(canonicalSessionId)) return true;
+
         if (canonicalSessionId is not null && DisabledSessions.IsDisabled(canonicalSessionId, config)) {
             if (command == "session-end") DisabledSessions.RemoveMarker(canonicalSessionId, config);
             return true;
@@ -531,8 +537,16 @@ public sealed class ClaudeHookCommand(
         var body = await stdin.ReadToEndAsync();
 
         var eventName = ExtractEventName(body);
-        string? nativeSessionId = null;
-        try { nativeSessionId = JsonNode.Parse(body)?["session_id"]?.GetValue<string>(); } catch { }
+        string? nativeSessionId = null, payloadCwd = null;
+        try {
+            var parsed = JsonNode.Parse(body);
+            nativeSessionId = parsed?["session_id"]?.GetValue<string>();
+            payloadCwd      = parsed?["cwd"]?.GetValue<string>();
+        } catch { }
+
+        // An entry point of its own, so it holds the same line HandleWithDeps does: kcap's own
+        // headless runs are never captured.
+        if (ClaudeHelperRun.IsHelperRun(nativeSessionId, payloadCwd)) return 0;
 
         if (eventName is null) {
             Console.Error.WriteLine("kcap hook --claude: missing hook_event_name in payload");
@@ -543,7 +557,7 @@ public sealed class ClaudeHookCommand(
         // route convention (`SessionStart` → `session-start`).
         var command = ToKebab(eventName);
 
-        if (command == "session-end" && ResumeEndSuppression.ShouldSuppress(hosted)) return 0;
+        if (command == "session-end" && SessionEndFence.ShouldHold(hosted, nativeSessionId)) return 0;
 
         // Taken out here, where the event is finally known. Its own rather than the caller's: this is
         // an entry point in its own right, and a budget is nothing but a ceiling read off the shared
@@ -1022,7 +1036,7 @@ public sealed class ClaudeHookCommand(
                         responseNode, coordinationNoticesDisabled);
 
                     // The static nudges, each gated on its server being loaded by this session.
-                    var sessionNudges = SessionNudges.Resolve(HarnessId.Claude, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience);
+                    var sessionNudges = SessionNudges.Resolve(HarnessId.Claude, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience, sessionCwd, home);
                     // Opted out for a hosted session, which leaves the first-run notice armed for a person's next one.
                     var harnessNudge = HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true || !audience.GetsOnboarding, config, harnesses, clock.Time);
                     var firstRunNotice = FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true || !audience.GetsOnboarding, config, HarnessId.Claude, harnesses);
@@ -1411,7 +1425,7 @@ public sealed class ClaudeHookCommand(
                     IsTopLevel: true, ClassificationAuthoritative: true, reason,
                     CallbackMayRepeat: false),
                 new SessionStartMemoryContextRequest(Url, cwd, disabled, budget, CancellationToken.None,
-                    GuidelinesDisabled: true, FlowsDisabled: flowsDisabled));
+                    GuidelinesDisabled: true, WakeUpsWanted: hosted.IsHosted, FlowsDisabled: flowsDisabled));
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
         }

@@ -11,7 +11,7 @@ sealed class LocalUpgradeRecovery(LocalStack stack, IProgress<LocalInstallEvent>
     public async Task RecoverAsync(LifecycleLease lease, LifecycleJournalEntry interrupted, CancellationToken ct) {
         if (!LocalUpgradeJournal.TryRead(interrupted, out var details, out var error))
             throw new LocalLifecycleException(
-                $"The upgrade journal {lease.Root.JournalPath} cannot be acted on ({error}). Nothing was changed; fix or remove it, then run kcap local upgrade again.");
+                $"The upgrade journal {lease.Root.JournalPath} cannot be acted on ({error}). Nothing was changed. Fix or remove the journal. Run kcap local upgrade again.");
 
         progress.Report(new LocalInstallEvent.Recovering(Operation, interrupted.Phase));
 

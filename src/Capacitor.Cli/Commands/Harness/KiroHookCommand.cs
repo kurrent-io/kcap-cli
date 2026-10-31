@@ -116,7 +116,7 @@ sealed class KiroHookCommand(
                     IsTopLevel: true, ClassificationAuthoritative: true,
                     SessionLifecycleReason.RepeatedTurnCallback, CallbackMayRepeat: true),
                 new SessionStartMemoryContextRequest(Url, scopeRoot, disabled, budget, CancellationToken.None,
-                    GuidelinesDisabled: guidelinesDisabled, FlowsDisabled: flowsDisabled));
+                    GuidelinesDisabled: guidelinesDisabled, Vendor: HarnessId.Kiro.VendorId, WakeUpsWanted: hosted.IsHosted, FlowsDisabled: flowsDisabled));
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
         }
@@ -366,7 +366,7 @@ sealed class KiroHookCommand(
         // claim could commit its record with nothing emitted and silence the nudges for the
         // session. The emitters run at most once per firing: the harness nudge stamps a ledger.
         string? ResolveNudges() => HarnessNudgeEmitter.Combine(
-            SessionNudges.Resolve(HarnessId.Kiro, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience),
+            SessionNudges.Resolve(HarnessId.Kiro, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience, cwd, home),
             HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true || !audience.GetsOnboarding, config, harnesses, clock.Time),
             FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true || !audience.GetsOnboarding, config, HarnessId.Kiro, harnesses));
         var nudgeDecided = nudgeClaim.IsCompleted;

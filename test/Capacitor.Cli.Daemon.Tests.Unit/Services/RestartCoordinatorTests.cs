@@ -47,6 +47,19 @@ public class RestartCoordinatorTests {
         await Assert.That(spy.Calls).IsEqualTo(1);
     }
 
+    /// An update can replace the binary while the daemon is still booting, before the poll primes its baseline.
+    [Test]
+    public async Task A_binary_replaced_before_the_poll_starts_still_restarts() {
+        var spy = new SpyStrategy();
+        var c   = RestartCoordinator.ForTest(Daemons.Store, "laptop", "v0.4.11", spy, TimeProvider.System);
+        c.IsBusy       = () => false;
+        c.StatBinary   = () => new BinaryStat(200, 2);
+        c.LaunchBinary = new BinaryStat(100, 1);
+        c.PrimeBaseline();
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(1);
+    }
+
     [Test]
     public async Task Transient_stat_failure_does_not_queue() {
         var spy = new SpyStrategy();

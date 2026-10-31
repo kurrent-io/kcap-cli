@@ -51,8 +51,6 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     public string? SelectedSessionKey {
         get => _selectedSessionKey;
         set {
-            // The window's close and the app's quit clear the selection after the app has
-            // disposed the rail.
             if (_disposables.IsDisposed) return;
             this.RaiseAndSetIfChanged(ref _selectedSessionKey, value);
             _selectedSessionKeyChanges.OnNext(value);
@@ -65,12 +63,14 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     public RailScope Scope {
         get => _scope;
         set {
+            if (_disposables.IsDisposed) return;
             if (IsScopeLocked) value = RailScope.Mine;
             if (_scope == value) return;
             this.RaiseAndSetIfChanged(ref _scope, value);
             this.RaisePropertyChanged(nameof(IsMine));
             this.RaisePropertyChanged(nameof(IsTeam));
             if (_sessions is not null) _sessions.Scope = value;
+            this.RaisePropertyChanged(nameof(FiltersDiffer));
             Persist();
         }
     }
@@ -86,12 +86,14 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     public RailState State {
         get => _state;
         set {
+            if (_disposables.IsDisposed) return;
             if (_state == value) return;
             this.RaiseAndSetIfChanged(ref _state, value);
             this.RaisePropertyChanged(nameof(IsAll));
             this.RaisePropertyChanged(nameof(IsLive));
             this.RaisePropertyChanged(nameof(IsEnded));
             _stateFilter.OnNext(StateFilter());
+            this.RaisePropertyChanged(nameof(FiltersDiffer));
             Persist();
         }
     }
@@ -104,12 +106,14 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     public RailGrouping Grouping {
         get => _grouping;
         set {
+            if (_disposables.IsDisposed) return;
             if (_grouping == value) return;
             this.RaiseAndSetIfChanged(ref _grouping, value);
             this.RaisePropertyChanged(nameof(GroupingLabel));
             _groupComparer.OnNext(GroupComparer(value));
             _groupingChanges.OnNext(value);
             _regroup.OnNext(Unit.Default);
+            this.RaisePropertyChanged(nameof(FiltersDiffer));
             Persist();
         }
     }
@@ -127,10 +131,12 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     public RailSort Sort {
         get => _sort;
         set {
+            if (_disposables.IsDisposed) return;
             if (_sort == value) return;
             this.RaiseAndSetIfChanged(ref _sort, value);
             this.RaisePropertyChanged(nameof(SortLabel));
             _rowComparer.OnNext(RowComparer(value, Descending));
+            this.RaisePropertyChanged(nameof(FiltersDiffer));
             Persist();
         }
     }
@@ -147,16 +153,35 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     public bool Descending {
         get => _descending;
         set {
+            if (_disposables.IsDisposed) return;
             if (_descending == value) return;
             this.RaiseAndSetIfChanged(ref _descending, value);
             this.RaisePropertyChanged(nameof(DirectionLabel));
             _rowComparer.OnNext(RowComparer(Sort, value));
+            this.RaisePropertyChanged(nameof(FiltersDiffer));
             Persist();
         }
     }
 
     public string DirectionLabel => _descending ? "Descending" : "Ascending";
 
+    /// True when any of the five controls differs from the defaults, however the panel is collapsed.
+    public bool FiltersDiffer {
+        get {
+            var defaults = RailPreferences.Default;
+            return _scope != defaults.Scope || _state != defaults.State || _grouping != defaults.Grouping
+                || _sort != defaults.Sort || _descending != defaults.Descending;
+        }
+    }
+
+    bool _filtersOpen;
+    /// Starts collapsed on every launch; never persisted.
+    public bool FiltersOpen {
+        get => _filtersOpen;
+        private set => this.RaiseAndSetIfChanged(ref _filtersOpen, value);
+    }
+
+    public ReactiveCommand<Unit, Unit> ToggleFiltersCommand { get; }
     public ReactiveCommand<RailScope, Unit> SetScopeCommand { get; }
     public ReactiveCommand<RailState, Unit> SetStateCommand { get; }
     public ReactiveCommand<RailGrouping, Unit> SetGroupingCommand { get; }
@@ -196,6 +221,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             RailPreferences? preferences = null,
             Action<RailPreferences>? persistPreferences = null,
             bool scopeLocked = false,
+            IObserver<Func<AgentRow, bool>>? shownRows = null,
             Func<string, Task<RailPreferences>>? bindUserPreferences = null) {
         _directory = directory;
         _sessions = sessions;
@@ -216,7 +242,9 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
         SetGroupingCommand = ReactiveCommand.Create<RailGrouping>(grouping => Grouping = grouping).DisposeWith(_disposables);
         SetSortCommand = ReactiveCommand.Create<RailSort>(sort => Sort = sort).DisposeWith(_disposables);
         ToggleDirectionCommand = ReactiveCommand.Create(() => { Descending = !Descending; }).DisposeWith(_disposables);
+        ToggleFiltersCommand = ReactiveCommand.Create(() => { FiltersOpen = !FiltersOpen; }).DisposeWith(_disposables);
         _stateFilter = new BehaviorSubject<Func<AgentRow, bool>>(StateFilter()).DisposeWith(_disposables);
+        if (shownRows is not null) _stateFilter.Subscribe(shownRows.OnNext).DisposeWith(_disposables);
         _rowComparer = new BehaviorSubject<IComparer<RailSessionViewModel>>(RowComparer(_sort, _descending)).DisposeWith(_disposables);
         _groupComparer = new BehaviorSubject<IComparer<RailGroupViewModel>>(GroupComparer(_grouping)).DisposeWith(_disposables);
         _groupingChanges = new BehaviorSubject<RailGrouping>(_grouping).DisposeWith(_disposables);
@@ -307,6 +335,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     /// Another user's remembered shape, or this user's set now that the lane has named them: applied
     /// without writing it back.
     public void ApplyPreferences(RailPreferences preferences) {
+        if (_disposables.IsDisposed) return;
         _applying = true;
         try {
             Scope = preferences.Scope;
@@ -363,11 +392,13 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
         _ => "all",
     };
 
-    /// Waiting on you, Running, Failed, Ended: the order the status groups keep.
+    /// Waiting on you, Running, Failed, Ended: the order the status groups keep. A row whose chip
+    /// says Working is Running even when its parent turn is waiting, or the group contradicts the chip.
     static int StatusBucket(AgentRow row) {
         if (row.IsEndedSession) return 3;
         if (row.Status == "Failed") return 2;
-        return SessionStatusDots.NeedsAttention(row) || SessionStatusDots.WaitsOnUser(row) ? 0 : 1;
+        if (SessionStatusDots.ForRow(row, pending: false).Kind == AgentStatusKind.Working) return 1;
+        return SessionStatusDots.NeedsAttention(row) ? 0 : 1;
     }
 
     string LabelFor(string key, RailGrouping grouping, IGroup<AgentRow, string, string>? group = null) => grouping switch {
@@ -428,5 +459,6 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
 
     internal static string WorktreeKeyFor(AgentRow row) => row.CheckoutKey;
 
+    /// A quit keeps driving the setters and commands after this, so each one ignores a disposed rail.
     public void Dispose() => _disposables.Dispose();
 }

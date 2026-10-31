@@ -72,14 +72,45 @@ public sealed class AssistantThinkingItem : ChatItemViewModel {
 
 /// System-attributed text — a finished background task, a reconnect note, another agent's message
 /// — never the user's speech.
-public sealed class SystemNoteItem(string text, string label = SystemNoteItem.NoteLabel) : ChatItemViewModel {
+public sealed class SystemNoteItem : ChatItemViewModel {
     public const string NoteLabel = "Note";
     public const string AgentReportLabel = "Subagent report";
     public const string AgentMessageLabel = "Agent message";
+    public const string CompactSummaryLabel = "Conversation compacted";
 
-    public string Text { get; } = text;
-    public string Label { get; } = label;
+    bool _isExpanded;
+
+    public SystemNoteItem(string text, string label = NoteLabel) {
+        Text = text;
+        Label = label;
+        // A compaction summary restates the whole conversation above it, so it starts folded.
+        IsCollapsible = label == CompactSummaryLabel;
+        _isExpanded = !IsCollapsible;
+        ToggleCommand = ReactiveCommand.Create(Toggle);
+    }
+
+    public string Text { get; }
+    public string Label { get; }
     public LucideIconKind IconKind => ToolCategoryIcons.ForFixedLabel(Label) ?? ToolCategoryIcons.NoteIcon;
+    public bool IsCollapsible { get; }
+
+    public bool IsExpanded {
+        get => _isExpanded;
+        private set {
+            if (_isExpanded == value) return;
+            _isExpanded = value;
+            this.RaisePropertyChanged();
+            this.RaisePropertyChanged(nameof(ToggleAccessibleName));
+        }
+    }
+
+    public string ToggleAccessibleName => $"{(IsExpanded ? "Collapse" : "Expand")} {Label}";
+
+    public ReactiveCommand<Unit, Unit> ToggleCommand { get; }
+
+    public void Toggle() {
+        if (IsCollapsible) IsExpanded = !IsExpanded;
+    }
 }
 
 /// A bang command the user ran, and the output record that follows it. The output arrives later,
@@ -117,12 +148,12 @@ public sealed class ToolCallItem(string name, string detail, ToolCategory catego
     public string? Chip { get; } = chip;
     public string Detail { get; } = detail;
     public ToolCategory Category { get; } = category;
-    /// The verb phrase a row opens with; null when a built-in call carries its own prose
-    /// description or is a question, whose row is the detail alone.
+    /// The verb phrase a row opens with; null for a question, whose row is the detail alone, and
+    /// for a tool nothing names.
     public string? Label { get; } = label;
     public bool HasLabel => !string.IsNullOrEmpty(Label);
     public ToolCardKind CardKind { get; } = cardKind;
-    /// Kept so the card can be built when the result arrives.
+    /// Kept for the card built when the result arrives and for the opened row.
     internal string? InputJson { get; } = inputJson;
 
     /// What the row shows: detail when present, otherwise the tool name.
@@ -168,6 +199,19 @@ public sealed class ToolCallItem(string name, string detail, ToolCategory catego
             this.RaisePropertyChanged(nameof(IsError));
             this.RaisePropertyChanged(nameof(IsSettled));
             this.RaisePropertyChanged(nameof(IsRunning));
+            InvalidateInspection();
+        }
+    }
+
+    string? _result;
+    /// The result text as the transcript carried it; set before Outcome.
+    public string? Result {
+        get => _result;
+        internal set {
+            if (_result == value) return;
+            _result = value;
+            this.RaisePropertyChanged();
+            InvalidateInspection();
         }
     }
 
@@ -180,7 +224,41 @@ public sealed class ToolCallItem(string name, string detail, ToolCategory catego
             _isAwaitingPermission = value;
             this.RaisePropertyChanged();
             this.RaisePropertyChanged(nameof(IsRunning));
+            InvalidateInspection();
         }
+    }
+
+    bool _isExpanded;
+    /// Kept on the item so a recycled row container comes back open or closed as the reader left it.
+    public bool IsExpanded {
+        get => _isExpanded;
+        private set {
+            if (_isExpanded == value) return;
+            _isExpanded = value;
+            this.RaisePropertyChanged();
+            this.RaisePropertyChanged(nameof(ToggleAccessibleName));
+            InvalidateInspection();
+        }
+    }
+
+    ReactiveCommand<Unit, Unit>? _toggleCommand;
+    /// Created on first bind: a long chat holds thousands of rows and most are never opened.
+    public ReactiveCommand<Unit, Unit> ToggleCommand => _toggleCommand ??= ReactiveCommand.Create(Toggle);
+
+    public void Toggle() => IsExpanded = !IsExpanded;
+
+    public string ToggleAccessibleName =>
+        $"{(IsExpanded ? "Hide details" : "Show details")}: {string.Join(" ", new[] { Label, LineText }.Where(s => !string.IsNullOrEmpty(s)))}";
+
+    ToolInspection? _inspection;
+    /// Built only while the row is open, from what the item holds at that moment.
+    public ToolInspection? Inspection =>
+        _isExpanded ? _inspection ??= ToolInspection.Build(Name, InputJson, _result, _outcome, _isAwaitingPermission) : null;
+
+    void InvalidateInspection() {
+        if (!_isExpanded && _inspection is null) return;
+        _inspection = null;
+        this.RaisePropertyChanged(nameof(Inspection));
     }
 
     public bool IsSettled => _outcome != ToolOutcome.Running;

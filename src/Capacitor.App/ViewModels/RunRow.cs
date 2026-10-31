@@ -40,11 +40,20 @@ public sealed class RunRow : ReactiveObject {
             if (_agentId == value) return;
             this.RaiseAndSetIfChanged(ref _agentId, value);
             this.RaisePropertyChanged(nameof(CanOpen));
+            this.RaisePropertyChanged(nameof(UnopenableReason));
         }
     }
 
     /// Whether the subagent's own transcript can be opened from this row.
     public bool CanOpen => Kind == RunKind.Agent && AgentId is not null && _openable;
+
+    /// Why a subagent row does not open; null for one that does, and for a command, which never opens.
+    /// An id is only ever taken from a record naming this call or an unambiguous start, never guessed,
+    /// so an ended row without one stays shut and says so.
+    public string? UnopenableReason => Kind != RunKind.Agent || CanOpen ? null
+        : !_openable ? "Subagent transcripts can't be opened for this session."
+        : IsRunning ? "Opens once kcap knows which transcript this subagent writes."
+        : "kcap has no record of which subagent transcript this call started, so it can't be opened.";
 
     /// Set by the owning lane: false where it has no way to read a subagent's transcript.
     internal bool Openable {
@@ -53,6 +62,7 @@ public sealed class RunRow : ReactiveObject {
             if (_openable == value) return;
             _openable = value;
             this.RaisePropertyChanged(nameof(CanOpen));
+            this.RaisePropertyChanged(nameof(UnopenableReason));
         }
     }
 
@@ -68,6 +78,7 @@ public sealed class RunRow : ReactiveObject {
             this.RaisePropertyChanged(nameof(IsRunning));
             this.RaisePropertyChanged(nameof(IsFailed));
             this.RaisePropertyChanged(nameof(StateWord));
+            this.RaisePropertyChanged(nameof(UnopenableReason));
         }
     }
 

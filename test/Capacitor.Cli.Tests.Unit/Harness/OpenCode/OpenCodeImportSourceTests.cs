@@ -53,6 +53,20 @@ public class OpenCodeImportSourceTests {
         await Assert.That(source.IsAvailable).IsFalse();
     }
 
+    /// An unreadable database skips OpenCode and says so on the run's own stderr.
+    [Test]
+    public async Task an_unreadable_database_is_reported_on_the_runs_stderr() {
+        using var tmp    = new TempDir();
+        var       db     = tmp.CreateFile("opencode.db", "not a database");
+        var       source = new OpenCodeImportSource(db, tmp.PathTo("ledger.json"), TimeProvider.System);
+        var       stderr = new StringWriter();
+
+        var sessions = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0) { Stderr = stderr }, CancellationToken.None);
+
+        await Assert.That(sessions).IsEmpty();
+        await Assert.That(stderr.ToString()).Contains("OpenCode discovery skipped");
+    }
+
     [Test]
     public async Task discovery_treats_ms_as_ms_and_seconds_as_seconds() {
         using var tmp = new OpenCodeDbFixture();
@@ -188,6 +202,27 @@ public class OpenCodeImportSourceTests {
 
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.Partial);
         await Assert.That(classified[0].ResumeFromLine).IsEqualTo(42);
+    }
+
+    [Test]
+    public async Task classify_deleted_when_the_server_answers_410() {
+        using var fix = new OpenCodeDbFixture();
+        fix.AddSession("ses_x", null, "/w", "T", 100);
+        fix.AddMessageWithText("ses_x", "m1", "hello", 100);
+
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+              .RespondWith(Response.Create().WithStatusCode(410).WithBody("""{"error":"session_deleted"}"""));
+        using var client = new HttpClient();
+
+        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath, TimeProvider.System);
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(discovered,
+            new ClassifyContext(client, server.Url!, MinLines: 1, Home: Home),
+            CancellationToken.None);
+
+        await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.Deleted);
+        await Assert.That(classified[0].ProbeErrorReason).IsNull();
     }
 
     [Test]

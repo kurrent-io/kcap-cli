@@ -18,7 +18,7 @@ public class SessionNudgesTests {
             $"[mcp_servers.kcap-{s}]\ncommand = \"kcap\"\nargs = [\"mcp\", \"{s}\"]\n\n")));
 
     string? Resolve(string config, Profile? profile = null, PlanEntitlements? plan = null) =>
-        SessionNudges.Resolve(HarnessId.Codex, "s1", profile, Harnesses, plan ?? PlanEntitlements.Unknown, SessionStartAudience.Interactive, config);
+        SessionNudges.Resolve(HarnessId.Codex, "s1", profile, Harnesses, plan ?? PlanEntitlements.Unknown, SessionStartAudience.Interactive, cwd: null, Home, config);
 
     [Test]
     public async Task With_both_nudges_shown_the_line_is_left_out() {

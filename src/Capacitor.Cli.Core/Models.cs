@@ -64,7 +64,9 @@ public record ErrorEntry(
         string?        ToolName,
         string         Error,
         DateTimeOffset Timestamp
-    );
+    ) {
+    public JsonElement? ToolInput { get; init; }
+}
 
 public record RecapEntry(
         string         Type,
@@ -188,8 +190,8 @@ class WatchState {
     public bool?                ServerRecordsHarnessTitles  { get; set; }
     public DateTimeOffset       LastHarnessTitleProbe       { get; set; }
 
-    // Buffering: hold transcript lines until threshold is reached to avoid polluting
-    // the server with short-lived sessions (e.g. <local-command-caveat> prompts)
+    // A session watcher holds its lines back until they contain a real turn or reach the threshold,
+    // so a session nobody took a turn in (e.g. only <local-command-caveat> commands) sends none.
     public List<string> BufferedLines       { get; } = [];
     public List<int>    BufferedLineNumbers { get; } = [];
     public int          LinesReadAhead      { get; set; } // file position while buffering
@@ -238,6 +240,9 @@ class WatchState {
     // the parent's session-end teardown was the only stop, so a finished child's chat card
     // spun for the parent's whole lifetime. Never observed on any other watcher.
     public CodexSubagentTurnTracker CodexSubagentTurn { get; } = new();
+
+    /// <summary>Set for a Codex watcher whose rollout belongs to a registered account.</summary>
+    public Action<IReadOnlyList<string>>? ObserveCodexReadings { get; set; }
 
     // Highwater mark of the last Antigravity gen_metadata row already streamed as a
     // synthetic USAGE line, so the watcher only sends newly-appended cost rows on each
@@ -807,6 +812,9 @@ class SessionMetadata {
     public string?         SessionId      { get; set; }
     public DateTimeOffset? FirstTimestamp { get; set; }
     public DateTimeOffset? LastTimestamp  { get; set; }
+
+    /// <summary>The branch the transcript itself recorded, or null when it recorded none.</summary>
+    public string?         GitBranch      { get; set; }
 }
 
 static partial class GitUrlParser {
@@ -1195,6 +1203,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(AgentRegistered))]
 [JsonSerializable(typeof(AgentRegisteredResponse))]
 [JsonSerializable(typeof(AgentStatusChanged))]
+[JsonSerializable(typeof(ReportAgentTerminalDialogArgs))]
 [JsonSerializable(typeof(AgentUnregistered))]
 [JsonSerializable(typeof(LaunchFailed))]
 [JsonSerializable(typeof(TerminalOutput))]
@@ -1746,7 +1755,10 @@ public readonly record struct LaunchAgentCommand(
         string?           AccountId = null,
         // The transport the server will validate this launch's registration against: "app-server" or
         // "pty". Null from an older server, which leaves the daemon's own routing to decide.
-        string?           ExpectedRuntimeTransport = null
+        string?           ExpectedRuntimeTransport = null,
+        // A review-flow reviewer with no repository: it runs in an empty daemon-owned directory and
+        // RepoPath is empty. Sent only to a daemon advertising DaemonConnect.SupportsScratchWorkspace.
+        bool              ScratchWorkspace = false
     );
 
 /// <summary>Caller-selected Codex launch posture. Valid ONLY for interactive, daemon-owned-worktree
@@ -2281,6 +2293,9 @@ public readonly record struct DaemonConnect(
         // The daemon's ActiveCount and its version, read together, as on a status report.
         int?                                        ActiveCount = null,
         long?                                       ActiveCountVersion = null,
+        // A launch's base ref may be an abbreviated sha, which the daemon resolves among its own commits.
+        // False from a daemon predating it, which would fetch the abbreviation from origin and fail.
+        bool                                        SupportsAbbreviatedShaBaseRef = false,
         // The permission-preset tokens this daemon enforces, for every vendor in AcpPresetVendors.
         // Null from a daemon predating the field, which the server reads as explore and edit only.
         string[]?                                   AcpPresets = null,
@@ -2289,7 +2304,10 @@ public readonly record struct DaemonConnect(
         bool                                        SupportsAccountLaunches = false,
         Capacitor.Cli.Core.Accounts.AccountsSnapshotDto? Accounts = null,
         // Per-account launchable models, keyed by registry id.
-        Dictionary<string, VendorModelOption[]>?    VendorModelsByAccount = null
+        Dictionary<string, VendorModelOption[]>?    VendorModelsByAccount = null,
+        // Accepts a LaunchAgentCommand.ScratchWorkspace launch. False from a daemon predating it, which
+        // would try to create a worktree from an empty repository path.
+        bool                                        SupportsScratchWorkspace = false
     );
 
 public sealed record UnattendedVendorCapability(
@@ -2375,6 +2393,13 @@ public record HostedAgentCommand(string Name, string? Description, string? Argum
 public readonly record struct ReportAgentCommandsArgs(
         string                            AgentId,
         IReadOnlyList<HostedAgentCommand> Commands
+    );
+
+/// <summary>The dialog a hosted agent's terminal shows, or null once it has closed. A later report
+/// replaces the earlier one. JSON mirror of the server's <c>ReportAgentTerminalDialogArgs</c>.</summary>
+public readonly record struct ReportAgentTerminalDialogArgs(
+        string                       AgentId,
+        LocalIpc.TerminalDialogDto?  Dialog
     );
 
 /// <param name="StopReason">The code of the daemon's own termination verdict, when it ended the agent.

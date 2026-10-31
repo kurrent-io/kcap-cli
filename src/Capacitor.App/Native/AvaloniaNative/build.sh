@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds libAvaloniaNative.patched.dylib next to this script: Avalonia's macOS native library at
-# the tag Directory.Packages.props references, with automation-leak.patch applied, as a universal
-# arm64 + x86_64 binary. Needs Xcode, the .NET SDK and network access for the clone.
+# the tag Directory.Packages.props references, with every *.patch beside this script applied, as a
+# universal arm64 + x86_64 binary. Needs Xcode, the .NET SDK and network access for the clone.
 # Usage: build.sh [work-dir]   (a fresh directory each run; the default is a temporary one)
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -14,7 +14,7 @@ out="$work/out"
 echo "Avalonia $tag -> $src"
 git clone --quiet --filter=blob:none --sparse --depth 1 --branch "$tag" https://github.com/AvaloniaUI/Avalonia.git "$src"
 git -C "$src" sparse-checkout set native src/Avalonia.Native nukebuild build
-git -C "$src" apply --whitespace=nowarn "$here/automation-leak.patch"
+for patch in "$here"/*.patch; do git -C "$src" apply --whitespace=nowarn "$patch"; done
 # Generates native/Avalonia.Native/inc/avalonia-native.h from the IDL the managed side was built against.
 dotnet build "$src/native/Avalonia.Native/Avalonia.Native.macOS.proj" -t:GenerateMicroComItems -nologo -v q
 # The project file pins a deployment target current Xcode no longer accepts; 12.0 is well under the

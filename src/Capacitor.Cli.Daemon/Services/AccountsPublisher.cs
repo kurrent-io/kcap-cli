@@ -1,14 +1,16 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Accounts.Readings;
+using Capacitor.Cli.Core.Harness;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
-/// The host's accounts snapshot, kept current by polling <c>accounts.json</c>, which the CLI and the
-/// desktop app write from other processes. A new snapshot is published only for a new revision or
-/// host id, so a recording-state change reaches readers with the next registry revision.
+/// The host's accounts snapshot, kept current by polling <c>accounts.json</c> and the reading files, which
+/// the CLI, the desktop app and agents write from other processes. A snapshot is published only when it
+/// differs by value from the last one, which a reading change can do under the same revision.
 /// </summary>
 internal sealed partial class AccountsPublisher(
         DaemonConfig config, UserHome home, TimeProvider time, ILogger<AccountsPublisher> logger)
@@ -23,10 +25,14 @@ internal sealed partial class AccountsPublisher(
     PeriodicTimer?             _timer;
     string?                    _hostId;
     (long Length, long Ticks)? _stat;
+    (string AccountId, long Length, long Ticks)[] _readingsStat = [];
+    (string AccountId, string Path, long Length, long Ticks)[]? _wiringStat;
+    (string AccountId, string Path)[] _wiringPaths = [];
     bool                       _settled;
     bool                       _loadWarned;
     bool                       _hostWarned;
     bool                       _pollWarned;
+    Dictionary<string, DateTimeOffset?>? _blockedSeen;
 
     readonly Lock _sendLock = new();
     ITimer?       _trailingSend;
@@ -38,8 +44,8 @@ internal sealed partial class AccountsPublisher(
 
     /// <summary>Raised under the rebuild gate so handlers see revisions in order. A handler must not
     /// throw, block, or wait on <see cref="RebuildAsync"/>; one that throws is logged and the rest still
-    /// run. Every new snapshot is announced, the one start builds included; a poll that finds the
-    /// revision unchanged announces nothing.</summary>
+    /// run. Every new snapshot is announced, the one start builds included; a rebuild equal by value to the
+    /// current snapshot announces nothing.</summary>
     public event Action<AccountsSnapshotDto>? Changed;
 
     // Seam: tests substitute a failing read.
@@ -48,6 +54,16 @@ internal sealed partial class AccountsPublisher(
     /// <summary>Takes a new snapshot to the server, at most once per <see cref="ServerSendInterval"/>: a change
     /// inside the interval waits for its end and sends whatever snapshot is current then.</summary>
     public Func<AccountsSnapshotDto, Task>? SendToServer { get; set; }
+
+    /// <summary>Asks for a refresh of an account whose block advanced since the last snapshot. An advance a
+    /// refresh wrote is skipped, whichever daemon ran it: it records its origin in the same replace as the
+    /// block, so a refresh never triggers another. Called under the rebuild gate; it must not block.</summary>
+    public Action<string>? RequestRefresh { get; set; }
+
+    /// <summary>Asks for a prompt refresh of a Codex account whose <c>hooks.json</c> or <c>config.toml</c> changed: its
+    /// trust answer is bound to those files, so the account reads Needs approval until a probe asks again. Called
+    /// under the rebuild gate; it must not block.</summary>
+    public Action<string>? RequestWiringRefresh { get; set; }
 
     public long Version => _notifier.Version;
 
@@ -94,29 +110,40 @@ internal sealed partial class AccountsPublisher(
         try {
             if ((_hostId ??= TryHostId(store)) is not { } hostId) return;
 
-            var stat      = Stat(store.RegistryPath);
-            var unchanged = stat == _stat;
+            var stat         = Stat(store.RegistryPath);
+            var readingsStat = store.Readings.Stat();
+            var wiringStat   = WiringStat(_wiringPaths);
+            var unchanged    = stat == _stat && readingsStat.SequenceEqual(_readingsStat) && _wiringStat is not null && wiringStat.SequenceEqual(_wiringStat);
             if (unchanged && _settled && !force) return;
 
             // Two same-length writes inside one filesystem timestamp tick stat alike, so a stat is
             // trusted only once a later tick has read the file under it successfully.
             _settled = unchanged && !force;
-            if (!unchanged) _loadWarned = false;
-            _stat = stat;
+            if (stat != _stat) _loadWarned = false;
+            _stat         = stat;
+            _readingsStat = readingsStat;
 
             var read = false;
             try {
-                read = Publish(store, hostId);
+                read = Publish(store, hostId, readingsStat);
             } finally {
                 if (!read) _settled = false;
             }
+
+            if (!read) return;
+
+            // A registry change can add or move accounts, so the stats are taken again over the paths it loaded.
+            var previous = _wiringStat;
+            var current  = WiringStat(_wiringPaths);
+            _wiringStat = current;
+            RequestWiringRefreshes(previous ?? wiringStat, current, baseline: previous is null);
         } finally {
             _gate.Release();
         }
     }
 
     /// <summary>False when the registry could not be read.</summary>
-    bool Publish(AccountStore store, string hostId) {
+    bool Publish(AccountStore store, string hostId, (string AccountId, long Length, long Ticks)[] readingsStat) {
         AccountRegistry registry;
         try {
             registry = LoadRegistry(store);
@@ -126,15 +153,97 @@ internal sealed partial class AccountsPublisher(
             return false;
         }
 
-        if (Current is { } current && current.Revision == registry.Revision && current.HostId == hostId) return true;
+        _wiringPaths = [
+            .. registry.Accounts
+                .Where(a => a.Vendor == HarnessId.Codex)
+                .SelectMany(a => {
+                    var paths = AccountLayouts.Codex(home, a.Directory);
+                    return new[] { (a.Id, paths.UserHooksJson), (a.Id, paths.ConfigToml) };
+                }),
+        ];
 
-        var next = AccountSnapshotBuilder.Build(registry, hostId, config.DefaultDirectories, home);
+        var readings = KeepUnreadable(store.Readings.LoadAll(), readingsStat, registry);
+        var next     = AccountSnapshotBuilder.Build(registry, hostId, config.DefaultDirectories, home, readings);
+        if (Current is { } current && AccountSnapshotBuilder.Equivalent(current, next)) return true;
+
         Volatile.Write(ref _current, next);
         _notifier.Pulse();
         Announce(next);
+        RequestBlockedRefreshes(next, readings);
         QueueServerSend(next);
         return true;
     }
+
+    // A file that exists but did not parse is mid-write or damaged, not absent: the account keeps the
+    // reading it last published until the file reads again or is removed.
+    IReadOnlyDictionary<string, ReadingFile> KeepUnreadable(
+        IReadOnlyDictionary<string, ReadingFile>      loaded,
+        (string AccountId, long Length, long Ticks)[] readingsStat,
+        AccountRegistry                               registry
+    ) {
+        if (Current is not { } current) return loaded;
+
+        Dictionary<string, ReadingFile>? kept = null;
+        foreach (var account in registry.Accounts) {
+            if (loaded.ContainsKey(account.Id) || !readingsStat.Any(s => s.AccountId == account.Id)) continue;
+            if (current.Accounts.FirstOrDefault(v => v.Id == account.Id)?.Reading is not { } previous || previous.Generation != account.Generation) continue;
+
+            kept ??= new Dictionary<string, ReadingFile>(loaded, StringComparer.Ordinal);
+            kept[account.Id] = new ReadingFile(previous, []);
+        }
+
+        return kept ?? loaded;
+    }
+
+    // The first snapshot is the baseline: a block it already carries is the startup refresh's to look at.
+    void RequestBlockedRefreshes(AccountsSnapshotDto snapshot, IReadOnlyDictionary<string, ReadingFile> readings) {
+        var seen = new Dictionary<string, DateTimeOffset?>(StringComparer.Ordinal);
+        foreach (var account in snapshot.Accounts) {
+            var blockedAt = account.Reading?.Blocked?.BlockedAt;
+            seen[account.Id] = blockedAt;
+
+            if (_blockedSeen is null || blockedAt is not { } at) continue;
+            if (_blockedSeen.GetValueOrDefault(account.Id) is { } previous && at <= previous) continue;
+            if (readings.GetValueOrDefault(account.Id)?.RefreshOrigins?.Contains(at) == true) continue;
+
+            try {
+                RequestRefresh?.Invoke(account.Id);
+            } catch (Exception ex) {
+                LogHandlerFailed(logger, ex);
+            }
+        }
+
+        _blockedSeen = seen;
+    }
+
+    // Accounts new to the stat, and the first stat, are baselines.
+    void RequestWiringRefreshes(
+        (string AccountId, string Path, long Length, long Ticks)[] previous,
+        (string AccountId, string Path, long Length, long Ticks)[] current,
+        bool                                                       baseline
+    ) {
+        if (baseline) return;
+
+        var changed = current.Where(c => previous.Any(p => p.AccountId == c.AccountId && p.Path == c.Path && p != c))
+            .Select(c => c.AccountId)
+            .Distinct(StringComparer.Ordinal);
+
+        foreach (var id in changed) {
+            try {
+                RequestWiringRefresh?.Invoke(id);
+            } catch (Exception ex) {
+                LogHandlerFailed(logger, ex);
+            }
+        }
+    }
+
+    static (string AccountId, string Path, long Length, long Ticks)[] WiringStat((string AccountId, string Path)[] paths) =>
+        [
+            .. paths.Select(p => {
+                var info = new FileInfo(p.Path);
+                return info.Exists ? (p.AccountId, p.Path, info.Length, info.LastWriteTimeUtc.Ticks) : (p.AccountId, p.Path, -1L, 0L);
+            }),
+        ];
 
     void Announce(AccountsSnapshotDto snapshot) {
         if (Changed is not { } changed) return;

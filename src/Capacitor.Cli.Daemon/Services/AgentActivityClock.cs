@@ -16,7 +16,9 @@ namespace Capacitor.Cli.Daemon.Services;
 /// (NTP, DST, a debugger pause) must not change <see cref="IdleForMs"/>, which is what makes a status
 /// report a proof rather than a snapshot.</para>
 /// </summary>
-internal sealed class AgentActivityClock(TimeProvider time) {
+/// <param name="initialSeq">Where a resumed agent's sequence continues from.</param>
+/// <param name="priorAgeMs">The age a resumed agent had already reached.</param>
+internal sealed class AgentActivityClock(TimeProvider time, ulong initialSeq = 1, ulong priorAgeMs = 0) {
     readonly Lock _gate = new();
 
     // Captured once at construction, on the same monotonic axis as _lastAdvanceTimestamp — never
@@ -26,7 +28,7 @@ internal sealed class AgentActivityClock(TimeProvider time) {
     // Mode changes still prove that the process is alive, but do not extend a task's quiet
     // window. Keep turn evidence separate from the liveness timestamp the reviewer reaper reads.
     long    _lastTurnActivityTimestamp = time.GetTimestamp();
-    ulong   _activitySeq = 1;
+    ulong   _activitySeq = initialSeq;
     bool    _turnInFlight;
     bool    _awaitingInput;
     // Set when the wait came from silence rather than a turn end, so the next output can clear
@@ -124,9 +126,7 @@ internal sealed class AgentActivityClock(TimeProvider time) {
     public ulong AgeMs {
         get {
             lock (_gate) {
-                var elapsed = time.GetElapsedTime(_spawnTimestamp);
-
-                return elapsed <= TimeSpan.Zero ? 0UL : (ulong) elapsed.TotalMilliseconds;
+                return priorAgeMs + Elapsed(_spawnTimestamp);
             }
         }
     }
@@ -142,7 +142,7 @@ internal sealed class AgentActivityClock(TimeProvider time) {
     public ActivitySnapshot Snapshot() {
         lock (_gate) {
             return new ActivitySnapshot(
-                _activitySeq, Elapsed(_lastAdvanceTimestamp), Elapsed(_spawnTimestamp), _turnInFlight);
+                _activitySeq, Elapsed(_lastAdvanceTimestamp), priorAgeMs + Elapsed(_spawnTimestamp), _turnInFlight);
         }
     }
 

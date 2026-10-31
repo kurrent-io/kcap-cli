@@ -42,7 +42,7 @@ public sealed class ConfigCommand(
         // Telemetry is machine-scoped (see TryApplyTelemetry), so it isn't part of the profile
         // JSON above. Reporting the Reason alongside the state is what lets a user with an
         // inherited DO_NOT_TRACK tell that apart from their own `config set telemetry off`.
-        var decision = TelemetrySettings.Resolve(TelemetryState.PersistedEnabled(config));
+        var decision = TelemetrySettings.Resolve(TelemetryState.PersistedEnabled(config), telemetry.Unsaved);
         await Console.Out.WriteLineAsync($"  Telemetry: {(decision.Enabled ? "on" : "off")} (source: {decision.Reason})");
 
         return 0;
@@ -217,6 +217,8 @@ public sealed class ConfigCommand(
             "disable_nextwork_nudge" => throw new ArgumentException($"Invalid value for disable_nextwork_nudge: '{value}'. Must be true or false."),
             "disable_plans_nudge" when bool.TryParse(value, out var b) => profile with { DisablePlansNudge = b },
             "disable_plans_nudge" => throw new ArgumentException($"Invalid value for disable_plans_nudge: '{value}'. Must be true or false."),
+            "disable_relative_worktrees_nudge" when bool.TryParse(value, out var b) => profile with { DisableRelativeWorktreesNudge = b },
+            "disable_relative_worktrees_nudge" => throw new ArgumentException($"Invalid value for disable_relative_worktrees_nudge: '{value}'. Must be true or false."),
             "disable_harness_nudge" when bool.TryParse(value, out var b) => profile with { DisableHarnessNudge = b },
             "disable_harness_nudge" => throw new ArgumentException($"Invalid value for disable_harness_nudge: '{value}'. Must be true or false."),
             "use_provider_api_key" when bool.TryParse(value, out var b) => profile with { UseProviderApiKey = b },
@@ -265,6 +267,7 @@ public sealed class ConfigCommand(
         Console.Error.WriteLine("  disable_first_run_notice    Skip the one-shot notice in the first session after setup (true/false)");
         Console.Error.WriteLine("  disable_coordination_notices  Skip injecting coordination notices (others' overlapping work) at SessionStart (true/false)");
         Console.Error.WriteLine("  disable_harness_nudge       Skip new-harness setup nudges (in-session + CLI stderr) (true/false)");
+        Console.Error.WriteLine("  disable_relative_worktrees_nudge  Skip the SessionStart nudge to use relative worktree links in a sandbox (true/false)");
         Console.Error.WriteLine("  use_provider_api_key        Keep ANTHROPIC_API_KEY/OPENAI_API_KEY in headless agent spawns (true/false)");
         Console.Error.WriteLine("  excluded_repos              Excluded repos, comma-separated (owner/repo,owner/repo)");
         Console.Error.WriteLine("  allowed_repos               Capture only these repos, comma-separated; empty allows all");

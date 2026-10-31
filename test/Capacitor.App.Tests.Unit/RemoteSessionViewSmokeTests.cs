@@ -54,6 +54,7 @@ public class RemoteSessionViewSmokeTests {
         public readonly FakeServerLane Lane = new();
         public readonly FakePermissionService Permissions = new();
         public readonly FakeTimeProvider Time = new();
+        public readonly FakeRemoteAgents Remote = new();
         public readonly RemoteSessionViewModel Vm;
         public readonly RemoteSessionView View;
         public readonly Window Window;
@@ -68,7 +69,8 @@ public class RemoteSessionViewSmokeTests {
             _directory.Rows.AddOrUpdate(row);
             Vm = new RemoteSessionViewModel(row, _directory, _access, Permissions, NewActions(), Lane,
                 (_, _) => Task.FromResult(new SessionDetailFetch(Detail())), new RecordingOpener(), Time, new FakeWorkContextSource(),
-                () => realTerminal ? new XtermTerminalSurface(130, 54) : new FakeTerminalSurface(), planArtifacts);
+                () => realTerminal ? new XtermTerminalSurface(130, 54) : new FakeTerminalSurface(), planArtifacts,
+                remoteAgents: Remote, notifier: new RecordingNotifier());
             View = new RemoteSessionView { DataContext = Vm };
             Window = windowImpl is null ? new Window() : new Window(windowImpl);
             Window.Content = View;
@@ -100,6 +102,7 @@ public class RemoteSessionViewSmokeTests {
             _access.Dispose();
             Permissions.Dispose();
             _directory.Dispose();
+            Remote.Dispose();
         }
     }
 
@@ -260,7 +263,7 @@ public class RemoteSessionViewSmokeTests {
                     .IsSameReferenceAs(host.Vm.WorkContext);
 
                     // Blank padding needs a hit-testable background; title text must bubble too.
-                    var title = host.View.FindControl<TextBlock>("RemoteTitle")!;
+                    var title = host.View.FindControl<SessionTitleEditor>("RemoteTitle")!.FindControl<TextBlock>("TitleText")!;
                     var titlePoint = title.TranslatePoint(new Point(4, title.Bounds.Height / 2), host.Window)!.Value;
                     foreach (var point in new[] { new Point(200, 8), titlePoint }) {
                         platformWindow.MouseDown(point, MouseButton.Left);
@@ -445,6 +448,35 @@ public class RemoteSessionViewSmokeTests {
             var open = host.View.FindControl<Button>("OpenInWebButton")!;
             await Assert.That(ToolTip.GetTip(open)).IsEqualTo("Open in web");
             await Assert.That(open.Content).IsNotTypeOf<string>();
+
+            await host.Vm.TeardownAsync();
+            return true;
+        });
+    }
+
+    /// The owner's header offers the pencil; it swaps the title for the field and the ✓ / ✗ pair,
+    /// and a save lands the server's title back in the header.
+    [Test]
+    public async Task The_pencil_toggles_the_editor_and_a_save_shows_the_new_title() {
+        await AvaloniaSession.DispatchAsync(async () => {
+            using var host = new Host();
+            host.Remote.Rename = (_, _, title) => Task.FromResult(new SessionRenameResult(true, title, null));
+            var editor = host.View.FindControl<SessionTitleEditor>("RemoteTitle")!;
+            var pencil = editor.FindControl<Button>("RenameButton")!;
+            var input = editor.FindControl<TextBox>("TitleInput")!;
+            await Assert.That(pencil.IsEffectivelyVisible).IsTrue();
+            await Assert.That(input.IsEffectivelyVisible).IsFalse();
+
+            pencil.Command!.Execute(null);
+            await host.SettleUntilAsync(() => input.IsEffectivelyVisible, "the field");
+            await Assert.That(pencil.IsEffectivelyVisible).IsFalse();
+            await Assert.That(editor.FindControl<Button>("SaveRenameButton")!.IsEffectivelyVisible).IsTrue();
+            await Assert.That(editor.FindControl<Button>("CancelRenameButton")!.IsEffectivelyVisible).IsTrue();
+
+            input.Text = "New name";
+            editor.FindControl<Button>("SaveRenameButton")!.Command!.Execute(null);
+            await host.SettleUntilAsync(() => pencil.IsEffectivelyVisible, "the pencil back");
+            await Assert.That(editor.FindControl<TextBlock>("TitleText")!.Text).IsEqualTo("New name");
 
             await host.Vm.TeardownAsync();
             return true;

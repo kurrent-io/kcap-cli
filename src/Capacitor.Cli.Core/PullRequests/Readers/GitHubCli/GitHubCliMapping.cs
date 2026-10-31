@@ -242,7 +242,7 @@ public static class GitHubCliMapping {
 
     public static PullRequestRead<T> Failure<T>(GitHubCliResult result, PullRequestSubjectDto subject, DateTime now) where T : class {
         switch (result.Outcome) {
-            case GitHubCliOutcome.NotStarted: return new(PullRequestReadKind.Unavailable, Subject: subject, Reason: "tool_failed", AccessFailure: "transient");
+            case GitHubCliOutcome.NotStarted: return new(PullRequestReadKind.Unavailable, Subject: subject, Reason: "tool_failed", AccessFailure: "transient", Detail: FirstLine(result.Stderr));
             case GitHubCliOutcome.TimedOut: return new(PullRequestReadKind.TransportFailure, Subject: subject, Reason: "timeout", AccessFailure: "transient");
             case GitHubCliOutcome.Oversized: return new(PullRequestReadKind.InvalidProtocol, Subject: subject, Reason: "oversized", AccessFailure: "invalid");
         }
@@ -255,6 +255,12 @@ public static class GitHubCliMapping {
             return new(PullRequestReadKind.Unavailable, Subject: subject, Reason: "rate_limited", RetryAt: now.AddSeconds(60));
         if (message.Contains("HTTP 403", StringComparison.Ordinal))
             return new(PullRequestReadKind.Unavailable, Subject: subject, Reason: "tool_denied", AccessFailure: "denied");
-        return new(PullRequestReadKind.Unavailable, Subject: subject, Reason: "tool_failed", AccessFailure: "transient");
+        return new(PullRequestReadKind.Unavailable, Subject: subject, Reason: "tool_failed", AccessFailure: "transient", Detail: FirstLine(message));
+    }
+
+    /// One line of gh's error, capped: a notice has room for a cause, not a stack.
+    static string? FirstLine(string text) {
+        var line = text.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        return line is { Length: > 200 } ? line[..200] + "…" : line;
     }
 }

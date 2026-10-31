@@ -97,6 +97,7 @@ public class TrayViewModelTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
     [Arguments("daemon_unreachable", TrayState.Stopped)]
+    [Arguments(ExpectedDaemonRestart.Reason, TrayState.Connecting)]
     [Arguments("daemon_incompatible", TrayState.Attention)]
     [Arguments("some_future_reason", TrayState.Attention)]
     public async Task Unreachable_reason_maps_to_state(string reason, TrayState expected) {
@@ -1285,5 +1286,18 @@ public class TrayViewModelTests {
             permissions.Remove("r1");
             await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Running);
         });
+    }
+
+    /// The tooltip is the tray icon's accessible name on Windows, so it names the app and what it
+    /// is doing, within the length the notification area keeps.
+    [Test]
+    public async Task The_tray_tooltip_names_kcap_and_its_state_within_the_shell_limit() {
+        var model = new TrayMenuModel(TrayState.Idle, 0, "work-pc: connected — no agents", [], new TrayPauseItem(false, false), 0);
+        var crowded = model with { Header = new string('x', 300) };
+
+        await Assert.That(model.ToolTip).IsEqualTo("kcap — work-pc: connected — no agents");
+        await Assert.That(crowded.ToolTip.Length).IsEqualTo(127);
+        await Assert.That(crowded.ToolTip).StartsWith("kcap — ");
+        await Assert.That(crowded.ToolTip).EndsWith("…");
     }
 }

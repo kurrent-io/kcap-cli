@@ -72,13 +72,18 @@ static partial class TitleGeneration {
             string            vendor = "claude",
             CancellationToken ct     = default
         ) {
+        // Titling kcap's own title prompt would start a helper run over the last one, without end.
+        if (userText.StartsWith(TitlePromptPrefix, StringComparison.Ordinal)) {
+            log("Skipping title generation: the session is kcap's own title run");
+
+            return null;
+        }
+
         var prompt = BuildPrompt(userText, assistantText);
 
         // Codex sessions go through `codex exec` so a user with only Codex
-        // installed can still backfill — and so the title model matches the
-        // vendor that produced the work being summarised. Codex's --output-
-        // last-message gives us a single text response with no token usage,
-        // mirroring ClaudeCliResult's shape with zeros for the metric fields.
+        // installed can still backfill, and so the title model matches the
+        // vendor that produced the work being summarised.
         var result = vendor == "codex"
             ? await CodexCliRunner.RunAsync(prompt, TimeSpan.FromSeconds(30), time, log, profile, harnesses, ct: ct)
             : await ClaudeCliRunner.RunAsync(prompt, TimeSpan.FromSeconds(15), time, log, profile, harnesses,

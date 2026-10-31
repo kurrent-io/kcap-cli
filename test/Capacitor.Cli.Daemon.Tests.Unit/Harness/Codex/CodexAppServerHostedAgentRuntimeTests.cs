@@ -120,18 +120,35 @@ public class CodexAppServerHostedAgentRuntimeTests {
         await runtime.DisposeAsync();
     }
 
+    /// <summary>Usage is attributed to the resolved model, so an empty one from thread/start would leave it unpriceable.</summary>
     [Test]
-    public async Task Reroute_notification_updates_the_resolved_model_from_toModel() {
-        // The model/rerouted payload carries fromModel/toModel — a reader on the old bare `model` field
-        // would silently keep the original model and mis-attribute every later token delta to it.
-        var fake = new FakeCodexAppServer { Model = "gpt-5.3-codex", RerouteToModelOnTurn = "gpt-5.4-codex" };
+    [Arguments("gpt-5.3-codex", "gpt-5.3-codex")]
+    [Arguments("default",       null)]
+    public async Task An_empty_thread_model_falls_back_to_the_launch_model(string launchModel, string? resolved) {
+        var fake = new FakeCodexAppServer { Model = "" };
+        var (runtime, _, _) = Build(_ => fake, Launch(model: launchModel));
+
+        await runtime.StartAsync(CancellationToken.None).WaitAsync(HangGuard);
+
+        await Assert.That(runtime.ResolvedModel).IsEqualTo(resolved);
+
+        await runtime.DisposeAsync();
+    }
+
+    /// <summary>A reroute away from the resolved model must not leave later usage attributed to it,
+    /// even when the new model's id is blank.</summary>
+    [Test]
+    [Arguments("gpt-5.4-codex", "gpt-5.4-codex")]
+    [Arguments("",              null)]
+    public async Task Reroute_notification_updates_the_resolved_model_from_toModel(string toModel, string? resolved) {
+        var fake = new FakeCodexAppServer { Model = "gpt-5.3-codex", RerouteToModelOnTurn = toModel };
         var (runtime, _, _) = Build(_ => fake, Launch());
 
         await runtime.StartAsync(CancellationToken.None).WaitAsync(HangGuard);
         await runtime.SendUserInputAsync("go").WaitAsync(HangGuard);
         await runtime.WaitForTurnIdleAsync(CancellationToken.None).WaitAsync(HangGuard);
 
-        await Assert.That(runtime.ResolvedModel).IsEqualTo("gpt-5.4-codex");
+        await Assert.That(runtime.ResolvedModel).IsEqualTo(resolved);
 
         await runtime.DisposeAsync();
     }

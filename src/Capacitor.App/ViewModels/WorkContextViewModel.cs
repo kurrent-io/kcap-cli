@@ -61,6 +61,8 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     internal const string UnreachableNote  = "Couldn't reach the server.";
 
     readonly bool _isRemote;
+    /// A session no daemon hosts: nothing reports how it ran, so the vendor must not stand in for that.
+    readonly bool _sessionOnly;
     readonly IWorkContextSource _source;
     readonly SingleFlightReader<string, WorkContextRead> _reader;
     readonly SingleFlightReader<(string? Path, string? Reported), string> _branchReader;
@@ -72,6 +74,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     readonly CompositeDisposable _disposables = new();
     ITimer? _timer;
     bool _tornDown;
+    bool _serverDown;
     AgentStatusDto? _dto;
 
     string _repository = "—";
@@ -88,6 +91,16 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     public string Harness { get => _harness; private set => this.RaiseAndSetIfChanged(ref _harness, value); }
     string _transport = "—";
     public string Transport { get => _transport; private set => this.RaiseAndSetIfChanged(ref _transport, value); }
+    string _tokens = SessionFactText.Unknown;
+    public string Tokens { get => _tokens; private set => this.RaiseAndSetIfChanged(ref _tokens, value); }
+    string _cost = SessionFactText.Unknown;
+    public string Cost { get => _cost; private set => this.RaiseAndSetIfChanged(ref _cost, value); }
+    string _contextUse = SessionFactText.Unknown;
+    public string ContextUse { get => _contextUse; private set => this.RaiseAndSetIfChanged(ref _contextUse, value); }
+    string _sessionSharing = SessionFactText.Unknown;
+    public string SessionSharing { get => _sessionSharing; private set => this.RaiseAndSetIfChanged(ref _sessionSharing, value); }
+    string _agentSharing = SessionFactText.Unknown;
+    public string AgentSharing { get => _agentSharing; private set => this.RaiseAndSetIfChanged(ref _agentSharing, value); }
     string _sessionIdText = "resolving…";
     public string SessionIdText {
         get => _sessionIdText;
@@ -166,7 +179,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     public string PhaseNote => Phase switch {
         WorkContextPhase.WaitingForSession or WorkContextPhase.SessionUnknown => WaitingNote,
         WorkContextPhase.Loading     => LoadingNote,
-        WorkContextPhase.NoWorkItem  => _dto?.RepoPath is null ? NoRepositoryNote : NoWorkItemNote,
+        WorkContextPhase.NoWorkItem  => _dto?.RepoPath is null && _storedRepository is null ? NoRepositoryNote : NoWorkItemNote,
         WorkContextPhase.SignedOut   => SignedOutNote,
         WorkContextPhase.NotInPlan   => NotInPlanNote,
         WorkContextPhase.Unreachable => UnreachableNote,
@@ -189,10 +202,19 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     }
 
     string? _reportedBranch;
+    /// The summary's branch, for a remote row whose listing carries none: the listing keeps the
+    /// branch first seen with the repository, the primary repository row a later one.
+    string? _storedBranch;
+    /// The summary's repository name, for a remote row whose listing carries no cwd.
+    string? _storedRepository;
+
+    void ResolveRepository(string? repoPath) =>
+        Repository = repoPath is null && _isRemote && _storedRepository is { } stored ? stored : RepoLabel.Leaf(repoPath);
+
     // The daemon reports the branch the worktree was cut on; HEAD knows a switch made since.
     void ResolveBranch(bool refresh = false) {
         if (_isRemote) {
-            Branch = string.IsNullOrWhiteSpace(_reportedBranch) ? "—" : _reportedBranch;
+            Branch = FirstNonBlank(_reportedBranch, _storedBranch) ?? "—";
             return;
         }
         var state = (Path: WorktreePath, Reported: _reportedBranch);
@@ -272,8 +294,11 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
             IObservable<AgentStatusDto?> presence, IWorkContextSource source, TimeProvider time, IUrlOpener opener,
             SessionRuns runs, Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null,
             Action<string>? openWorkItem = null, IPlanSource? plans = null, PlanActivity? planActivity = null,
-            ArtefactsTabViewModel? artefacts = null, bool isRemote = false) {
+            ArtefactsTabViewModel? artefacts = null, bool isRemote = false, bool sessionOnly = false,
+            IObservable<ServerLaneStatus>? serverLane = null, WorkContextLayout? layout = null) {
         _isRemote = isRemote;
+        _sessionOnly = sessionOnly;
+        _layout = layout ?? new WorkContextLayout();
         _source = source;
         _branchReader = new SingleFlightReader<(string? Path, string? Reported), string>(
             (state, ct) => Task.Run(() => {
@@ -327,6 +352,20 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         _disposables.Add(SignInCommand);
 
         presence.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(OnDto).DisposeWith(_disposables);
+        if (serverLane is not null) {
+            // Only an attempt nothing answered is evidence the server is down; a read in flight then ends in the
+            // unreachable state rather than loading for as long as the outage lasts.
+            serverLane.Select(s => s.State == ServerLaneState.Retrying && s.Failure is not null)
+                .DistinctUntilChanged()
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(OnServerDown)
+                .DisposeWith(_disposables);
+            serverLane.Select(s => s.State).DistinctUntilChanged().Skip(1)
+                .Where(state => state == ServerLaneState.Connected)
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(_ => Reconnected())
+                .DisposeWith(_disposables);
+        }
         signInCompleted?
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => OnSignInCompleted())
@@ -339,6 +378,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         _dto = dto;
         UpdateFacts(dto);
         HasAgent = true;
+        this.RaisePropertyChanged(nameof(ShowsPeople));
         if (dto.SessionId is { Length: > 0 } id && !string.Equals(_reader.CurrentState, id, StringComparison.Ordinal))
             SwitchSession(id);
         else if (_isRemote && string.IsNullOrEmpty(dto.SessionId) && HasSession) {
@@ -348,6 +388,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
             SessionIdText = "resolving…";
             PrimaryRepository = null;
             ClearServerProjections();
+            ApplySessionFacts(null);
             IsStale = false;
             Phase = WorkContextPhase.WaitingForSession;
             Plan.SwitchSession(null);
@@ -364,7 +405,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     };
 
     void UpdateFacts(AgentStatusDto dto) {
-        Repository = RepoLabel.Leaf(dto.RepoPath);
+        ResolveRepository(dto.RepoPath);
         RepositoryPath = dto.RepoPath;
         var checkout = _isRemote ? dto.WorktreePath : CheckoutLabel.CheckoutPathFor(dto);
         WorktreePath = checkout;
@@ -375,21 +416,30 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         ResolveBranch();
         var vendorLabel = HostedHarnessCatalog.LabelFor(DefaultHarnessOptions, dto.Vendor);
         Harness = $"{vendorLabel} · {HostedHarnessCatalog.ModelLabelFor(dto.Vendor, dto.Model ?? "")}";
-        Transport = TransportLabel(HostedHarnessCatalog.EffectiveFamily(dto.HasTerminal, dto.Vendor));
-        if (!_reader.HasCurrent) SessionIdText = dto.SessionId ?? "resolving…";
+        Transport = _sessionOnly ? "—" : TransportLabel(HostedHarnessCatalog.EffectiveFamily(dto.HasTerminal, dto.Vendor));
+        if (!_reader.HasCurrent) SessionIdText = SessionIds.Canonical(dto.SessionId) ?? "resolving…";
         UpdateRequester(dto, vendorLabel);
     }
 
     void SwitchSession(string id) {
         HasSession = true;
-        SessionIdText = id;
+        SessionIdText = SessionIds.Canonical(id) ?? id;
         PrimaryRepository = null;
         ClearServerProjections();
+        ApplySessionFacts(null);
         IsStale = false;
         Phase = WorkContextPhase.Loading;
         _reader.Switch(id);
+        if (_serverDown && Phase == WorkContextPhase.Loading) Phase = WorkContextPhase.Unreachable;
         Plan.SwitchSession(id);
         Artefacts?.SwitchSession(id, _isRemote ? null : WorktreePath ?? RepositoryPath);
+    }
+
+    void OnServerDown(bool down) {
+        if (_tornDown) return;
+        _serverDown = down;
+        Plan.SetServerDown(down);
+        if (down && Phase == WorkContextPhase.Loading) Phase = WorkContextPhase.Unreachable;
     }
 
     void OnTick() {
@@ -420,10 +470,17 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     void Apply(WorkContextRead read) {
         switch (read.Kind) {
             case WorkContextReadKind.SignedOut:      ApplyTerminal(WorkContextPhase.SignedOut);      return;
-            case WorkContextReadKind.NotInPlan:      ApplyTerminal(WorkContextPhase.NotInPlan);      return;
+            case WorkContextReadKind.NotInPlan:
+                // The plan gates work items only; a failed summary keeps the last session facts, stale.
+                ApplyTerminal(WorkContextPhase.NotInPlan, keepSessionFacts: true);
+                if (!read.SummaryFailed) ApplySessionFacts(read.Summary);
+                else IsStale = _hasSessionFacts;
+                return;
             case WorkContextReadKind.SessionUnknown: ApplyTerminal(WorkContextPhase.SessionUnknown); return;
             case WorkContextReadKind.Unreachable:
-                if (Phase is WorkContextPhase.Ready or WorkContextPhase.NoWorkItem) IsStale = true;
+                // A plan-gated pane that holds session facts goes stale rather than blank.
+                if (Phase is WorkContextPhase.Ready or WorkContextPhase.NoWorkItem
+                    || (Phase == WorkContextPhase.NotInPlan && _hasSessionFacts)) IsStale = true;
                 else Phase = WorkContextPhase.Unreachable;
                 return;
             case WorkContextReadKind.Ready:
@@ -435,9 +492,10 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         }
     }
 
-    /// The server has just said the viewer may not have this data, so nothing of it stays visible.
-    void ApplyTerminal(WorkContextPhase phase) {
+    /// The server has just said the viewer may not have this data, so nothing it gates stays visible.
+    void ApplyTerminal(WorkContextPhase phase, bool keepSessionFacts = false) {
         ClearServerProjections();
+        if (!keepSessionFacts) ApplySessionFacts(null);
         ForgetViewer();
         Phase = phase;
         IsStale = false;

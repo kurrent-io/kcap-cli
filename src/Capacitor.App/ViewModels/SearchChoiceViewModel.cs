@@ -11,8 +11,8 @@ namespace Capacitor.App.ViewModels;
 public sealed class SearchChoiceViewModel : ReactiveObject {
     public const string Explainer = "Choose how to find information saved in kcap.";
     public static readonly string BuiltinDetail = BuiltinDetailFor("about 320 MB");
-    public const string BuiltinUnavailable = "The built-in model could not be confirmed for the version of kcap local this Mac runs.";
-    public const string BuiltinLookingUp = "Checking whether the version of kcap local this Mac runs has a built-in model…";
+    public const string BuiltinUnavailable = "Not available. kcap could not find a built-in model for this version.";
+    public const string BuiltinLookingUp = "Checking for a built-in model…";
     public const string MeaningDetail = "Finds related information even when you use different words. Uses an AI model that runs in Ollama on this Mac.";
     public const string KeywordDetail = "Finds information using matching words. No AI model needed. You can change this later in Settings, under Search.";
     public const string DefaultLabel = $"{LocalEmbeddingChoice.DefaultModel} (about 670 MB)";
@@ -111,7 +111,7 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
         : BuiltinDetail;
 
     static string BuiltinDetailFor(string size) =>
-        $"Finds related information even when you use different words. kcap downloads an AI model ({size}) once and runs it on this Mac; nothing else to install.";
+        $"Finds related information even when you use different words. kcap downloads an AI model ({size}) once and runs it on this Mac. Nothing else to install.";
 
     /// What the stack setup will run offers; null when it offers no built-in model or the lookup failed. A pick it can
     /// no longer honour goes back to following the recommendation.
@@ -142,7 +142,7 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
     /// The state beside Check again; what search by meaning needs stays in the option's own description.
     public string? OllamaStatus => _ollamaRunning switch {
         null when Checking => "Looking for Ollama…",
-        false              => _ollamaInstalledNow ? "Ollama is installed but not running. Open it." : "Ollama isn't installed.",
+        false              => _ollamaInstalledNow ? "Ollama is installed but not running. Open it." : "Ollama is not installed.",
         _ => null,
     };
 
@@ -183,7 +183,7 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
 
     /// Shown once something is typed: an empty field only keeps the button disabled.
     public string? OtherModelError => UseOllama && UseOther && Named.Length > 0 && !NamedValid
-        ? "Not an Ollama model name: letters, digits and . _ : / - only, starting with a letter or digit."
+        ? "Not an Ollama model name. Use letters, digits and . _ : / - and start with a letter or digit."
         : null;
 
     public LocalEmbeddingChoice Choice => _mode switch {

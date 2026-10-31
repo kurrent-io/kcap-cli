@@ -14,6 +14,9 @@ partial class SessionsCommand(
         WorkingDirectory workdir, TimeProvider time) {
     internal const string TimeFilterUnsupported = "The time filter needs a newer server; ask your admin to update.";
 
+    internal const string NoRepository =
+        "Not in a git repository with a remote origin. Pass --repo <owner/name>, or --repo all for every repository.";
+
     public async Task<int> HandleAsync(string[] args) {
         var options = SessionsArgs.Parse(args, time, out var error);
 
@@ -36,7 +39,7 @@ partial class SessionsCommand(
                 config, workdir.Path, time, detectPullRequest: false);
 
             if (repo?.Owner is null || repo.RepoName is null) {
-                await Console.Error.WriteLineAsync("Not in a git repository with a remote origin.");
+                await Console.Error.WriteLineAsync(NoRepository);
 
                 return 1;
             }
@@ -97,7 +100,9 @@ partial class SessionsCommand(
             return 1;
         }
 
-        await Console.Out.WriteAsync(options.Json ? body + Environment.NewLine : Render(page, label, options));
+        await Console.Out.WriteAsync(options.Json
+            ? body + Environment.NewLine
+            : Render(page, label, options, StatusGlyphs.ConsoleEncodable, TerminalWidth()));
 
         return 0;
     }
@@ -127,27 +132,59 @@ partial class SessionsCommand(
         return $"{route}?" + string.Join("&", qs);
     }
 
-    internal static string Render(RepoSessionsResponse page, string repoLabel, SessionsOptions options) {
+    /// <param name="encodable">Whether the output carries an ellipsis; a cut cell ends in "..." when it
+    /// does not, never in a look-alike the encoder picked.</param>
+    /// <param name="width">The terminal's width, which the title is cut to fit; null leaves every title
+    /// whole, as for redirected output.</param>
+    internal static string Render(
+            RepoSessionsResponse page, string repoLabel, SessionsOptions options, bool encodable = true, int? width = null) {
         var sb = new StringBuilder();
 
         if (page.Items.Count == 0) {
             sb.AppendLine(Empty(repoLabel, options));
         } else {
-            var repoHead    = options.AllRepos ? $"{"REPO",-25} " : "";
-            var startedHead = options.Windowed ? $"{"STARTED",-17} " : "";
+            var rows = page.Items.Select(string?[] (row) => [
+                    row.SessionId,
+                    row.Status == "active" && row.Stale ? "stale" : row.Status,
+                    row.AccessLevel,
+                    row.Owner?.Username ?? row.Owner?.UserId ?? "",
+                    row.Vendor ?? "",
+                    options.AllRepos ? Repository(row.Repo) : null,
+                    row.Branch ?? "",
+                    options.Windowed ? Local(row.StartedAt) : null,
+                    Local(row.LastActivityAt),
+                ])
+                .ToList();
 
-            sb.AppendLine(
-                $"{"SESSION",-33} {"STATUS",-7} {"ACCESS",-9} {"OWNER",-14} {"VENDOR",-8} {repoHead}{"BRANCH",-24} {startedHead}{"LAST ACTIVITY",-17} TITLE");
+            string?[] heads = ["SESSION", "STATUS", "ACCESS", "OWNER", "VENDOR", options.AllRepos ? "REPO" : null, "BRANCH",
+                options.Windowed ? "STARTED" : null, "LAST ACTIVITY"];
+            int[] caps = [36, 7, 9, 14, 8, 24, 24, 16, 16];
 
-            foreach (var row in page.Items) {
-                var status  = row.Status == "active" && row.Stale ? "stale" : row.Status;
-                var owner   = row.Owner?.Username ?? row.Owner?.UserId ?? "";
-                var repo    = options.AllRepos ? $"{Fit(Repository(row.Repo), 24),-25} " : "";
-                var started = options.Windowed ? $"{Local(row.StartedAt),-17} " : "";
+            var widths = heads.Select((head, i) => head is null
+                    ? 0
+                    : Math.Min(Math.Max(caps[i], head.Length), Math.Max(head.Length, rows.Max(r => r[i]!.Length))))
+                .ToArray();
 
-                sb.AppendLine(
-                    $"{Fit(row.SessionId, 32),-33} {status,-7} {row.AccessLevel,-9} {Fit(owner, 13),-14} {Fit(row.Vendor ?? "", 7),-8} {repo}{Fit(row.Branch ?? "", 23),-24} {started}{Local(row.LastActivityAt),-17} {row.Title ?? "(untitled)"}");
+            Narrow(widths, heads, width);
+
+            string Lead(IReadOnlyList<string?> cells) {
+                var line = new StringBuilder();
+
+                for (var i = 0; i < cells.Count; i++) {
+                    if (heads[i] is null) continue;
+
+                    line.Append(StatusGlyphs.Fit(cells[i]!, widths[i], encodable).PadRight(widths[i])).Append(' ');
+                }
+
+                return line.ToString();
             }
+
+            var lead = Lead(heads).Length;
+
+            sb.AppendLine(Lead(heads) + "TITLE");
+
+            for (var i = 0; i < rows.Count; i++)
+                sb.AppendLine(Lead(rows[i]) + Title(page.Items[i].Title ?? "(untitled)", lead, encodable, width));
 
             if (page.Total > page.Items.Count)
                 sb.AppendLine(
@@ -158,12 +195,43 @@ partial class SessionsCommand(
 
         if (page.Items.Count > 0) {
             sb.AppendLine();
+            sb.AppendLine("ACCESS is what you may read of a session: overview, activity or full.");
             sb.AppendLine("Details (full access): kcap recap --full <session-id>");
         }
 
         if (page.NextCursor is { } next) sb.AppendLine(NextPage(options, repoLabel, next));
 
         return sb.ToString();
+    }
+
+    const int FewestTitleColumns = 12;
+
+    /// <summary>Takes columns from the owner, repository and branch, widest first, until a title fits
+    /// beside them on the terminal. The other cells are ids and times, which a cut would make useless.</summary>
+    static void Narrow(int[] widths, string?[] heads, int? width) {
+        if (width is not { } columns) return;
+
+        int[] narrowable = [Array.IndexOf(heads, "OWNER"), Array.IndexOf(heads, "REPO"), Array.IndexOf(heads, "BRANCH")];
+        const int fewest = 10;
+
+        var excess = widths.Sum() + heads.Count(h => h is not null) + FewestTitleColumns - (columns - 1);
+
+        while (excess > 0) {
+            var widest = narrowable.Where(i => i >= 0 && widths[i] > fewest).OrderByDescending(i => widths[i]).FirstOrDefault(-1);
+
+            if (widest < 0) return;
+
+            widths[widest]--;
+            excess--;
+        }
+    }
+
+    /// <summary>The title cut to the room left on a terminal line, so a row never wraps. A terminal
+    /// too narrow to show a useful part of it gets it whole.</summary>
+    static string Title(string title, int lead, bool encodable, int? width) {
+        if (width is not { } columns || columns - 1 - lead < FewestTitleColumns) return title;
+
+        return StatusGlyphs.Fit(title, columns - 1 - lead, encodable);
     }
 
     static string Empty(string repoLabel, SessionsOptions options) {
@@ -197,5 +265,13 @@ partial class SessionsCommand(
 
     static string Local(DateTimeOffset instant) => instant.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
 
-    static string Fit(string value, int width) => value.Length <= width ? value : value[..(width - 1)] + "…";
+    static int? TerminalWidth() {
+        if (Console.IsOutputRedirected) return null;
+
+        try {
+            return Console.WindowWidth > 0 ? Console.WindowWidth : null;
+        } catch (Exception ex) when (ex is IOException or PlatformNotSupportedException) {
+            return null;
+        }
+    }
 }

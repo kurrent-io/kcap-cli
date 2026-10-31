@@ -58,7 +58,8 @@ sealed class SetupImportRunner(
                 maxSessions:             inv.MaxSessions,
                 onSelected:              s => selection = s,
                 onFinished:              o => outcome = o,
-                nested:                  true);
+                nested:                  true,
+                skip:                    inv.Skip);
 
             return new SetupImportRun(exit, selection, outcome, null);
         } catch (Exception ex) {
@@ -66,6 +67,7 @@ sealed class SetupImportRunner(
         }
     }
 
+    // The console as it stands when the pass runs: setup's reported run swaps it for its own writers.
     ImportCommand Command(ProfileContext profiles, ServiceProvider scoped) =>
-        new(config, profiles, home, harnesses, scoped.GetRequiredService<ICapacitorHttpClient>(), router, time, accounts);
+        new(config, profiles, home, harnesses, scoped.GetRequiredService<ICapacitorHttpClient>(), router, time, ImportConsole.FromProcess(), accounts);
 }

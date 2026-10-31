@@ -75,7 +75,51 @@ public class ArtefactCommandTests {
         await Assert.That(console.GetCapturedError()).Contains("--title is not a flag of this command");
     }
 
+    [Test]
+    public async Task Get_prints_a_shared_pages_text_to_stdout_and_says_whose_words_they_are() {
+        var api = new RecordingArtefactsApi();
+
+        using var console = ConsoleOutput.StartFullCapture();
+        var exit = await new ArtefactCommand(api).HandleAsync(["page", "get", "https://kcap.test/pages/a1"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(api.Calls).IsEquivalentTo(new[] { "read:a1@latest" });
+        await Assert.That(console.GetCapturedOutput().Trim()).IsEqualTo("Shared plan");
+        await Assert.That(console.GetCapturedError()).Contains("Written by u2");
+    }
+
+    [Test]
+    public async Task Html_ahead_of_the_id_is_a_switch_and_leaves_the_id_alone() {
+        var api = new RecordingArtefactsApi();
+
+        using var console = ConsoleOutput.StartFullCapture();
+        var exit = await new ArtefactCommand(api).HandleAsync(["page", "get", "--html", "a1", "--version", "3"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(api.Calls).IsEquivalentTo(new[] { "read:a1@3" });
+        await Assert.That(console.GetCapturedOutput().Trim()).IsEqualTo(RecordingArtefactsApi.SharedHtml);
+    }
+
+    [Test]
+    public async Task Get_of_a_page_the_profile_may_not_open_fails() {
+        var api = new RecordingArtefactsApi();
+
+        using var console = ConsoleOutput.StartFullCapture();
+        var exit = await new ArtefactCommand(api).HandleAsync(["page", "get", "hidden"]);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(console.GetCapturedOutput()).IsEmpty();
+        await Assert.That(console.GetCapturedError()).Contains("not visible to this profile");
+    }
+
+    [Test]
+    public async Task A_terminal_is_shown_a_pages_control_characters_rather_than_sent_them() =>
+        await Assert.That(ArtefactCommand.ForTerminal("ok\u001b[2Jcleared\r\nnext\tcell"))
+                    .IsEqualTo("ok\\u001b[2Jcleared\\u000d\nnext\tcell");
+
     sealed class RecordingArtefactsApi : IArtefactsApi {
+        public const string SharedHtml = "<h1>Shared plan</h1><script>steal()</script>";
+
         public List<string> Calls { get; } = [];
 
         public List<ArtefactGrantDto>? SharedGrants { get; private set; }
@@ -109,6 +153,16 @@ public class ArtefactCommandTests {
         public Task<List<ArtefactDto>> ListAsync(CancellationToken ct = default) {
             Calls.Add("list");
             return Task.FromResult(new List<ArtefactDto>());
+        }
+
+        public Task<ArtefactReadResult> ReadAsync(string artefactId, int? version, CancellationToken ct = default) {
+            Calls.Add($"read:{artefactId}@{(version is { } v ? v.ToString(System.Globalization.CultureInfo.InvariantCulture) : "latest")}");
+
+            return Task.FromResult<ArtefactReadResult>(artefactId == "hidden"
+                ? new ArtefactReadResult.NotFound()
+                : new ArtefactReadResult.Read(
+                    new(artefactId, "Plan", "u2", "org", 3, DateTimeOffset.UnixEpoch, false, $"https://kcap.test/pages/{artefactId}"),
+                    version ?? 3, SharedHtml));
         }
     }
 }

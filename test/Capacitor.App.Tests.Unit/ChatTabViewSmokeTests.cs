@@ -5,6 +5,7 @@ using System.Reactive.Threading.Tasks;
 using System.Reactive.Subjects;
 using System.Text;
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Avalonia.Controls.Presenters;
@@ -124,12 +125,13 @@ public class ChatTabViewSmokeTests {
         /// `show: false` leaves the window unshown, so the view has no template and no
         /// ScrollViewer until Show() is called — the order production takes, where the tab's
         /// first read starts before the workspace view exists.
-        public Host(bool show = true, IObservable<string?>? sessionId = null) {
+        public Host(bool show = true, IObservable<string?>? sessionId = null, IObservable<Capacitor.Cli.Core.Accounts.AccountsSnapshotDto?>? accountReadings = null) {
             Runs = new SessionRuns(Time);
             Terminal = new TerminalTabViewModel("a1", Daemon, Attach.Factory, () => new FakeTerminalSurface(), Time);
             Chat = new ChatTabViewModel(
                 "a1", Daemon, new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), _presence), new NoAttachmentUploader(), TranscriptChat.For("claude"), Opener, Time, Permissions, Runs,
-                sessionId: sessionId, localDaemonOnAppServer: Observable.Return(true));
+                sessionId: sessionId, localDaemonOnAppServer: Observable.Return(true),
+                accountReadings: accountReadings, usageClock: Observable.Return(StripReadings.Now));
             View = new ChatTabView { DataContext = Chat };
             Window = new Window { Content = View, Width = 800, Height = 600 };
             if (!show) return;
@@ -332,6 +334,62 @@ public class ChatTabViewSmokeTests {
                 host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path });
                 host.Settle();
                 await Assert.That(strip.IsVisible).IsFalse();
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_strip_draws_a_danger_pill_for_a_blocked_account() {
+        await RunOnUiAsync(async () => {
+            var readings = new BehaviorSubject<Capacitor.Cli.Core.Accounts.AccountsSnapshotDto?>(StripReadings.Snapshot(
+                StripReadings.Account("acc1", StripReadings.Blocked(TimeSpan.FromMinutes(65),
+                    StripReadings.Window(300, 100, TimeSpan.FromMinutes(65)), StripReadings.Window(10080, 81, TimeSpan.FromDays(3))))));
+            var host = new Host(accountReadings: readings);
+            var path = Tmp.CreateFile("blocked.jsonl", [UserLine]);
+            try {
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, AccountDirectory = StripReadings.Directory, AccountId = "acc1", AccountLabel = "work",
+                });
+                await (host.Chat.PendingReadForTesting ?? Task.CompletedTask);
+                await WaitUntilAsync(() => { host.Settle(); return host.Chat.ShowsAccountUsage; }, what: "the bars");
+
+                var strip = host.View.FindControl<Border>("AccountStrip")!;
+                var pill = host.View.FindControl<Border>("AccountStripBlocked")!;
+                await Assert.That(pill.IsEffectivelyVisible).IsTrue();
+                await Assert.That(pill.GetVisualDescendants().OfType<TextBlock>().Single().Text).IsEqualTo("Limit hit · resets in 1h 05m");
+                await Assert.That(host.View.FindControl<TextBlock>("AccountStripDirectory")!.IsEffectivelyVisible).IsFalse();
+                await Assert.That(host.View.FindControl<TextBlock>("AccountStripReset")!.IsEffectivelyVisible).IsFalse();
+                var shown = strip.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToArray();
+                await Assert.That(shown).Contains("100%");
+                await Assert.That(shown).Contains("81%");
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_strip_shows_an_exhausted_model_limit_beside_healthy_bars() {
+        await RunOnUiAsync(async () => {
+            var modelHit = new Capacitor.Cli.Core.Accounts.Readings.AccountReadingDto(1,
+                [StripReadings.Window(300, 20, TimeSpan.FromHours(2)), new("claude_opus", 10080, 100, StripReadings.Now + TimeSpan.FromDays(2), StripReadings.Now)],
+                null, null,
+                new(StripReadings.Now.AddMinutes(-5), null, [new("claude_opus", 10080, StripReadings.Now + TimeSpan.FromDays(2), StripReadings.Now.AddMinutes(-5))]));
+            var readings = new BehaviorSubject<Capacitor.Cli.Core.Accounts.AccountsSnapshotDto?>(
+                StripReadings.Snapshot(StripReadings.Account("acc1", modelHit)));
+            var host = new Host(accountReadings: readings);
+            var path = Tmp.CreateFile("model-hit.jsonl", [UserLine]);
+            try {
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, AccountDirectory = StripReadings.Directory, AccountId = "acc1", AccountLabel = "work",
+                });
+                await (host.Chat.PendingReadForTesting ?? Task.CompletedTask);
+                await WaitUntilAsync(() => { host.Settle(); return host.Chat.ShowsAccountUsage; }, what: "the bars");
+
+                var perModel = host.View.FindControl<TextBlock>("AccountStripPerModel")!;
+                await Assert.That(perModel.IsEffectivelyVisible).IsTrue();
+                await Assert.That(perModel.Text).IsEqualTo("+1 per model · 1 hit");
+                await Assert.That(host.View.FindControl<Border>("AccountStripBlocked")!.IsEffectivelyVisible).IsFalse();
             } finally { await host.CloseAsync(); }
         });
     }
@@ -916,7 +974,7 @@ public class ChatTabViewSmokeTests {
             await host.LoadAsync(path);
 
             var label = host.View.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "ToolRowLabel" && t.IsEffectivelyVisible);
-            var detail = host.View.GetVisualDescendants().OfType<SelectableTextBlock>().Single(t => t.IsEffectivelyVisible && t.Text == "Retention brief");
+            var detail = host.View.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "ToolRowDetail" && t.IsEffectivelyVisible && t.Text == "Retention brief");
             await Assert.That(label.Text).IsEqualTo("Published page");
             await Assert.That(label.FontFamily.Name).IsEqualTo(detail.FontFamily.Name);
             await Assert.That(label.LineHeight).IsEqualTo(detail.LineHeight);
@@ -983,6 +1041,35 @@ public class ChatTabViewSmokeTests {
 
     static object? Brush(bool isError) =>
         ToolOutcomeBrushConverter.Instance.Convert(isError, typeof(IBrush), null, CultureInfo.InvariantCulture);
+
+    /// A click on a tool row opens what its call recorded — status, command and output, each
+    /// selectable — and a second click closes it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Clicking_a_tool_row_opens_its_recorded_command_and_output() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("open.jsonl", [ToolCallLine, ToolErrorLine]));
+            host.Settle();
+            var row = ToolRows(host.View).Single();
+            var toggle = row.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "ToolRowToggle");
+            var body = row.GetVisualDescendants().OfType<Border>().Single(b => b.Name == "ToolInspection");
+            await Assert.That(body.IsEffectivelyVisible).IsFalse();
+            await Assert.That(AutomationProperties.GetName(toggle)).IsEqualTo("Show details: Searched files ls -la");
+
+            Click(host, toggle);
+
+            await Assert.That(OnlyGroup(host).Calls[0].IsExpanded).IsTrue();
+            await Assert.That(body.IsEffectivelyVisible).IsTrue();
+            var texts = body.GetVisualDescendants().OfType<SelectableTextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text ?? "").ToList();
+            await Assert.That(texts).IsEquivalentTo(new[] { "Failed", "ls -la", "boom" }, CollectionOrdering.Matching);
+            await Assert.That(AutomationProperties.GetName(toggle)).IsEqualTo("Hide details: Searched files ls -la");
+
+            Click(host, toggle);
+            await Assert.That(body.IsEffectivelyVisible).IsFalse();
+            await host.CloseAsync();
+        });
+    }
 
     /// Pins that Enter reaches the send: the composer consumes it, the typed text leaves as one
     /// bracketed paste followed by the CR, and no newline is left behind in the box.

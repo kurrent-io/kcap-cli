@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness.Claude;
 
 namespace Capacitor.Cli.Commands;
 
@@ -177,17 +178,23 @@ static class TitleGenerator {
     }
 
     /// <summary>
-    /// Detects transcripts created by kcap's own headless <c>claude -p</c> invocations.
-    /// These sessions start with a <c>queue-operation</c> entry whose content matches known prompts.
+    /// Whether a Claude transcript is one of kcap's own headless <c>claude -p</c> runs, proven by a mark
+    /// only kcap leaves: a <see cref="ClaudeHelperRun"/> session id or working directory, or an opening
+    /// <c>queue-operation</c> that carries a kcap prompt. Some Claude builds leave that entry's content
+    /// empty, so the working directory is what identifies their runs. Never deletes anything: a
+    /// transcript kcap cannot prove is its own is the user's.
     /// </summary>
     internal static bool IsCapacitorSubSession(string filePath) {
+        if (ClaudeHelperRun.IsHelperSessionId(Path.GetFileNameWithoutExtension(filePath))) return true;
+
         try {
             using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             using var reader = new StreamReader(stream);
 
             var linesChecked = 0;
+            var sawCwd       = false;
 
-            while (reader.ReadLine() is { } line && linesChecked < 5) {
+            while (reader.ReadLine() is { } line && linesChecked < 20) {
                 linesChecked++;
 
                 if (string.IsNullOrWhiteSpace(line)) continue;
@@ -196,14 +203,21 @@ static class TitleGenerator {
                     using var doc  = JsonDocument.Parse(line);
                     var       root = doc.RootElement;
 
-                    // Headless claude -p sessions start with queue-operation entries
-                    if (root.Str("type")      == "queue-operation"
+                    if (linesChecked <= 5
+                     && root.Str("type")      == "queue-operation"
                      && root.Str("operation") == "enqueue"
-                     && root.Str("content") is { } content) {
-                        if (IsKnownCapacitorPrompt(content)) {
-                            return true;
-                        }
+                     && root.Str("content") is { } content
+                     && IsKnownCapacitorPrompt(content)) {
+                        return true;
                     }
+
+                    if (!sawCwd && root.Str("cwd") is { } cwd) {
+                        if (ClaudeHelperRun.IsHelperWorkingDir(cwd)) return true;
+
+                        sawCwd = true;
+                    }
+
+                    if (sawCwd && linesChecked >= 5) break;
                 } catch (JsonException) { }
             }
         } catch {

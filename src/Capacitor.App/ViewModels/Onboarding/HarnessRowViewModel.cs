@@ -1,3 +1,4 @@
+using Capacitor.App.Services;
 using System.Reactive;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Setup;
@@ -8,7 +9,7 @@ namespace Capacitor.App.ViewModels.Onboarding;
 /// One detected harness on the Harnesses page: whether to record it, whether to give it the tools,
 /// and how its install went.
 public sealed class HarnessRowViewModel : ReactiveObject {
-    internal const string CodexConsentNote = "Also opens Codex's sandbox network to your server, so its skills can reach it.";
+    internal const string CodexConsentNote = "Also opens Codex's sandbox network to kcap, so its skills can reach it.";
 
     bool               _record;
     bool               _tools;
@@ -22,11 +23,13 @@ public sealed class HarnessRowViewModel : ReactiveObject {
         Label    = vendor.Label;
         Flag     = vendor.Flag;
         Declined = declined;
-        // The launch signal wins: "on your PATH" is the stronger claim when both fired.
-        Signal   = detected.BinaryFound ? "on your PATH" : "config found";
+        SettingsOnly = !detected.BinaryFound && !detected.DesktopAppFound;
+        Signal   = detected.BinaryFound ? "on your PATH" : detected.DesktopAppFound ? "desktop app or its data" : "settings folder only";
 
-        _record = !declined;
-        _tools  = !declined;
+        // A settings folder outlives an uninstall and can be written by something else, so it is no
+        // consent to record: those rows wait for the user to turn them on.
+        _record = !declined && !SettingsOnly;
+        _tools  = !declined && !SettingsOnly;
 
         RetryCommand = ReactiveCommand.CreateFromTask(() => retry(this), canRetry);
     }
@@ -38,10 +41,12 @@ public sealed class HarnessRowViewModel : ReactiveObject {
     public string Signal   { get; }
     public bool   Declined { get; }
 
+    /// Found only by files it left, with no command on PATH and no installed app.
+    public bool SettingsOnly { get; }
+
     public string SignalLine => Declined ? $"{Signal} · you turned this down before" : Signal;
 
-    /// Claude Code and Codex install their tools with capture; the two cannot be answered apart.
-    public bool ToolsBundled => Id == HarnessId.Claude || Id == HarnessId.Codex;
+    public bool ToolsBundled => HarnessInstallOptions.ToolsBundled(Id);
 
     public string? ConsentNote => Id == HarnessId.Codex ? CodexConsentNote : null;
 
@@ -85,16 +90,5 @@ public sealed class HarnessRowViewModel : ReactiveObject {
 
     public ReactiveCommand<Unit, Unit> RetryCommand { get; }
 
-    /// What `plugin install` takes after the vendor flag for this row's answer. Tools are the MCP
-    /// servers and what steers the agent to them, so declining them skips all three where a vendor
-    /// installs them.
-    internal IReadOnlyList<string> InstallOptions =>
-        ToolsBundled         ? []
-        : Record && !Tools   ? [.. ToolParts.Select(part => $"--skip-{Id.VendorId}-{part}")]
-        : !Record && Tools   ? ["--tools-only"]
-        :                      [];
-
-    // Cursor and Kiro carry no instructions block of their own.
-    IEnumerable<string> ToolParts =>
-        Id == HarnessId.Cursor || Id == HarnessId.Kiro ? ["mcp", "skills"] : ["mcp", "skills", "instructions"];
+    internal IReadOnlyList<string> InstallOptions => HarnessInstallOptions.For(Id, Record, Tools);
 }

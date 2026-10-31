@@ -1,6 +1,7 @@
 using System.Collections.Frozen;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Accounts.Readings;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.AspNetCore.SignalR.Client;
@@ -157,5 +158,33 @@ public class AccountsPublisherServerTests {
 
         await Assert.That(connection.Connects.Select(c => c.Accounts!.Revision)).IsEquivalentTo([1L, 1L], CollectionOrdering.Matching);
         await Assert.That(connection.Sent.Select(s => s.Revision)).IsEquivalentTo([2L], CollectionOrdering.Matching);
+    }
+
+    /// <summary>A reading change keeps the revision, so only a comparison by value sees it.</summary>
+    [Test]
+    public async Task A_reading_change_between_the_connect_payload_and_registration_reaches_the_server() {
+        var store = Store();
+        Add(store, "work");
+        var id = store.Load().Accounts.Single().Id;
+        using var publisher = Publisher(store, new FakeTimeProvider());
+        await publisher.RebuildAsync(CancellationToken.None);
+        await using var connection = new RegisteringServerConnection(
+            new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1", ConfigRoot = Config.Root });
+        connection.GetAccountsSnapshot = () => publisher.Current;
+        publisher.SendToServer         = connection.AccountsChangedAsync;
+
+        connection.DuringConnect = async () => {
+            var recorded = store.Readings.TryRecord(id, (f, _) => f with {
+                Reading = f.Reading with { Windows = [new UsageWindowDto("five_hour", 300, 42, null, null)] },
+            });
+            if (!recorded) throw new InvalidOperationException("reading not recorded");
+            await publisher.RebuildAsync(CancellationToken.None);
+        };
+        await connection.RegisterDaemonAsync(new RegistrationAttempt(UnattendedAdvertisement.None, _ => { }));
+
+        await Assert.That(connection.Connects.Single().Accounts!.Accounts.Single().Reading).IsNull();
+        var sent = connection.Sent.Single();
+        await Assert.That(sent.Revision).IsEqualTo(1L);
+        await Assert.That(sent.Accounts.Single().Reading!.Windows.Single().UsedPercent).IsEqualTo(42d);
     }
 }

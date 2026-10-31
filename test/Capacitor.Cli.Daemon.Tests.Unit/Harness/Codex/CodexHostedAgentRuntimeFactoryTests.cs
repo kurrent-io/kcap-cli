@@ -3,6 +3,8 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Accounts.Readings;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Harness.Codex;
@@ -89,9 +91,9 @@ public class CodexHostedAgentRuntimeFactoryTests {
     }
 
     CodexHostedAgentRuntimeFactory Factory(
-            RecordingPtyFactory pty, bool appServerActive, CodexAppServerSpawnFactory? spawn = null) =>
+            RecordingPtyFactory pty, bool appServerActive, CodexAppServerSpawnFactory? spawn = null, AccountReadingSink? readings = null) =>
         new(NewLauncher(), pty, ConfigWith(switchOn: appServerActive), NullLoggerFactory.Instance, TimeProvider.System, spawn,
-            installedVersion: () => "0.146.0");
+            installedVersion: () => "0.146.0", readings: readings);
 
     /// <summary>A Codex at the factory's CLI path reporting <paramref name="version"/>, which a pinned
     /// app-server launch probes.</summary>
@@ -342,6 +344,57 @@ public class CodexHostedAgentRuntimeFactoryTests {
         await Assert.That(fake.ReceivedMethods).Contains("thread/start");
 
         await start.Runtime.DisposeAsync();
+    }
+
+    /// <summary>The non-default account carries a later generation, so the reading landing at that
+    /// generation proves the runtime posted the launch's resolved account, not the default's.</summary>
+    [Test]
+    [NotInParallel]
+    public async Task App_server_rateLimits_update_lands_on_the_agents_account_not_the_default() {
+        using var wt = new TempDir();
+        WriteWorktreeHooks(wt);
+        await using var fake = new FakeCodexAppServer();
+        using var codexEnv = EnvScope.Exclusive("CODEX_HOME", Home.PathTo(".codex"));
+
+        const string defaultId = "c0dec001-default";
+        const string workId    = "c0dec002-work";
+        var store      = new AccountStore(Home.PathTo("accounts"));
+        var defaultDir = AccountDirectory.Normalize(Home.CreateDir(".codex"));
+        store.Mutate(r => (r with {
+            Accounts = [
+                new VendorAccount(defaultId, HarnessId.Codex, defaultDir, "default", DateTimeOffset.UnixEpoch),
+                new VendorAccount(workId, HarnessId.Codex, AccountDirectory.Normalize(Home.CreateDir(".codex-work")), "work", DateTimeOffset.UnixEpoch, Generation: 2),
+            ],
+        }, 0));
+        var account = AccountResolution.Resolve(store.Load(), HarnessId.Codex, workId, defaultDir).Account!;
+        using var sink = new AccountReadingSink(store, TimeProvider.System, NullLogger<AccountReadingSink>.Instance);
+
+        CodexAppServerSpawnFactory seam = (_, _, _, _, _, _, _, _) =>
+            Task.FromResult<(CodexAppServerConnection, IAcpProcess)>((fake.ConnectClient(), new FakeAcpProcess()));
+        var factory = Factory(new RecordingPtyFactory(), appServerActive: true, seam, readings: sink);
+
+        var start = await factory.StartAsync(Ctx(isReviewFlow: false, wt.Path) with { Account = account }, CancellationToken.None).WaitAsync(HangGuard);
+        try {
+            await fake.SendNotificationAsync("account/rateLimits/updated", new JsonObject {
+                ["rateLimits"] = new JsonObject {
+                    ["limitId"] = "codex",
+                    ["primary"] = new JsonObject { ["usedPercent"] = 42, ["windowDurationMins"] = 300, ["resetsAt"] = 1_800_000_000 },
+                },
+            });
+
+            var deadline = DateTime.UtcNow + HangGuard;
+            ReadingFile? file;
+            while ((file = store.Readings.LoadAll().GetValueOrDefault(workId)) is null) {
+                if (DateTime.UtcNow > deadline) throw new TimeoutException("the rate-limit notification recorded nothing");
+                await Task.Delay(10);
+            }
+
+            await Assert.That(file.Reading.Generation).IsEqualTo(2L);
+            await Assert.That(file.Reading.Windows.Single().UsedPercent).IsEqualTo(42.0);
+            await Assert.That(store.Readings.LoadAll().ContainsKey(defaultId)).IsFalse();
+        } finally {
+            await start.Runtime.DisposeAsync();
+        }
     }
 
     // ── Guard-1 marker (§2.5) ──────────────────────────────────────────────────────────

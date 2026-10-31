@@ -168,14 +168,16 @@ sealed class MuseHookCommand(
             disabled: activeProfile?.DisableMemoryIndex is true || !audience.GetsDriverGuidance,
             guidelinesDisabled: activeProfile?.DisableSessionGuidelines is true,
             flowsDisabled: SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Muse, harnesses, audience: audience),
-            source, budget.Remaining);
+            source,
+            wakeUpsWanted: audience.IsHosted,
+            budget.Remaining);
 
         // Posted with or without a log: Stop starts a missing watcher but never posts the start.
         await PostInOrderAsync("session-start/muse", enriched, sessionId, budget);
 
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
         var nudge = HarnessNudgeEmitter.Combine(
-            SessionNudges.Resolve(HarnessId.Muse, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience),
+            SessionNudges.Resolve(HarnessId.Muse, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience, cwd, home),
             HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true || !audience.GetsOnboarding, config, harnesses, clock.Time),
             FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true || !audience.GetsOnboarding, config, HarnessId.Muse, harnesses));
         await WriteFragment(stdout, fragment, nudge);
@@ -342,6 +344,7 @@ sealed class MuseHookCommand(
             bool     guidelinesDisabled,
             bool     flowsDisabled,
             string?  source,
+            bool     wakeUpsWanted,
             TimeSpan budget) {
         if ((disabled && guidelinesDisabled && flowsDisabled) || string.IsNullOrWhiteSpace(scopeRoot)
          || budget <= TimeSpan.Zero || !HookHttp.IsPostable(Url))
@@ -354,7 +357,7 @@ sealed class MuseHookCommand(
             return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 LifecycleFor(sessionId, source),
                 new SessionStartMemoryContextRequest(Url!, scopeRoot, disabled, budget, CancellationToken.None,
-                    GuidelinesDisabled: guidelinesDisabled, FlowsDisabled: flowsDisabled));
+                    GuidelinesDisabled: guidelinesDisabled, Vendor: HarnessId.Muse.VendorId, WakeUpsWanted: wakeUpsWanted, FlowsDisabled: flowsDisabled));
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
         }

@@ -28,6 +28,12 @@ copy_binaries "npm/$npm_package/bin"
 # Binaries under bin/: the plugin directory is also named kcap and cannot sit beside the kcap
 # binary. SetupCommand.ResolvePluginPath finds it at <bin>/../kcap.
 copy_binaries archive/bin
+# The Windows service ships with the archive the desktop bundle is built from, not with npm: an npm
+# install has no elevated helper to register it and keeps the Scheduled Task.
+if [[ "$rid" == win-* ]]; then
+  [ -f publish/service/kcap-service.exe ] || { echo "::error::publish/service/kcap-service.exe is missing"; exit 1; }
+  cp publish/service/kcap-service.exe archive/bin/
+fi
 if [[ "$rid" == osx-* ]]; then
   echo "$digest" > archive/bin/daemon.sha256
   sha256_of "$cli" > archive/bin/kcap.sha256

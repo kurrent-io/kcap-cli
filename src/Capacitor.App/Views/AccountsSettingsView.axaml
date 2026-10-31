@@ -6,122 +6,267 @@
              x:Class="Capacitor.App.Views.AccountsSettingsView"
              x:DataType="vm:AccountsSettingsViewModel">
     <UserControl.Styles>
-        <Style Selector="TextBlock.accountState.attention">
+        <Style Selector="TextBlock.summaryValue">
+            <Setter Property="FontSize" Value="20" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
+        <Style Selector="TextBlock.summaryValue.attention">
             <Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" />
         </Style>
     </UserControl.Styles>
-    <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,18,0,0">
-        <StackPanel Spacing="16">
-            <StackPanel Spacing="10">
-                <TextBlock x:Name="AccountsTitleText" Classes="kcapTitle" Text="Accounts" LineHeight="22" />
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <views:SettingsPage Classes="settingsPage">
+            <StackPanel Classes="settingsHeader">
+                <TextBlock x:Name="AccountsTitleText" Classes="kcapTitle" Text="Accounts" />
                 <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
-                           Text="Claude and Codex config directories on this machine. Each records its sessions and can be picked when a session starts." />
+                           Text="Keep separate Claude Code or Codex sign-ins, such as work and personal. Each account is its own settings folder. kcap records sessions from every account here. You pick one when you start a session." />
             </StackPanel>
 
-            <TextBlock x:Name="AccountsNoticeText" Classes="kcapHint" Text="{Binding ReadOnlyNotice}" TextWrapping="Wrap"
-                       IsVisible="{Binding ReadOnlyNotice, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            <Border Classes="settingsNotice"
+                    IsVisible="{Binding ReadOnlyNotice, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                <TextBlock x:Name="AccountsNoticeText" Classes="kcapHint" Text="{Binding ReadOnlyNotice}" TextWrapping="Wrap"
+                           Foreground="{StaticResource KcapTextBrush}" />
+            </Border>
+
+            <UniformGrid x:Name="AccountSummaryCards" Columns="3">
+                <Border Classes="settingsCard" Padding="16,14" Margin="0,0,6,0">
+                    <StackPanel Spacing="4">
+                        <TextBlock Classes="kcapLabel" Text="Ready for a long run" />
+                        <TextBlock Classes="summaryValue" Classes.attention="{Binding ReadyCard.Attention}" Text="{Binding ReadyCard.Value}" />
+                        <TextBlock Classes="kcapHint" Text="{Binding ReadyCard.Detail}" TextWrapping="Wrap"
+                                   IsVisible="{Binding ReadyCard.Detail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    </StackPanel>
+                </Border>
+                <Border Classes="settingsCard" Padding="16,14" Margin="6,0">
+                    <StackPanel Spacing="4">
+                        <TextBlock Classes="kcapLabel" Text="Next reset" />
+                        <TextBlock Classes="summaryValue" Classes.attention="{Binding NextResetCard.Attention}" Text="{Binding NextResetCard.Value}" />
+                        <TextBlock Classes="kcapHint" Text="{Binding NextResetCard.Detail}" TextWrapping="Wrap"
+                                   IsVisible="{Binding NextResetCard.Detail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    </StackPanel>
+                </Border>
+                <Border Classes="settingsCard" Padding="16,14" Margin="6,0,0,0">
+                    <StackPanel Spacing="4">
+                        <TextBlock Classes="kcapLabel" Text="Need a fix" />
+                        <TextBlock Classes="summaryValue" Classes.attention="{Binding NeedsFixCard.Attention}" Text="{Binding NeedsFixCard.Value}" />
+                        <TextBlock Classes="kcapHint" Text="{Binding NeedsFixCard.Detail}" TextWrapping="Wrap"
+                                   IsVisible="{Binding NeedsFixCard.Detail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    </StackPanel>
+                </Border>
+            </UniformGrid>
 
             <ItemsControl x:Name="AccountGroups" ItemsSource="{Binding Groups}">
                 <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>
-                        <StackPanel Spacing="16" />
+                        <StackPanel Spacing="28" />
                     </ItemsPanelTemplate>
                 </ItemsControl.ItemsPanel>
                 <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="vm:AccountVendorGroup">
-                        <StackPanel Spacing="10">
-                            <TextBlock Classes="kcapLabel" Text="{Binding VendorLabel}" />
-                            <ItemsControl ItemsSource="{Binding Rows}">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <StackPanel Spacing="12" />
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:AccountSettingsRow">
-                                        <Border Classes="profileRow accountRow" Background="{StaticResource KcapSurfaceBrush}"
-                                                BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1" CornerRadius="12" Padding="20">
-                                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="18">
-                                                <StackPanel Spacing="6">
-                                                    <StackPanel Orientation="Horizontal" Spacing="8">
-                                                        <StackPanel.IsVisible>
-                                                            <MultiBinding Converter="{x:Static views:SameValueConverter.Different}">
-                                                                <Binding />
-                                                                <Binding Path="$parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).Renaming" />
-                                                            </MultiBinding>
-                                                        </StackPanel.IsVisible>
-                                                        <TextBlock Classes="kcapLabel accountLabel" Text="{Binding Label}" VerticalAlignment="Center" />
-                                                        <Border Classes="accountDefault" IsVisible="{Binding IsDefault}"
-                                                                Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                                                                BorderThickness="1" CornerRadius="999" Padding="8,3" VerticalAlignment="Center">
-                                                            <TextBlock Text="Default" FontSize="11" FontWeight="SemiBold"
-                                                                       Foreground="{StaticResource KcapMutedBrush}" />
-                                                        </Border>
-                                                    </StackPanel>
-                                                    <StackPanel Orientation="Horizontal" Spacing="8">
-                                                        <StackPanel.IsVisible>
-                                                            <MultiBinding Converter="{x:Static views:SameValueConverter.Same}">
-                                                                <Binding />
-                                                                <Binding Path="$parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).Renaming" />
-                                                            </MultiBinding>
-                                                        </StackPanel.IsVisible>
-                                                        <TextBox Classes="kcapField" Width="180" AutomationProperties.Name="Account label"
-                                                                 Text="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).RenameDraft, Mode=TwoWay}" />
-                                                        <Button Classes="kcapChip" Content="Save" VerticalAlignment="Center"
-                                                                Command="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).CommitRenameCommand}" />
-                                                        <Button Classes="kcapChip" Content="Cancel" VerticalAlignment="Center"
-                                                                Command="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).CancelRenameCommand}" />
-                                                    </StackPanel>
-                                                    <TextBlock Classes="kcapHint" Text="{Binding Directory}" TextWrapping="Wrap" />
-                                                    <TextBlock Classes="kcapHint accountState" Classes.attention="{Binding StateIsAttention}"
-                                                               Text="{Binding StateLabel}" ToolTip.Tip="{Binding StateHint}" />
-                                                </StackPanel>
-                                                <Panel Grid.Column="1" VerticalAlignment="Top">
-                                                    <Button Classes="kcapGhost kcapIcon accountMenu" IsVisible="{Binding !IsUnregisteredDefault}"
-                                                            IsEnabled="{Binding !$parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).IsBusy}"
-                                                            AutomationProperties.Name="{Binding Label, StringFormat='Actions for {0}'}"
-                                                            ToolTip.Tip="Rename, re-wire or remove">
-                                                        <views:AppIcon Kind="Ellipsis" Size="16" />
-                                                        <Button.Flyout>
-                                                            <Flyout Placement="BottomEdgeAlignedRight" VerticalOffset="6"
-                                                                    FlyoutPresenterClasses="kcapPanel" Opened="OnMenuOpened">
-                                                                <StackPanel Spacing="2" Margin="6" MinWidth="160">
-                                                                    <Button Classes="kcapGhost" Content="Rename" Click="OnMenuItemClick" CommandParameter="{Binding}"
-                                                                            Command="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).BeginRenameCommand}"
-                                                                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                                                                            Padding="10,8" FontSize="13.5" />
-                                                                    <Button Classes="kcapGhost" Content="Re-wire" Click="OnMenuItemClick" CommandParameter="{Binding}"
-                                                                            Command="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).RewireCommand}"
-                                                                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                                                                            Padding="10,8" FontSize="13.5" />
-                                                                    <Button Classes="kcapGhost" Content="Remove" Click="OnMenuItemClick" CommandParameter="{Binding}"
-                                                                            Command="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).RemoveCommand}"
-                                                                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                                                                            Padding="10,8" FontSize="13.5" />
+                        <StackPanel Classes="settingsGroup">
+                            <TextBlock Classes="settingsGroupTitle" Text="{Binding VendorLabel}" />
+                            <Border Classes="settingsCard">
+                                <StackPanel>
+                                <ItemsControl ItemsSource="{Binding Rows}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:AccountSettingsRow">
+                                            <Border Classes="profileRow accountRow settingsListRow">
+                                                <Grid Classes="settingsRow" ColumnDefinitions="*,Auto">
+                                                    <StackPanel Classes="settingsRowText">
+                                                        <WrapPanel ItemSpacing="8" LineSpacing="6">
+                                                            <WrapPanel.IsVisible>
+                                                                <MultiBinding Converter="{x:Static views:SameValueConverter.Different}">
+                                                                    <Binding />
+                                                                    <Binding Path="$parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).Renaming" />
+                                                                </MultiBinding>
+                                                            </WrapPanel.IsVisible>
+                                                            <TextBlock Classes="kcapLabel accountLabel" Text="{Binding Label}" VerticalAlignment="Center" MaxWidth="260" TextWrapping="Wrap" />
+                                                            <Border Classes="settingsPill accountDefault" IsVisible="{Binding IsDefault}"
+                                                                    ToolTip.Tip="The tool's standard folder, used when a session does not pick an account">
+                                                                <TextBlock Text="Default" />
+                                                            </Border>
+                                                            <Border Classes="settingsStatus" Classes.attention="{Binding StateIsAttention}" Classes.success="{Binding StateIsHealthy}"
+                                                                    ToolTip.Tip="{Binding StateHint}">
+                                                                <StackPanel Orientation="Horizontal" Spacing="5">
+                                                                    <views:AppIcon Kind="TriangleAlert" Size="12" IsVisible="{Binding StateIsAttention}" />
+                                                                    <views:AppIcon Kind="CircleCheck" Size="12" IsVisible="{Binding StateIsHealthy}" />
+                                                                    <TextBlock Classes="accountState" Classes.attention="{Binding StateIsAttention}"
+                                                                               Text="{Binding StateLabel}" ToolTip.Tip="{Binding StateHint}" />
                                                                 </StackPanel>
-                                                            </Flyout>
-                                                        </Button.Flyout>
-                                                    </Button>
-                                                    <Button Classes="kcapChip accountAdd" Content="Add" IsVisible="{Binding IsUnregisteredDefault}"
-                                                            Command="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).AddDefaultCommand}"
-                                                            CommandParameter="{Binding}" />
-                                                </Panel>
-                                            </Grid>
-                                        </Border>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
+                                                            </Border>
+                                                            <Border Classes="accountPlan" IsVisible="{Binding Plan, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                                                    Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+                                                                    BorderThickness="1" CornerRadius="999" Padding="8,3" VerticalAlignment="Center">
+                                                                <TextBlock Text="{Binding Plan}" FontSize="11" FontWeight="SemiBold"
+                                                                           Foreground="{StaticResource KcapMutedBrush}" />
+                                                            </Border>
+                                                            <Border Classes="accountBlocked" IsVisible="{Binding Usage.View.BlockedText, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}"
+                                                                    Background="{StaticResource KcapDangerDimBrush}" CornerRadius="999" Padding="8,3" VerticalAlignment="Center">
+                                                                <TextBlock Text="{Binding Usage.View.BlockedText}" FontSize="11" FontWeight="SemiBold"
+                                                                           Foreground="{StaticResource KcapDangerBrush}" />
+                                                            </Border>
+                                                        </WrapPanel>
+                                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                                            <StackPanel.IsVisible>
+                                                                <MultiBinding Converter="{x:Static views:SameValueConverter.Same}">
+                                                                    <Binding />
+                                                                    <Binding Path="$parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).Renaming" />
+                                                                </MultiBinding>
+                                                            </StackPanel.IsVisible>
+                                                            <TextBox Classes="kcapField" Width="200" AutomationProperties.Name="Account label"
+                                                                     Text="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).RenameDraft, Mode=TwoWay}" />
+                                                            <Button Classes="kcapChip settingsCompact" Content="Save" VerticalAlignment="Center"
+                                                                    Command="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).CommitRenameCommand}" />
+                                                            <Button Classes="kcapGhost settingsCompact" Content="Cancel" VerticalAlignment="Center"
+                                                                    Command="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).CancelRenameCommand}" />
+                                                        </StackPanel>
+                                                        <SelectableTextBlock Text="{Binding Directory}" TextWrapping="Wrap"
+                                                                             FontFamily="{StaticResource OnboardingMonoFont}" FontSize="12"
+                                                                             Foreground="{StaticResource KcapMutedBrush}" />
+                                                        <TextBlock Classes="kcapHint" Text="{Binding Email}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                                                   IsVisible="{Binding Email, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                                        <Border Classes="settingsCallout"
+                                                                IsVisible="{Binding StateHint, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                                            <StackPanel Spacing="8">
+                                                                <TextBlock Classes="kcapHint" Text="{Binding StateHint}" TextWrapping="Wrap"
+                                                                           Foreground="{StaticResource KcapTextBrush}" />
+                                                                <views:CommandChip Text="{Binding StateCommand}" HorizontalAlignment="Left"
+                                                                                   IsVisible="{Binding StateCommand, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                                            </StackPanel>
+                                                        </Border>
+                                                        <ContentControl Content="{Binding Usage.View}">
+                                                            <ContentControl.ContentTemplate>
+                                                                <DataTemplate x:DataType="vm:AccountUsageView">
+                                                                    <StackPanel Spacing="6" Margin="0,4,0,0">
+                                                                        <ItemsControl ItemsSource="{Binding Bars}">
+                                                                            <ItemsControl.ItemsPanel>
+                                                                                <ItemsPanelTemplate>
+                                                                                    <StackPanel Spacing="6" />
+                                                                                </ItemsPanelTemplate>
+                                                                            </ItemsControl.ItemsPanel>
+                                                                            <ItemsControl.ItemTemplate>
+                                                                                <DataTemplate x:DataType="vm:UsageBar">
+                                                                                    <StackPanel Orientation="Horizontal" Spacing="10">
+                                                                                        <TextBlock Classes="kcapHint" Text="{Binding Label}" Width="44" VerticalAlignment="Center" />
+                                                                                        <Border Width="160" Height="6" CornerRadius="3" VerticalAlignment="Center"
+                                                                                                Background="{StaticResource KcapBorderBrush}">
+                                                                                            <Border HorizontalAlignment="Left" CornerRadius="3"
+                                                                                                    Width="{Binding ., Converter={x:Static views:UsageBarFillConverter.Instance}, ConverterParameter=160}"
+                                                                                                    Background="{Binding Tone, Converter={x:Static views:UsageToneBrushConverter.Instance}}" />
+                                                                                        </Border>
+                                                                                        <TextBlock Text="{Binding PercentText}" Width="44" VerticalAlignment="Center"
+                                                                                                   Foreground="{Binding Tone, Converter={x:Static views:UsageToneBrushConverter.Instance}, ConverterParameter=Text}" />
+                                                                                        <TextBlock Classes="kcapHint" Text="{Binding ResetText}" VerticalAlignment="Center"
+                                                                                                   IsVisible="{Binding ResetText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                                                                    </StackPanel>
+                                                                                </DataTemplate>
+                                                                            </ItemsControl.ItemTemplate>
+                                                                        </ItemsControl>
+                                                                        <TextBlock Classes="kcapHint" Text="{Binding LineText}" TextWrapping="Wrap"
+                                                                                   IsVisible="{Binding LineText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                                                        <TextBlock Classes="kcapHint" Text="{Binding PerModelText}" TextWrapping="Wrap"
+                                                                                   IsVisible="{Binding PerModelText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                                                        <TextBlock Classes="kcapHint" Text="{Binding AgeText}" TextWrapping="Wrap"
+                                                                                   IsVisible="{Binding AgeText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                                                    </StackPanel>
+                                                                </DataTemplate>
+                                                            </ContentControl.ContentTemplate>
+                                                        </ContentControl>
+                                                        <TextBlock Classes="kcapHint accountError" Text="{Binding ErrorText}" TextWrapping="Wrap"
+                                                                   Foreground="{StaticResource KcapWarningBrush}"
+                                                                   IsVisible="{Binding ErrorText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                                    </StackPanel>
+                                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Top" Margin="0,-5,0,0">
+                                                        <Button Classes="kcapChip settingsCompact accountAdd" Content="Set up" IsVisible="{Binding IsUnregisteredDefault}"
+                                                                ToolTip.Tip="Record sessions from this folder"
+                                                                AutomationProperties.Name="{Binding Label, StringFormat='Add {0} account'}"
+                                                                Command="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).AddDefaultCommand}"
+                                                                CommandParameter="{Binding}" />
+                                                        <Button Classes="kcapGhost kcapIcon accountMenu" IsVisible="{Binding !IsUnregisteredDefault}"
+                                                                IsEnabled="{Binding !$parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).IsBusy}"
+                                                                AutomationProperties.Name="{Binding Label, StringFormat='Actions for {0}'}"
+                                                                ToolTip.Tip="Refresh, rename, reconnect or remove">
+                                                            <views:AppIcon Kind="Ellipsis" Size="16" />
+                                                            <Button.Flyout>
+                                                                <Flyout Placement="BottomEdgeAlignedRight" VerticalOffset="6"
+                                                                        FlyoutPresenterClasses="kcapPanel" Opened="OnMenuOpened">
+                                                                    <StackPanel Spacing="2" Margin="6" MinWidth="160">
+                                                                        <Button Classes="kcapGhost" Content="Refresh" Click="OnMenuItemClick" CommandParameter="{Binding}"
+                                                                                Command="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).RefreshCommand}"
+                                                                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                                                Padding="10,8" FontSize="13.5" />
+                                                                        <Button Classes="kcapGhost" Content="Rename" Click="OnMenuItemClick" CommandParameter="{Binding}"
+                                                                                Command="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).BeginRenameCommand}"
+                                                                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                                                Padding="10,8" FontSize="13.5" />
+                                                                        <Button Classes="kcapGhost" Content="Reconnect" Click="OnMenuItemClick" CommandParameter="{Binding}"
+                                                                                Command="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).RewireCommand}"
+                                                                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                                                Padding="10,8" FontSize="13.5" />
+                                                                        <Button Classes="kcapGhost" Content="Remove" Click="OnMenuItemClick" CommandParameter="{Binding}"
+                                                                                Command="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).RemoveCommand}"
+                                                                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                                                Padding="10,8" FontSize="13.5" />
+                                                                    </StackPanel>
+                                                                </Flyout>
+                                                            </Button.Flyout>
+                                                        </Button>
+                                                    </StackPanel>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <!-- The last action's problem, in the card of the tool it was about, as Harnesses shows a row's. -->
+                                <Border Classes="settingsError" Classes.warning="{Binding Notice.IsWarning, FallbackValue=False}" Margin="16,0,16,16"
+                                        IsVisible="{Binding Notice, Converter={x:Static ObjectConverters.IsNotNull}}">
+                                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                                        <Panel VerticalAlignment="Top" Margin="0,2,0,0">
+                                            <views:AppIcon Kind="CircleAlert" Size="14" Foreground="{StaticResource KcapDangerBrush}"
+                                                           IsVisible="{Binding !Notice.IsWarning, FallbackValue=False}" />
+                                            <views:AppIcon Kind="TriangleAlert" Size="14" Foreground="{StaticResource KcapWarningBrush}"
+                                                           IsVisible="{Binding Notice.IsWarning, FallbackValue=False}" />
+                                        </Panel>
+                                        <StackPanel Grid.Column="1" Spacing="2">
+                                            <TextBlock Classes="settingsErrorTitle" Text="{Binding Notice.Title, FallbackValue={x:Null}}" />
+                                            <SelectableTextBlock Classes="settingsErrorDetail" Text="{Binding Notice.Detail, FallbackValue={x:Null}}"
+                                                                 IsVisible="{Binding Notice.Detail, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}" />
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>
             </ItemsControl>
 
-            <Button x:Name="AddAccountButton" Classes="kcapChip" Content="Add account" HorizontalAlignment="Left"
+            <Border Classes="settingsError" Classes.warning="{Binding UnplacedNotice.IsWarning, FallbackValue=False}"
+                    IsVisible="{Binding UnplacedNotice, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                    <Panel VerticalAlignment="Top" Margin="0,2,0,0">
+                        <views:AppIcon Kind="CircleAlert" Size="14" Foreground="{StaticResource KcapDangerBrush}"
+                                       IsVisible="{Binding !UnplacedNotice.IsWarning, FallbackValue=False}" />
+                        <views:AppIcon Kind="TriangleAlert" Size="14" Foreground="{StaticResource KcapWarningBrush}"
+                                       IsVisible="{Binding UnplacedNotice.IsWarning, FallbackValue=False}" />
+                    </Panel>
+                    <StackPanel Grid.Column="1" Spacing="2">
+                        <TextBlock Classes="settingsErrorTitle" Text="{Binding UnplacedNotice.Title, FallbackValue={x:Null}}" />
+                        <SelectableTextBlock Classes="settingsErrorDetail" Text="{Binding UnplacedNotice.Detail, FallbackValue={x:Null}}"
+                                             IsVisible="{Binding UnplacedNotice.Detail, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <Button x:Name="AddAccountButton" Classes="kcapChip" Content="Add account…" HorizontalAlignment="Left"
                     IsVisible="{Binding CanManage}" IsEnabled="{Binding !IsBusy}">
                 <Button.Flyout>
                     <Flyout Placement="BottomEdgeAlignedLeft" VerticalOffset="6" FlyoutPresenterClasses="kcapPanel"
                             Opening="OnAddMenuOpening" Opened="OnMenuOpened">
                         <StackPanel Spacing="2" Margin="6" MinWidth="280">
+                            <TextBlock Text="Found on this computer" Margin="10,6,10,2" FontSize="11.5" FontWeight="SemiBold"
+                                       Foreground="{StaticResource KcapFaintBrush}" IsVisible="{Binding !!Candidates.Count}" />
                             <ItemsControl x:Name="AddAccountCandidates" ItemsSource="{Binding Candidates}">
                                 <ItemsControl.ItemsPanel>
                                     <ItemsPanelTemplate>
@@ -138,8 +283,8 @@
                                                 <ContentControl VerticalAlignment="Center"
                                                                 Content="{Binding Vendor, Converter={x:Static views:VendorGlyphConverter.Instance}, ConverterParameter=14}" />
                                                 <StackPanel Spacing="2">
-                                                    <TextBlock Text="{Binding Directory}" FontSize="13.5" />
-                                                    <TextBlock Text="{Binding Reason}" FontSize="11.5" Foreground="{StaticResource KcapMutedBrush}" />
+                                                    <TextBlock Text="{Binding Directory}" FontSize="12.5" FontFamily="{StaticResource OnboardingMonoFont}" />
+                                                    <TextBlock Text="{Binding Vendor, Converter={x:Static views:HarnessLabelConverter.Instance}}" FontSize="11.5" Foreground="{StaticResource KcapMutedBrush}" />
                                                 </StackPanel>
                                             </StackPanel>
                                         </Button>
@@ -148,10 +293,10 @@
                             </ItemsControl>
                             <Border Height="1" Margin="8,4" Background="{StaticResource KcapBorderBrush}"
                                     IsVisible="{Binding !!Candidates.Count}" />
-                            <Button Classes="kcapGhost" Content="Choose a Claude directory…" Click="OnMenuItemClick"
+                            <Button Classes="kcapGhost" Content="Choose a Claude Code folder…" Click="OnMenuItemClick"
                                     Command="{Binding AddFromPickerCommand}" CommandParameter="claude"
                                     HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="10,8" FontSize="13.5" />
-                            <Button Classes="kcapGhost" Content="Choose a Codex directory…" Click="OnMenuItemClick"
+                            <Button Classes="kcapGhost" Content="Choose a Codex folder…" Click="OnMenuItemClick"
                                     Command="{Binding AddFromPickerCommand}" CommandParameter="codex"
                                     HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="10,8" FontSize="13.5" />
                         </StackPanel>
@@ -159,8 +304,6 @@
                 </Button.Flyout>
             </Button>
 
-            <TextBlock x:Name="AccountsMessageText" Classes="kcapHint" Text="{Binding Message}" TextWrapping="Wrap"
-                       IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-        </StackPanel>
+        </views:SettingsPage>
     </ScrollViewer>
 </UserControl>

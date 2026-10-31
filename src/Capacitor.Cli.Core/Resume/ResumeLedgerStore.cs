@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Capacitor.Cli.Core.WorkItems;
 
 namespace Capacitor.Cli.Core.Resume;
 
@@ -17,6 +18,12 @@ public sealed class ResumeLedgerStore(string resumeDirectory, TimeProvider? time
 
     public static ResumeLedgerStore For(DaemonStore store, string daemonName, TimeProvider? time = null) =>
         new(store.ResumeDirectory(daemonName), time);
+
+    /// <summary>Flow participants' entries, in a subdirectory a daemon that cannot resume them never reads.</summary>
+    public static ResumeLedgerStore ParticipantsFor(DaemonStore store, string daemonName, TimeProvider? time = null) =>
+        new(ParticipantsDirectory(store.ResumeDirectory(daemonName)), time);
+
+    static string ParticipantsDirectory(string resumeDirectory) => Path.Combine(resumeDirectory, "participants");
 
     public static string FileStem(string agentId) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(agentId))).ToLowerInvariant();
@@ -43,20 +50,45 @@ public sealed class ResumeLedgerStore(string resumeDirectory, TimeProvider? time
         File.Move(tempPath, finalPath, overwrite: true);
     }
 
+    static readonly TimeSpan DeleteLockWait = TimeSpan.FromSeconds(1);
+
+    /// <summary>Removes the entry under its <see cref="ResumeEntryLock"/>, so a locked update cannot write it
+    /// back. A holder that keeps the lock past the wait does not stop the delete. The lock file stays: a
+    /// holder locks the file it opened, so unlinking it would let the next opener lock a new one beside it.</summary>
     public bool Delete(string agentId) {
-        var existed = false;
+        var entryPath = EntryPath(agentId);
+        var existed   = false;
 
-        foreach (var path in new[] { EntryPath(agentId), RingPath(agentId) }) {
-            if (!File.Exists(path)) continue;
+        using (ResumeEntryLock.TryAcquire(entryPath, DeleteLockWait)) {
+            foreach (var path in new[] { entryPath, RingPath(agentId) }) {
+                if (!File.Exists(path)) continue;
 
-            File.Delete(path);
-            existed = true;
+                File.Delete(path);
+                existed = true;
+            }
         }
 
         return existed;
     }
 
     public ResumeLedgerEntry? TryRead(string agentId) => ReadFile(EntryPath(agentId));
+
+    /// <summary>Reads, changes and writes the entry under its <see cref="ResumeEntryLock"/>. A null from
+    /// <paramref name="change"/> leaves the entry as it is.</summary>
+    public LockedUpdate TryUpdateUnderLock(string agentId, Func<ResumeLedgerEntry, ResumeLedgerEntry?> change, TimeSpan wait) {
+        var path = EntryPath(agentId);
+        if (!File.Exists(path)) return LockedUpdate.NoEntry;
+
+        using var held = ResumeEntryLock.TryAcquire(path, wait);
+        if (held is null) return LockedUpdate.LockTimeout;
+
+        if (ReadFile(path) is not { } entry) return LockedUpdate.NoEntry;
+        if (change(entry) is not { } changed) return LockedUpdate.Unchanged;
+
+        Write(changed);
+
+        return LockedUpdate.Written;
+    }
 
     public IReadOnlyList<ResumeLedgerEntry> ReadAll() {
         var results = new List<ResumeLedgerEntry>();
@@ -84,20 +116,51 @@ public sealed class ResumeLedgerStore(string resumeDirectory, TimeProvider? time
         return changed;
     }
 
-    public static ResumeLedgerEntry? FindByAgentId(DaemonStore store, string agentId) {
+    public static ResumeLedgerEntry? FindByAgentId(DaemonStore store, string agentId) =>
+        LocateByAgentId(store, agentId)?.TryRead(agentId);
+
+    /// <summary>The store, among every daemon's, that holds an entry for <paramref name="agentId"/>.</summary>
+    public static ResumeLedgerStore? LocateByAgentId(DaemonStore store, string agentId) {
         if (!Directory.Exists(store.Directory)) return null;
 
         foreach (var daemonDirectory in Directory.EnumerateDirectories(store.Directory)) {
-            try {
-                var found = new ResumeLedgerStore(Path.Combine(daemonDirectory, "resume")).TryRead(agentId);
-                if (found is not null) return found;
-            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
-                // One unreadable daemon directory must not hide an entry in the next.
+            var resume = Path.Combine(daemonDirectory, "resume");
+
+            foreach (var candidate in new[] { new ResumeLedgerStore(resume), new ResumeLedgerStore(ParticipantsDirectory(resume)) }) {
+                try {
+                    if (candidate.TryRead(agentId) is not null) return candidate;
+                } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                    // One unreadable daemon directory must not hide an entry in the next.
+                }
             }
         }
 
         return null;
     }
+
+    /// <summary>The agent whose entry runs <paramref name="sessionId"/>, by its kcap or vendor session id.</summary>
+    public static string? FindAgentIdBySession(DaemonStore store, string sessionId) {
+        if (WorkContextIds.CanonicalSessionId(sessionId) is not { } wanted || !Directory.Exists(store.Directory)) return null;
+
+        foreach (var daemonDirectory in Directory.EnumerateDirectories(store.Directory)) {
+            var resume = Path.Combine(daemonDirectory, "resume");
+
+            foreach (var candidate in new[] { new ResumeLedgerStore(resume), new ResumeLedgerStore(ParticipantsDirectory(resume)) }) {
+                try {
+                    foreach (var entry in candidate.ReadAll())
+                        if (Runs(entry, wanted)) return entry.AgentId;
+                } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                    // One unreadable daemon directory must not hide an entry in the next.
+                }
+            }
+        }
+
+        return null;
+    }
+
+    static bool Runs(ResumeLedgerEntry entry, string canonicalSession) =>
+        string.Equals(WorkContextIds.CanonicalSessionId(entry.SessionId), canonicalSession, StringComparison.OrdinalIgnoreCase)
+     || string.Equals(WorkContextIds.CanonicalSessionId(entry.VendorSession), canonicalSession, StringComparison.OrdinalIgnoreCase);
 
     static ResumeLedgerEntry? ReadFile(string path) {
         string json;

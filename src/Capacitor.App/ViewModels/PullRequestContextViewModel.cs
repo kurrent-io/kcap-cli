@@ -257,10 +257,20 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         if (_lastRefresh is not null) _refreshDiscovery = true;
         _lastRefresh = null; _lastOverview = null; RequestRefresh();
     }
+    /// The backoff a failed discovery or list set was waiting for a server that was not there; it is back, so the
+    /// reads run now through the same path and checks as any refresh, and whatever is shown stays until they answer.
+    /// Retries the server stopped stay stopped until the user asks: a queued refresh there would never run and would
+    /// leave the panel reading forever. A read already in flight gets one follow-up instead.
     public void Reconnected() {
         if (_disposed) return;
         _refreshDiscovery = true;
+        if (!_stopped) {
+            _listRetryAt = null;
+            _lastRefresh = null;
+            _queuedRefresh = _refreshing;
+        }
         RequestRefresh();
+        Notify();
     }
     /// A list read describes the session with the primary repository it saw, and the registry's
     /// live discovery needs one: list again once the hint arrives or names another repository.

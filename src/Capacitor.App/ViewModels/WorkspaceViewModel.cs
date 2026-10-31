@@ -26,6 +26,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     readonly ObservableAsPropertyHelper<string> _title;
     public string Title => _title.Value;
 
+    public SessionTitleEditorViewModel TitleEditor { get; }
+
     readonly ObservableAsPropertyHelper<string> _repoLabelText;
     /// Checkout under the title (`repo / worktree`); harness/transport live in the work-context pane.
     public string RepoLabelText => _repoLabelText.Value;
@@ -184,6 +186,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     // says, not a value captured once at construction.
     AgentStatusDto? _latestDto;
     AgentRow? _startingRow;
+    string? _appSubject;
 
     public WorkspaceViewModel(
             string agentId, IDaemonClientService daemon, AgentActionService actions,
@@ -194,7 +197,10 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             IPlanSource? plans = null, IPlanArtifactSource? planArtifacts = null, BackgroundCommandActivity? commands = null,
             ComposerDrafts? drafts = null, Func<string, Action>? inputSending = null,
             Func<string, ResumeLedgerEntry?>? resumeLedger = null, LastReads<PullRequestSnapshot>? pullRequestSnapshots = null,
-            LocalTranscripts? transcripts = null, Action<string>? pullRequestLinksChanged = null, IMessageSenderSource? senders = null) {
+            LocalTranscripts? transcripts = null, Action<string>? pullRequestLinksChanged = null, AccountReadings? readings = null,
+            IMessageSenderSource? senders = null,
+            IObservable<string?>? appSubject = null, IAppNotifier? notifier = null,
+            IObservable<ServerLaneStatus>? serverLane = null, WorkContextLayout? workContextLayout = null) {
         AgentId = agentId;
         _drafts = drafts;
         _opener = opener;
@@ -232,7 +238,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                 ShowsArtefactsTab = show;
                 if (!show && IsArtefactsActive) ActiveTab = WorkspaceTab.Chat;
             }).DisposeWith(_disposables);
-        WorkContext = new WorkContextViewModel(presence.Select(p => p.Dto), workContext, time, opener, runs, requestSignIn, signInCompleted, actions.OpenWorkItemInWeb, plans, planActivity, artefacts: Artefacts);
+        WorkContext = new WorkContextViewModel(presence.Select(p => p.Dto), workContext, time, opener, runs, requestSignIn, signInCompleted,
+            actions.OpenWorkItemInWeb, plans, planActivity, artefacts: Artefacts, serverLane: serverLane, layout: workContextLayout);
         WorkContext.RunOpened += OpenSubagent;
         _disposables.Add(Disposable.Create(() => WorkContext.RunOpened -= OpenSubagent));
         // An open subagent belongs to the transcript it was opened from.
@@ -251,6 +258,10 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                 }).DisposeWith(_disposables);
         daemon.Status.Select(status => status.State).DistinctUntilChanged().Skip(1)
             .Where(state => state == AttachState.Connected).ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(_ => PullRequests?.Reconnected()).DisposeWith(_disposables);
+        // The pull requests read the app's server, so its coming back is what clears a failed discovery.
+        serverLane?.Select(s => s.State).DistinctUntilChanged().Skip(1)
+            .Where(state => state == ServerLaneState.Connected).ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => PullRequests?.Reconnected()).DisposeWith(_disposables);
 
         presence.Select(p => p.Dto).Subscribe(dto => {
@@ -288,9 +299,29 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         var header = presence.StartWith(new AgentPresence(null, false))
             .CombineLatest(pendingRow, (p, row) => (p.Dto, Row: p.Dto is null ? row : null));
 
-        _title = header.Select(h => h.Dto is not null ? TitleFor(h.Dto) : h.Row?.Title ?? TitleFor(null))
+        var titles = header.Select(h => h.Dto is not null ? TitleFor(h.Dto) : h.Row?.Title ?? TitleFor(null));
+        _title = titles
             .ToProperty(this, x => x.Title, TitleFor(null))
             .DisposeWith(_disposables);
+
+        // The daemon renames as its own account, so it must be the app's account on the app's
+        // server; a private agent makes no per-agent server calls at all, and an ended one has no
+        // title loop left to hold the rename.
+        var subject = (appSubject ?? Observable.Return<string?>(null)).DistinctUntilChanged().Replay(1).RefCount();
+        subject.Subscribe(s => _appSubject = s).DisposeWith(_disposables);
+        var canRename = Observable.CombineLatest(
+                daemon.Status.Select(s => s.State == AttachState.Connected && s.Capabilities?.Contains(RenameWire.Capability) == true),
+                localDaemonOnAppServer ?? Observable.Return(false),
+                daemon.Snapshots.Select(s => s.Daemon.UserSubject).StartWith((string?)null),
+                subject,
+                presence.Select(p => !p.SessionEnded && p.Dto is { IsPrivate: false, SessionId.Length: > 0 }),
+                (capable, onAppServer, daemonSubject, viewer, agent) =>
+                    capable && onAppServer && agent && viewer is not null && daemonSubject == viewer)
+            .ObserveOn(RxSchedulers.MainThreadScheduler);
+        TitleEditor = new SessionTitleEditorViewModel(titles, canRename, async (title, ct) => {
+            var ack = await ops.RenameSessionAsync(new SessionRenameDto(agentId, title, _appSubject), ct);
+            return new SessionRenameResult(ack.Ok, ack.Title, ack.Ok ? null : ack.Reason);
+        }, notifier ?? new AppNotifier()).DisposeWith(_disposables);
         _repoLabelText = header.Select(h => h.Dto is not null ? CheckoutLabelFor(h.Dto) : h.Row is { } row ? RepoLabel.Leaf(row.RepoPath) : CheckoutLabelFor(null))
             .ToProperty(this, x => x.RepoLabelText, CheckoutLabelFor(null))
             .DisposeWith(_disposables);
@@ -340,7 +371,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                     : new LocalFrameChatInput(agentId, daemon, ops, presence);
                 Chat = new ChatTabViewModel(
                     agentId, daemon, input, uploader, projection, opener, time, permissions, runs, note, sessionIds, localDaemonOnAppServer, planActivity, OpenCard, drafts, transcripts,
-                    senders, signInCompleted) {
+                    senders, readings?.Local, readings?.Clock, signInCompleted) {
                     ShowTerminal = hasTerminal ? () => ActiveTab = WorkspaceTab.Terminal : null,
                     InputSending = inputSending,
                 };

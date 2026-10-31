@@ -5,22 +5,22 @@
              xmlns:services="clr-namespace:Capacitor.App.Services.LocalSetup"
              x:Class="Capacitor.App.Views.SearchSettingsView"
              x:DataType="vm:LocalSearchViewModel">
-    <StackPanel Spacing="16">
-        <StackPanel Spacing="10">
-            <TextBlock Classes="kcapTitle" Text="Search" LineHeight="22" />
+    <!-- Also hosted by the rail's Help flyout, outside the Settings window that carries these styles. -->
+    <UserControl.Styles>
+        <StyleInclude Source="avares://kcap-desktop/Views/SettingsStyles.axaml" />
+    </UserControl.Styles>
+    <StackPanel Spacing="28">
+        <StackPanel Classes="settingsHeader">
+            <TextBlock Classes="kcapTitle" Text="Search" />
             <TextBlock x:Name="SearchCurrentText" Classes="kcapSubtitle" TextWrapping="Wrap"
                        Text="{Binding CurrentText}" />
         </StackPanel>
 
-        <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                BorderThickness="1" CornerRadius="12" Padding="20">
-            <StackPanel Spacing="12">
-                <StackPanel Spacing="10" IsEnabled="{Binding !Running}">
+        <Border Classes="settingsCard settingsCardBody">
+            <StackPanel Spacing="14">
+                <Panel IsEnabled="{Binding !Running}">
                     <views:SearchChoiceView x:Name="SearchChoice" DataContext="{Binding Choice}" />
-                    <Button x:Name="SearchApplyButton" Classes="kcapChip" HorizontalAlignment="Left"
-                            Content="{Binding ApplyLabel}" Command="{Binding ApplyCommand}"
-                            IsEnabled="{Binding CanApply}" />
-                </StackPanel>
+                </Panel>
                 <TextBlock Classes="kcapHint" Text="Setting up search…" TextWrapping="Wrap" IsVisible="{Binding Running}" />
                 <StackPanel Spacing="6" DataContext="{Binding Embeddings}" x:DataType="services:LocalEmbeddingProgress">
                     <StackPanel Spacing="4" IsVisible="{Binding Pulling}">
@@ -35,10 +35,14 @@
                     <TextBlock Classes="kcapHint" Text="{Binding ReembedNote}" TextWrapping="Wrap"
                                IsVisible="{Binding ReembedNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 </StackPanel>
-                <SelectableTextBlock x:Name="SearchFailureText" Text="{Binding FailureText}" FontSize="12"
+                <SelectableTextBlock x:Name="SearchFailureText" Text="{Binding FailureText}" FontSize="12.5"
                                      TextWrapping="Wrap" Foreground="{StaticResource KcapDangerBrush}"
                                      IsVisible="{Binding FailureText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
             </StackPanel>
         </Border>
+
+        <!-- Outside the card, as setup's footer action is: inside, it groups with the options' own buttons. -->
+        <Button x:Name="SearchApplyButton" Classes="kcapPrimary" HorizontalAlignment="Left" Margin="0,-12,0,0"
+                Content="{Binding ApplyLabel}" Command="{Binding ApplyCommand}" IsEnabled="{Binding CanApply}" />
     </StackPanel>
 </UserControl>

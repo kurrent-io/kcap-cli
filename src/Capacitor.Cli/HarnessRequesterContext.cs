@@ -71,6 +71,14 @@ static class HarnessRequesterContext {
 
     internal static Resolved Resolve() => Resolve(Environment.GetEnvironmentVariable, Directory.Exists);
 
+    /// <summary>The running harness's project directory, without asking a hosting daemon. A server reads
+    /// it while starting, and Pi binds a hosted agent's session only after that agent's servers answer
+    /// their handshake: asking the daemon then waits on the server itself.</summary>
+    internal static string? ProjectDir() =>
+        Resolve(
+            Environment.GetEnvironmentVariable, Directory.Exists, ProcessHelpers.NearestCodingAgent, ProcessHelpers.GetProcessCwd,
+            hostedAgentSession: _ => null).ProjectDir;
+
     internal static Resolved Resolve(Func<string, string?> getEnv, Func<string, bool> directoryExists) =>
         Resolve(getEnv, directoryExists, ProcessHelpers.NearestCodingAgent, ProcessHelpers.GetProcessCwd, HostedAgentSessions.Daemon.For);
 

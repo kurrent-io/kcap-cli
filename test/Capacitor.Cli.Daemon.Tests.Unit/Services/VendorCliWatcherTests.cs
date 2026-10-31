@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Accounts.Readings;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Daemon.Services;
@@ -100,6 +101,28 @@ public class VendorCliWatcherTests {
         h.Watcher.Tick();
 
         await Assert.That(h.Refreshes.Count).IsEqualTo(1);
+    }
+
+    /// <summary>A desktop app's bundled CLI moves to a new directory on update and the old one is
+    /// pruned: the watcher follows the vendor's current path rather than the one it started with. The
+    /// pruned path stats null, so watching it alone would never see the change.</summary>
+    [Test]
+    public async Task A_cli_that_moved_is_watched_at_its_current_path() {
+        const string before = "/app/claude-code/2.1.259/claude";
+        const string after  = "/app/claude-code/2.1.263/claude";
+        var current = before;
+        var h = new Harness(("claude", before));
+        h.Watcher.CurrentCliPath = vendor => vendor == "claude" ? current : null;
+        h.Stats[before] = Old;
+        h.Watcher.PrimeBaselines();
+
+        h.Stats.Remove(before);
+        h.Stats[after] = New;
+        current = after;
+        h.Watcher.Tick();
+
+        await Assert.That(h.Refreshes.Count).IsEqualTo(1);
+        await Assert.That(h.Refreshes[0]).Contains("claude");
     }
 
     [Test]
@@ -381,6 +404,37 @@ public class VendorCliWatcherTests {
             releaseStartup.Set();
             if (tick is not null) await tick.WaitAsync(WaitHarness.Bounded);
             await watcher.StopAsync(CancellationToken.None);
+            await publisher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task Only_a_change_to_the_accounts_reprobes_not_a_reading_change() {
+        using var home = new TempHome();
+        var store = new AccountStore(home.PathTo("accounts"));
+        var work  = AddCodexAccount(store, home.PathTo(".codex-work"));
+        using var publisher = new AccountsPublisher(
+            new DaemonConfig { Accounts = store }, home, new FakeTimeProvider(), NullLogger<AccountsPublisher>.Instance);
+        var refreshes = new List<string>();
+        using var watcher = VendorCliWatcher.ForTest([], refreshes.Add, _ => null, new FakeTimeProvider());
+        publisher.Changed += watcher.OnAccountsChanged;
+        await publisher.StartAsync(CancellationToken.None);
+        try {
+            await Assert.That(refreshes.Count).IsEqualTo(1);
+
+            var recorded = store.Readings.TryRecord(work.Id, (f, _) => f with {
+                Reading = f.Reading with { Windows = [new UsageWindowDto("five_hour", 300, 42, null, null)] },
+            });
+            await Assert.That(recorded).IsTrue();
+            var before = publisher.Version;
+            await publisher.RebuildAsync(CancellationToken.None);
+            await Assert.That(publisher.Version).IsGreaterThan(before);
+            await Assert.That(refreshes.Count).IsEqualTo(1);
+
+            AddCodexAccount(store, home.PathTo(".codex-spare"));
+            await publisher.RebuildAsync(CancellationToken.None);
+            await Assert.That(refreshes.Count).IsEqualTo(2);
+        } finally {
             await publisher.StopAsync(CancellationToken.None);
         }
     }

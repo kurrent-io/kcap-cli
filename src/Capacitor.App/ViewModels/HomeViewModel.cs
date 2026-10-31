@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.ComponentModel;
 using System.Reactive;
 using System.Reactive.Concurrency;
@@ -5,20 +6,21 @@ using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Runtime.CompilerServices;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Harness.Claude;
+using Capacitor.Cli.Core.Http;
 using Capacitor.Remote.Models;
 using DynamicData;
 using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
 
-/// One entry of the repository chip's menu. Vendor is the remembered harness for RepoPath, or
-/// HomeViewModel.DefaultVendor when none was ever chosen there; Selected marks the entry that
-/// matches SelectedRepoPath under HomeViewModel's own path comparison.
+/// One entry of the repository chip's menu. Vendor is the harness picking RepoPath would select;
+/// Selected marks the entry that matches SelectedRepoPath under HomeViewModel's own path comparison.
 public sealed record RepositoryOption(string RepoPath, string Vendor, bool Selected);
 
 /// One entry of the launcher's machine chip: the local daemon, or one of the viewer's own remote
@@ -71,21 +73,23 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     internal const string SignInToAttach = "sign in to attach files";
 
-    internal const string ConnectingNotice     = "Connecting to the server…";
+    internal const string ConnectingNotice     = "Connecting to the server. Session activity appears when the connection is ready.";
     /// Longer than the daemon's 30s connect backoff so one redial still reads as connecting.
     internal static readonly TimeSpan CatchUpLimit = TimeSpan.FromSeconds(60);
     internal const string FinishingSignInNotice =
         "Finishing sign-in. Reconnecting to the server…";
     internal const string DaemonDownNotice     =
-        "The daemon isn't running. The app is starting its service; press Start daemon to try again now.";
+        "The daemon isn't running. Agents can't start until it's back.";
+    internal const string DaemonRestartingNotice =
+        "The daemon is restarting to update. It reconnects on its own.";
     internal const string DaemonIncompatibleNotice =
-        "App and daemon are incompatible. Update both to matching versions, then press Reconnect.";
+        "The app and daemon versions don't match. Update both, then reconnect.";
     internal const string ServerLostNotice     = "Not connected to the server. Sign in again to reconnect.";
-    internal const string SignInExpiredNotice  = "Your sign-in has expired. Sign in again.";
+    internal const string SignInExpiredNotice  = "Your sign-in has expired. Sign in again to reconnect.";
     /// A daemon attached by name that serves another server: signing in again cannot move it.
     internal static string DaemonOnOtherServerNotice(string daemonServer, string appServer) {
         var (daemonLabel, appLabel) = AttachedIdentity.ServerLabels(daemonServer, appServer);
-        return $"This machine's daemon is running for {daemonLabel}, not {appLabel}, so it cannot run agents here.";
+        return $"This machine's daemon uses another server. It's connected to {daemonLabel}, so it can't run agents for {appLabel}.";
     }
 
     /// The daemon's server when it is known and is not the app's; null otherwise, an unknown side included.
@@ -93,21 +97,54 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         string.IsNullOrEmpty(daemonServer) || string.IsNullOrEmpty(appServer) || ServerIdentity.SameServer(daemonServer, appServer)
             ? null : daemonServer;
 
-    internal const string DaemonSignedOutNotice = "This machine's daemon is signed out, so it cannot reach the server. Sign in to its profile and it reconnects.";
+    internal const string DaemonSignedOutNotice = "This machine's daemon is signed out. Sign in to its profile to reconnect.";
 
     /// The connection word the notice reads when the daemon reports its own sign-in as the reason its
     /// hub is down; never on the wire.
     internal const string DaemonSignedOutWord = "signed out";
-    internal const string LocalServerRefusedNotice = "The local server refused this app's connection. Restart kcap.";
-    internal const string LocalServerLostNotice    = "Lost the connection to the local server. kcap keeps trying to reconnect.";
+    internal const string LocalServerRefusedNotice = "The local server refused the connection. Restart kcap.";
+    internal const string FinishingUpdateNotice    = "Finishing the update…";
+    internal const string LocalServerLostNotice    = "Lost the connection to the local server. kcap keeps retrying.";
 
-    /// A service-run daemon restarts itself for a harness installed on its PATH; setup fixes a PATH that
-    /// misses it, and a daemon started by hand needs a restart.
+    /// The app's own connection got no answer at all: the server is down or unreachable, which no sign-in repairs.
+    internal static string ServerUnreachableNotice(ConnectionFailure failure) =>
+        $"Can't reach the server ({failure.Reason}). {failure.Remedy}";
+
+    /// The app's own connection keeps failing past the catch-up bound on something other than a credential:
+    /// a refused credential parks the lane signed out instead.
+    internal const string ServerRetryingNotice = "Can't connect to the server. kcap keeps retrying.";
+
+    internal static bool IsServerUnreachable(string? notice) =>
+        notice == ServerRetryingNotice || notice?.StartsWith("Can't reach the server (", StringComparison.Ordinal) == true;
+
+    /// What is launchable is what the daemon advertises, never what recording found: a service-run daemon
+    /// restarts itself for a harness installed on its PATH, setup fixes a PATH that misses it, and a daemon
+    /// started by hand needs a restart. A remote machine's recovery happens on that machine.
     internal static string NoHarnessesNotice(string? remoteMachine) => remoteMachine is null
-        ? "No coding agents were found on this machine. Install Claude Code, Codex or another supported agent; if it does not appear, run setup again or restart the daemon."
-        : $"No coding agents were found on {remoteMachine}. Install one there; if it does not appear, run setup there again or restart its daemon.";
+        ? "No coding agents are available to launch on this machine. Install Claude Code, Codex or another supported agent. " +
+          "It's offered here once the daemon finds its command. If it doesn't show up, run setup again or restart the daemon."
+        : $"No coding agents are available to launch on {remoteMachine}. Install one there. " +
+          $"It's offered here once {remoteMachine}'s daemon finds its command. If it doesn't show up, run setup there again or restart its daemon.";
 
-    internal static string HarnessUnavailableMessage(string label) => $"{label} isn't available on this machine. Choose another agent.";
+    /// The daemon advertises only what it can host, so a missing vendor lacks its command there or is not
+    /// hostable on that system; it does not say which.
+    internal static string HarnessUnavailableReason(string label, string? remoteMachine) => remoteMachine is null
+        ? $"{label} can't be launched on this machine. The daemon here didn't find its command, or can't host it on this system."
+        : $"{label} can't be launched on {remoteMachine}. Its daemon didn't find {label}'s command there, or can't host it on that system.";
+
+    internal static string HarnessUnavailableMessage(string label, string? remoteMachine) =>
+        $"{HarnessUnavailableReason(label, remoteMachine)} Choose another agent.";
+
+    /// The picker's hover text for a vendor the selected machine does not advertise; null for one it does.
+    public string? UnavailableHarnessTip(HarnessOption option) =>
+        option.Available ? null : HarnessUnavailableReason(option.Label, RemoteMachineSelected ? SelectedMachine : null);
+
+    /// Hover text for the button that opens Settings → Harnesses.
+    public const string HarnessesSettingsTip =
+        "Turn on recording and agent tools for the coding tools on this machine. It doesn't change which agents can be launched.";
+
+    /// The title over a daemon status that arrives alone, so the card keeps a title and a body.
+    internal const string DaemonStatusTitle = "Daemon status";
 
     internal static string RemoteOfflineNotice(string machine) => $"{machine} is offline. Launches resume when it reconnects.";
 
@@ -129,8 +166,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     public string SelectedRepoPath {
         get => _selectedRepoPath;
         set {
-            // PathComparer, not ordinal: SameLaunchTarget and the picker already treat casings as one folder.
-            var changed = !PathComparer.Equals(_selectedRepoPath, value);
+            // Same rule as SameLaunchTarget and the picker, so a refusal clears exactly when they see a new folder.
+            var changed = !PathComparerFor(RemoteMachineSelected).Equals(_selectedRepoPath, value);
             this.RaiseAndSetIfChanged(ref _selectedRepoPath, value);
             _selectedRepoPathChanges.OnNext(value);
             // A launch refusal describes the folder that failed. A later pick is a different attempt.
@@ -287,6 +324,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     // A local server takes no sign-in: its recovery is the Start banner.
     readonly BehaviorSubject<bool> _localServer = new(false);
     readonly BehaviorSubject<bool> _localServerDown = new(false);
+    readonly BehaviorSubject<bool> _updateFinishing = new(false);
+    string? _updateDetail;
     readonly Action? _requestSignIn;
 
     readonly ObservableAsPropertyHelper<string?> _connectionNotice;
@@ -295,10 +334,22 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     public string? ConnectionNotice => _connectionNotice.Value;
 
     readonly ObservableAsPropertyHelper<string?> _bannerMessage;
-    /// Single banner body: a start/lifecycle message wins over the generic connection notice so
-    /// Unreachable + "kcap too old" does not stack two lines that both say press Start daemon.
-    /// Expired sign-in still wins over those start messages — reconnecting will not restore a session.
+    /// The connection explanation, or the local daemon's status when there is none.
     public string? BannerMessage => _bannerMessage.Value;
+
+    readonly ObservableAsPropertyHelper<string?> _bannerTitle;
+    public string? BannerTitle => _bannerTitle.Value;
+
+    readonly ObservableAsPropertyHelper<string?> _bannerBody;
+    public string? BannerBody => _bannerBody.Value;
+
+    readonly ObservableAsPropertyHelper<string?> _bannerDetail;
+    /// Local daemon status and system output that goes with the message, without its commands.
+    public string? BannerDetail => _bannerDetail.Value;
+
+    readonly ObservableAsPropertyHelper<string?> _bannerCommand;
+    /// A command the banner asks the user to run, lifted out of the prose so it can be copied.
+    public string? BannerCommand => _bannerCommand.Value;
 
     readonly ObservableAsPropertyHelper<bool> _connectionBannerVisible;
     /// Same connection/sign-in/daemon banner the launcher shows above the composer.
@@ -311,8 +362,15 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// True while the banner is an in-flight connect/finish line — a loader, not Sign in.
     public bool BannerBusy => _bannerBusy.Value;
 
+    readonly ObservableAsPropertyHelper<bool> _bannerFailed;
+    /// True when the banner reports a failure rather than something that needs the user.
+    public bool BannerFailed => _bannerFailed.Value;
+
     readonly ObservableAsPropertyHelper<bool> _signInVisible;
     public bool SignInVisible => _signInVisible.Value;
+
+    readonly ObservableAsPropertyHelper<bool> _bannerActionsVisible;
+    public bool BannerActionsVisible => _bannerActionsVisible.Value;
 
     /// Lane SignedOut or a 401 launch — the same flag NoticeFor uses for SignInExpiredNotice.
     /// An observable (not WhenAnyValue) so MainWindow can fold it into the rail footer without
@@ -327,10 +385,33 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     // Feeds BannerMessage before AttachDaemonRecovery runs (null) and after (lifecycle lane).
     readonly BehaviorSubject<string?> _daemonStartMessageFeed = new(null);
+    // Same lane for the action cluster: false until AttachDaemonRecovery subscribes the real predicates.
+    readonly BehaviorSubject<bool> _daemonStartVisibleFeed = new(false);
+    readonly BehaviorSubject<bool> _daemonRetryVisibleFeed = new(false);
+    readonly BehaviorSubject<bool> _daemonRepairVisibleFeed = new(false);
 
     /// Wired by AttachDaemonRecovery to MainWindow's Start/Reconnect commands.
     public ReactiveCommand<Unit, Unit>? StartDaemonCommand { get; private set; }
     public ReactiveCommand<Unit, Unit>? RetryDaemonCommand { get; private set; }
+
+    ObservableAsPropertyHelper<bool>? _daemonRepairVisible;
+    /// Only while the banner shows the very line the repair answers, never beside another notice.
+    public bool DaemonRepairVisible => _daemonRepairVisible?.Value ?? false;
+    public ReactiveCommand<Unit, Unit>? RepairDaemonCommand { get; private set; }
+
+    // Null until AttachServerRetry.
+    readonly BehaviorSubject<Func<Task>?> _retryServer = new(null);
+    readonly ObservableAsPropertyHelper<bool> _serverRetryVisible;
+    /// Only beside a notice that the server gave no answer: a retry is what that needs, never a sign-in.
+    public bool ServerRetryVisible => _serverRetryVisible.Value;
+    public ReactiveCommand<Unit, Unit> RetryServerCommand { get; }
+
+    // Null until AttachHarnessesSettings, and whenever the app has no profile to open Settings for.
+    readonly BehaviorSubject<Action?> _openHarnessesSettings = new(null);
+    readonly ObservableAsPropertyHelper<bool> _harnessesSettingsVisible;
+    /// Only beside this machine's no-agent line: local settings cannot configure a remote machine.
+    public bool HarnessesSettingsVisible => _harnessesSettingsVisible.Value;
+    public ReactiveCommand<Unit, Unit> OpenHarnessesSettingsCommand { get; }
 
     readonly ObservableAsPropertyHelper<string> _startButtonTip;
     /// Tip when Start is disabled (no repo / connection gate). ToolTip.ShowOnDisabled is required.
@@ -339,10 +420,22 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     public ReactiveCommand<Unit, Unit> SignInCommand { get; }
 
     readonly AccountChooser _accountChooser;
+
+    IReadOnlyDictionary<string, AccountUsageView> _accountUsageById = FrozenDictionary<string, AccountUsageView>.Empty;
+    /// Keyed by registered account id, for the selected host's selected vendor; empty while the host's
+    /// readings may not be drawn.
+    public IReadOnlyDictionary<string, AccountUsageView> AccountUsageById {
+        get => _accountUsageById;
+        private set => this.RaiseAndSetIfChanged(ref _accountUsageById, value);
+    }
     readonly Func<Task>? _retryListing;
     (string RepoPath, string Vendor, string Machine, bool Remote)? _accountTarget;
     bool _applyingAccountInputs;
     IReadOnlyDictionary<string, string>? _accountMemory;
+    readonly TaskCompletionSource _accountMemoryLoaded = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// Completes once the remembered accounts have been read, which happens off the UI thread.
+    internal Task AccountMemoryLoadedForTesting => _accountMemoryLoaded.Task;
     Task _accountMemoryWrites = Task.CompletedTask;
     // Live mirrors of the account inputs, read by StartAsync against its captured draft.
     DaemonListing _currentListing = new(null, 0, false);
@@ -440,9 +533,6 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     // null = local (daemon.Snapshots governs Harnesses); non-null = the remote machine's own
     // advertised vendors, set by SelectMachineAsync.
     readonly BehaviorSubject<string[]?> _remoteVendorOverride = new(null);
-    // Frozen at selection time — ListRepositoriesAsync's remote branch reads it rather than
-    // re-resolving the daemon list on every menu open.
-    MachineOption? _selectedRemoteMachine;
 
     readonly ObservableAsPropertyHelper<bool> _machinePickerVisible;
     /// The machine chip's visibility: hidden until the viewer owns at least one remote daemon.
@@ -470,10 +560,12 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     /// One accepted launch awaiting settlement. UploadedAt is null for a text-only launch; both
     /// stamps come from the same clock, so one TimeProvider governs every expiry. Generation is
-    /// the navigation generation captured before the launch call.
+    /// the navigation generation captured before the launch call, or the one its placeholder's open
+    /// left. It is shared rather than copied: a row confirmed while the placeholder opens is opened
+    /// later on the UI thread, which reads it only after that open has moved it on.
     sealed record PendingLaunch(
         DateTimeOffset At, AgentOrigin Lane, bool HadAttachments, DateTimeOffset? UploadedAt,
-        string RepoPath, int Generation, string Machine);
+        string RepoPath, StrongBox<int> Generation, string Machine);
 
     /// The only copy of a sent launch's bytes, held until the daemon settles that launch or the
     /// window closes. The two counters are what the composer looked like AFTER the launch emptied
@@ -513,8 +605,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// </param>
     /// <param name="openSessionIfCurrent">
     /// The launch auto-open (MainWindowViewModel.OpenSessionIfCurrent), carrying the lane and that
-    /// captured generation. A remote launch has no placeholder row, so it opens only once its
-    /// directory row arrives — the remote workspace cannot open an id no lane holds.
+    /// captured generation. Either lane's launch opens on its placeholder row at once.
     /// </param>
     /// <param name="requestSignIn">Opens the re-auth sign-in surface (App owns the window). Null
     /// leaves the Sign in button inert — a HomeViewModel with no windows to open.</param>
@@ -539,6 +630,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// <param name="localAccounts">This machine's daemon's own snapshot (IAccountsService.Snapshot).</param>
     /// <param name="retryListing">Fetches the listing and every daemon's accounts again
     /// (IRemoteAgentsService.RefreshDaemonsAsync).</param>
+    /// <param name="readings">The drawable snapshots and clock behind <see cref="AccountUsageById"/>.
+    /// Null ⇒ no usage is shown.</param>
     /// <param name="launchFailed">A tracked launch failed (MainWindowViewModel.CloseFailedLaunch):
     /// its auto-opened workspace would otherwise cover the StartError this view just set.</param>
     public HomeViewModel(
@@ -554,7 +647,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             IAttachmentUploader? uploader = null, string? appServerUrl = null,
             IObservable<DaemonListing>? listing = null, IObservable<IReadOnlyList<DaemonAccountsDto>>? daemonAccounts = null,
             IObservable<AccountsSnapshotDto?>? localAccounts = null, Func<Task>? retryListing = null,
-            Action<string>? launchFailed = null) {
+            AccountReadings? readings = null, Action<string>? launchFailed = null) {
         _launchFailed = launchFailed;
         _daemon = daemon;
         _state = state;
@@ -662,7 +755,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             localSnapshots.Subscribe(s => _currentLocalAccounts = s).DisposeWith(_disposables);
             _machineSelectionChanges.DistinctUntilChanged()
                 .CombineLatest(
-                    _selectedRepoPathChanges.DistinctUntilChanged(PathComparer), this.WhenAnyValue(x => x.SelectedVendor),
+                    // Ordinal: a case-only change is a new repository on a Linux remote; ApplyAccountInputs
+                    // decides per machine whether it is.
+                    _selectedRepoPathChanges.DistinctUntilChanged(StringComparer.Ordinal), this.WhenAnyValue(x => x.SelectedVendor),
                     listing.StartWith(new DaemonListing(null, 0, false)),
                     remoteAccounts.StartWith((IReadOnlyList<DaemonAccountsDto>) []),
                     localSnapshots.StartWith((AccountsSnapshotDto?) null),
@@ -676,7 +771,18 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                 .Subscribe(state => {
                     _accountMemory = state.AccountByRepo;
                     _accountChooser.SetMemoryLoaded(true);
+                    _accountMemoryLoaded.TrySetResult();
                 })
+                .DisposeWith(_disposables);
+        }
+
+        if (readings is not null) {
+            Observable.Switch(_machineSelectionChanges.DistinctUntilChanged()
+                    .Select(sel => sel.Remote ? readings.Remote(sel.Name) : readings.Local))
+                .CombineLatest(this.WhenAnyValue(x => x.SelectedVendor), readings.Clock, ProjectUsage)
+                .DistinctUntilChanged(EqualityComparer<IReadOnlyDictionary<string, AccountUsageView>>.Create((a, b) => UsageEquals(a!, b!), d => d.Count))
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(usage => AccountUsageById = usage)
                 .DisposeWith(_disposables);
         }
 
@@ -722,7 +828,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             _machineSelectionChanges,
             (lane, sameServer, sel) => (
                 State: sel.Remote || sameServer ? lane.State : ServerLaneState.Dormant,
-                Applies: sel.Remote || sameServer));
+                Applies: sel.Remote || sameServer,
+                Failure: sel.Remote || sameServer ? lane.Failure : null));
+        var selectedLaneState = selectedServerLane.Select(lane => lane.State).DistinctUntilChanged()
+            .ObserveOn(RxSchedulers.MainThreadScheduler);
 
         // Uploading an attachment needs a live server credential, so the gate reads the app's own
         // lane rather than the daemon's — and the machine half is asked of the machine that would
@@ -761,13 +870,17 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .StartWith(0);
         // Staged chips the target cannot take block Start rather than launching without them, and
         // an upload in flight owns the composer until it settles.
+        // An update still bringing this machine's local server and daemon back holds local launches until it settles.
+        var updateHolds = _updateFinishing.CombineLatest(_machineSelectionChanges, (finishing, sel) => finishing && !sel.Remote)
+            .DistinctUntilChanged();
         var canLaunch = selectedAvailability.Select(a => a == LaunchAvailability.Ready)
             .CombineLatest(
                 stagedCount.CombineLatest(canAttach, (count, attach) => count == 0 || attach),
                 _uploadingChanges,
                 noHarnesses,
                 _accountPending.DistinctUntilChanged(),
-                (ready, attachable, uploading, none, pending) => ready && attachable && !uploading && !none && !pending);
+                updateHolds,
+                (ready, attachable, uploading, none, pending, held) => ready && attachable && !uploading && !none && !pending && !held);
 
         // Explicit ObserveOn: ReactiveCommand does NOT reschedule the supplied canExecute, and a
         // Status event arrives on the daemon client's pump thread (MainWindowViewModel's canStart
@@ -797,44 +910,104 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                 _awaitingServerAfterSignIn,
                 selectedServerLane,
                 foreignServer,
-                (status, connection, expired, awaiting, lane, foreign) => (status, connection, expired, awaiting: awaiting && lane.Applies, lane: lane.State, foreign));
+                (status, connection, expired, awaiting, lane, foreign) =>
+                    (status, connection, expired, awaiting: awaiting && lane.Applies, lane: lane.State, failure: lane.Failure, foreign));
         var rawNotices = localNoticeInputs
             .CombineLatest(selectedAvailability, _machineSelectionChanges,
                 (n, avail, sel) => NoticeFor(n.status, n.connection, n.expired, n.awaiting, sel.Remote, avail, n.lane,
-                    n.foreign is { } foreign ? DaemonOnOtherServerNotice(foreign, appServerUrl!) : null))
+                    n.foreign is { } foreign ? DaemonOnOtherServerNotice(foreign, appServerUrl!) : null, n.failure))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
         rawNotices.Subscribe(ArmOrResetCatchUp).DisposeWith(_disposables);
         // A stopped local server's Start banner is the whole story, so the no-harness fallback stays
         // out of it whether or not the daemon has noticed the server is gone.
-        var notices = rawNotices.CombineLatest(_catchUpTimedOut, NoticeAfterCatchUp)
-            .CombineLatest(noHarnesses.ObserveOn(RxSchedulers.MainThreadScheduler), _localServer, _localServerDown, _machineSelectionChanges,
-                (notice, none, local, down, sel) => NoticeForLocalServer(
-                    notice ?? (none && !(local && down && !sel.Remote) ? NoHarnessesNotice(sel.Remote ? sel.Name : null) : null),
-                    local, down, sel.Remote ? sel.Name : null));
+        var connectionNotices = rawNotices.CombineLatest(_catchUpTimedOut, selectedLaneState, NoticeAfterCatchUp)
+            .CombineLatest(_localServer, _localServerDown, _machineSelectionChanges,
+                (notice, local, down, sel) => NoticeForLocalServer(notice, local, down, sel.Remote ? sel.Name : null));
+        var harnessNotice = noHarnesses.ObserveOn(RxSchedulers.MainThreadScheduler)
+            .CombineLatest(_localServer, _localServerDown, _machineSelectionChanges,
+                (none, local, down, sel) => none && !(local && down && !sel.Remote)
+                    ? NoHarnessesNotice(sel.Remote ? sel.Name : null) : null);
+        var notices = connectionNotices.CombineLatest(harnessNotice, (connection, harness) => connection ?? harness);
         _connectionNotice = notices
             .ToProperty(this, x => x.ConnectionNotice, ConnectingNotice)
             .DisposeWith(_disposables);
         // The lifecycle feed speaks for the LOCAL daemon (start attempts, version mismatch), so it
-        // may only pre-empt the notice while the local machine is the selected one — under a remote
-        // selection its banner would outrank a healthy remote's own (absent) notice.
-        var bannerMessages = notices.CombineLatest(
-            _daemonStartMessageFeed, _machineSelectionChanges,
-            (notice, startMessage, sel) => BannerMessageFor(notice, sel.Remote ? null : startMessage));
-        _bannerMessage = bannerMessages
+        // is shown only while the local machine is selected. Remote notices must stay independent.
+        var bannerContent = connectionNotices.CombineLatest(
+            _daemonStartMessageFeed, _machineSelectionChanges, harnessNotice,
+            (notice, startMessage, sel, harness) => {
+                var content = BannerContentFor(notice, sel.Remote ? null : startMessage);
+                return content.Message is null ? (Message: harness, Detail: (string?)null) : content;
+            });
+        _bannerMessage = bannerContent.Select(content => content.Message)
             .ToProperty(this, x => x.BannerMessage, ConnectingNotice)
             .DisposeWith(_disposables);
-        _connectionBannerVisible = bannerMessages
-            .Select(message => message is not null)
+        var bannerCard = bannerContent.Select(content => {
+            var message = NoticeText.Commands(content.Message);
+            var detail  = NoticeText.Commands(content.Detail);
+            var (title, body) = NoticeText.Headline(message.Prose);
+            if (body is null && detail.Prose is null && title is not null) (title, body) = (DaemonStatusTitle, message.Prose);
+            if (BannerInFlight(content)) {
+                title = title?.TrimEnd('…') + "…";
+                body = body?.Replace("…", "", StringComparison.Ordinal);
+                detail.Prose = detail.Prose?.Replace("…", "", StringComparison.Ordinal);
+            }
+            return (Title: title, Body: body, Detail: detail.Prose, Command: detail.Command ?? message.Command);
+        });
+        _bannerTitle = bannerCard.Select(card => card.Title)
+            .ToProperty(this, x => x.BannerTitle, NoticeText.Headline(ConnectingNotice).Title)
+            .DisposeWith(_disposables);
+        _bannerBody = bannerCard.Select(card => card.Body)
+            .ToProperty(this, x => x.BannerBody, NoticeText.Headline(ConnectingNotice).Body)
+            .DisposeWith(_disposables);
+        _bannerDetail = bannerCard.Select(card => card.Detail)
+            .ToProperty(this, x => x.BannerDetail)
+            .DisposeWith(_disposables);
+        _bannerCommand = bannerCard.Select(card => card.Command)
+            .ToProperty(this, x => x.BannerCommand)
+            .DisposeWith(_disposables);
+        Notices.TrackConnection(bannerContent.Select(content =>
+            (content.Message is not null, BannerInFlight(content) ? LauncherNotices.Kind.Progress : LauncherNotices.Kind.Problem)));
+        _connectionBannerVisible = bannerContent
+            .Select(content => content.Message is not null)
             .ToProperty(this, x => x.ConnectionBannerVisible, initialValue: false)
             .DisposeWith(_disposables);
-        _bannerBusy = bannerMessages
-            .Select(BusyNotice)
+        _bannerBusy = bannerContent
+            .Select(BannerInFlight)
             .ToProperty(this, x => x.BannerBusy, initialValue: true)
             .DisposeWith(_disposables);
-        _signInVisible = signInState
-            .CombineLatest(_catchUpTimedOut, _localServer, (t, timedOut, local) => !local && !t.Awaiting && (t.Expired || (timedOut && !t.Foreign) || (
-                t.Availability == LaunchAvailability.ServerDisconnected && !t.Foreign && !LaneIsCatchingUp(t.Lane))))
+        _bannerFailed = bannerContent
+            .Select(BannerFailedFor)
+            .ToProperty(this, x => x.BannerFailed, initialValue: false)
+            .DisposeWith(_disposables);
+        var signInVisible = signInState
+            .CombineLatest(_catchUpTimedOut, _localServer, (t, timedOut, local) => SignInOffered(
+                local, t.Awaiting, t.Expired, timedOut, t.Foreign, t.Availability, t.Lane));
+        _signInVisible = signInVisible
             .ToProperty(this, x => x.SignInVisible, initialValue: false)
+            .DisposeWith(_disposables);
+        var canOpenHarnessesSettings = _openHarnessesSettings.Select(open => open is not null)
+            .ObserveOn(RxSchedulers.MainThreadScheduler);
+        OpenHarnessesSettingsCommand = ReactiveCommand.Create(() => _openHarnessesSettings.Value?.Invoke(), canOpenHarnessesSettings);
+        var harnessesSettingsVisible = bannerContent
+            .CombineLatest(canOpenHarnessesSettings, (content, canOpen) => canOpen && content.Message == NoHarnessesNotice(null))
+            .DistinctUntilChanged();
+        _harnessesSettingsVisible = harnessesSettingsVisible
+            .ToProperty(this, x => x.HarnessesSettingsVisible, initialValue: false)
+            .DisposeWith(_disposables);
+        var canRetryServer = _retryServer.Select(retry => retry is not null)
+            .ObserveOn(RxSchedulers.MainThreadScheduler);
+        RetryServerCommand = ReactiveCommand.CreateFromTask(() => _retryServer.Value?.Invoke() ?? Task.CompletedTask, canRetryServer);
+        var serverRetryVisible = bannerContent
+            .CombineLatest(canRetryServer, (content, canRetry) => canRetry && IsServerUnreachable(content.Message))
+            .DistinctUntilChanged();
+        _serverRetryVisible = serverRetryVisible
+            .ToProperty(this, x => x.ServerRetryVisible, initialValue: false)
+            .DisposeWith(_disposables);
+        _bannerActionsVisible = _daemonStartVisibleFeed
+            .CombineLatest(_daemonRetryVisibleFeed, _daemonRepairVisibleFeed, signInVisible, harnessesSettingsVisible, serverRetryVisible,
+                (start, retry, repair, signIn, harnesses, serverRetry) => start || retry || repair || signIn || harnesses || serverRetry)
+            .ToProperty(this, x => x.BannerActionsVisible, initialValue: false)
             .DisposeWith(_disposables);
 
         // The daemon catching up ends the wait whichever server it serves.
@@ -853,7 +1026,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .DisposeWith(_disposables);
 
         _startButtonTip = _selectedRepoPathChanges
-            .CombineLatest(notices, _accountTip, TipFor)
+            .CombineLatest(notices, _accountTip, updateHolds,
+                (repo, notice, account, held) => TipFor(repo, held ? FinishingUpdateNotice : notice, account))
             .ToProperty(this, x => x.StartButtonTip, TipFor(SelectedRepoPath, ConnectingNotice, null))
             .DisposeWith(_disposables);
 
@@ -889,36 +1063,104 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         this.RaisePropertyChanged(nameof(StartDaemonCommand));
         this.RaisePropertyChanged(nameof(RetryDaemonCommand));
 
-        _daemonStartVisible = startVisible
+        // Both act on this machine's daemon, so a remote pick's banner must not offer them.
+        var local = _machineSelectionChanges.Select(sel => !sel.Remote);
+        var startShown = startVisible.CombineLatest(local, (visible, isLocal) => visible && isLocal).DistinctUntilChanged();
+        var retryShown = retryVisible.CombineLatest(local, (visible, isLocal) => visible && isLocal).DistinctUntilChanged();
+        _daemonStartVisible = startShown
             .ToProperty(this, x => x.DaemonStartVisible, initialValue: false)
             .DisposeWith(_disposables);
-        _daemonRetryVisible = retryVisible
+        _daemonRetryVisible = retryShown
             .ToProperty(this, x => x.DaemonRetryVisible, initialValue: false)
             .DisposeWith(_disposables);
+        startShown.Subscribe(_daemonStartVisibleFeed).DisposeWith(_disposables);
+        retryShown.Subscribe(_daemonRetryVisibleFeed).DisposeWith(_disposables);
         startMessage
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_daemonStartMessageFeed)
             .DisposeWith(_disposables);
     }
 
+    /// The banner's Repair button, offered beside the lifecycle line <paramref name="offer"/> names.
+    public void AttachServiceRepair(Func<CancellationToken, Task> repair, IObservable<string?> offer, CancellationToken ct) {
+        RepairDaemonCommand = ReactiveCommand.CreateFromTask(() => repair(ct));
+        this.RaisePropertyChanged(nameof(RepairDaemonCommand));
+
+        var repairVisible = offer
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .CombineLatest(this.WhenAnyValue(x => x.BannerMessage, x => x.BannerDetail, (message, detail) => (message, detail)),
+                (offered, shown) => offered is not null
+                    && (shown.message == offered || NoticeText.Commands(offered).Prose == shown.detail));
+        _daemonRepairVisible = repairVisible
+            .ToProperty(this, x => x.DaemonRepairVisible, initialValue: false)
+            .DisposeWith(_disposables);
+        repairVisible.Subscribe(_daemonRepairVisibleFeed).DisposeWith(_disposables);
+    }
+
+    /// Redials the app's own server connection at once rather than at the next step of its backoff.
+    public void AttachServerRetry(Func<Task> retry) => _retryServer.OnNext(retry);
+
+    /// The no-agent banner's way to Settings → Harnesses; null while there is no profile to open Settings for.
+    public void AttachHarnessesSettings(IObservable<Action?> open) =>
+        open.Subscribe(_openHarnessesSettings.OnNext).DisposeWith(_disposables);
+
     /// The "local server is not running" banner, beside the daemon's own recovery.
     public LocalServerRecoveryViewModel? LocalServer { get; private set; }
 
     /// The local stack's upgrade banner; null unless the server is this machine's local installation.
-    public LocalStackViewModel? LocalStack { get; init; }
+    public LocalStackViewModel? LocalStack {
+        get => _localStack;
+        init {
+            _localStack = value;
+            if (value is not null)
+                Notices.TrackStack(value.WhenAnyValue(x => x.BannerVisible, x => x.Upgrading, x => x.IsNote, (visible, upgrading, note) =>
+                    (visible, upgrading ? LauncherNotices.Kind.Progress : note ? LauncherNotices.Kind.Note : LauncherNotices.Kind.Problem)));
+        }
+    }
+    readonly LocalStackViewModel? _localStack;
+
+    /// Which of the launcher's problem notices show.
+    public LauncherNotices Notices { get; } = new();
+
+    /// True while an update the user went on from early is still finishing on this machine.
+    public IObservable<bool> UpdateFinishing => _updateFinishing.DistinctUntilChanged();
+
+    /// The update's remaining step, while one still runs after the main window opened early.
+    public string? UpdateDetail {
+        get => _updateDetail;
+        private set => this.RaiseAndSetIfChanged(ref _updateDetail, value);
+    }
+
+    /// Follows an update the user went on from before it finished: with this machine selected, one card stands in
+    /// for the others and launches wait, until every step has settled.
+    public void AttachUpdateProgress(IObservable<(bool Finishing, string? Detail)> progress) {
+        progress.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(p => {
+            UpdateDetail = p.Detail?.TrimEnd('…');
+            _updateFinishing.OnNext(p.Finishing);
+        }).DisposeWith(_disposables);
+        // A remote machine's own notices still show: the update is changing only this one.
+        Notices.TrackUpdate(_updateFinishing.CombineLatest(_machineSelectionChanges, (finishing, sel) => finishing && !sel.Remote)
+            .DistinctUntilChanged());
+    }
 
     public void AttachLocalServerRecovery(LocalServerRecoveryViewModel recovery) {
         LocalServer = recovery;
         this.RaisePropertyChanged(nameof(LocalServer));
         _localServer.OnNext(recovery.IsLocalServer);
         recovery.WhenAnyValue(x => x.ServerDown).Subscribe(_localServerDown).DisposeWith(_disposables);
+        Notices.TrackServer(recovery.WhenAnyValue(x => x.Visible, x => x.IsStarting, (visible, starting) =>
+            (visible, starting ? LauncherNotices.Kind.Progress : LauncherNotices.Kind.Problem)));
     }
 
-    /// Prefer the actionable start/lifecycle line when present; otherwise the connection notice.
-    /// Expired sign-in is the exception: a reconnecting/start line must not hide it.
-    internal static string? BannerMessageFor(string? connectionNotice, string? startMessage) =>
-        connectionNotice == SignInExpiredNotice ? connectionNotice
-        : !string.IsNullOrEmpty(startMessage) ? startMessage : connectionNotice;
+    /// The explanation first and daemon output below it. An expired sign-in stays the whole message:
+    /// starting or reconnecting the daemon cannot restore that session. A status that hands the user a
+    /// command to run is the whole message too, since it already says what the explanation would.
+    internal static (string? Message, string? Detail) BannerContentFor(string? connectionNotice, string? startMessage) =>
+        connectionNotice == SignInExpiredNotice || string.IsNullOrEmpty(startMessage) || startMessage == connectionNotice
+            ? (connectionNotice, null)
+        : connectionNotice is null || NoticeText.Commands(startMessage).Command is not null
+            ? (startMessage, null)
+            : (connectionNotice, startMessage);
 
     /// The re-auth dialog's success lands here (App wires it): clears the expired flag and holds a
     /// finishing notice until the daemon reports the server is connected.
@@ -986,13 +1228,21 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal static string? NoticeFor(
             AttachStatus status, string daemonConnection, bool signInExpired, bool awaitingServer,
             bool remoteSelected, LaunchAvailability selectedAvailability,
-            ServerLaneState lane = ServerLaneState.Dormant, string? foreignServerNotice = null) {
+            ServerLaneState lane = ServerLaneState.Dormant, string? foreignServerNotice = null, ConnectionFailure? laneFailure = null) {
         if (signInExpired) return SignInExpiredNotice;
 
         if (!remoteSelected && status.State == AttachState.Unreachable)
-            return status.Reason == IncompatibleReason ? DaemonIncompatibleNotice : DaemonDownNotice;
+            return status.Reason switch {
+                IncompatibleReason => DaemonIncompatibleNotice,
+                ExpectedDaemonRestart.Reason => DaemonRestartingNotice,
+                _ => DaemonDownNotice,
+            };
 
         if (!remoteSelected && status.State == AttachState.Connected && foreignServerNotice is not null) return foreignServerNotice;
+
+        // The app's own attempt got no answer: neither a finishing sign-in nor a fresh one can get past that.
+        if (lane == ServerLaneState.Retrying && laneFailure is { } failure && selectedAvailability != LaunchAvailability.Ready)
+            return ServerUnreachableNotice(failure);
 
         if (awaitingServer && selectedAvailability is LaunchAvailability.ServerDisconnected or LaunchAvailability.Pending)
             return FinishingSignInNotice;
@@ -1021,12 +1271,38 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal static bool LaneIsCatchingUp(ServerLaneState lane) =>
         lane is ServerLaneState.Connecting or ServerLaneState.Retrying or ServerLaneState.Connected;
 
+    /// A failure is something that broke: versions that cannot work together, a server that refused
+    /// the app, or a daemon still down after the lifecycle settled on a report, which only follows a
+    /// start or setup that did not work.
+    internal static bool BannerFailedFor((string? Message, string? Detail) content) =>
+        content.Message is DaemonIncompatibleNotice or LocalServerRefusedNotice
+        || (content.Message == DaemonDownNotice && content.Detail is { } detail && !InFlight(detail));
+
+    static bool BannerInFlight((string? Message, string? Detail) content) =>
+        content.Detail is { } detail ? InFlight(detail)
+            : BusyNotice(content.Message) || InFlight(content.Message) || content.Message == DaemonRestartingNotice;
+
+    /// A lifecycle status still waiting on something, which the banner shows with a spinner. Every
+    /// in-flight status ends in an ellipsis; no failure does.
+    internal static bool InFlight(string? line) => line?.EndsWith('…') == true;
+
     internal static bool BusyNotice(string? notice) =>
         notice is ConnectingNotice or FinishingSignInNotice;
 
-    /// A Connecting/Finishing line that outlived CatchUpLimit is a lost session, not catch-up.
-    internal static string? NoticeAfterCatchUp(string? notice, bool timedOut) =>
-        timedOut && BusyNotice(notice) ? ServerLostNotice : notice;
+    /// A Connecting/Finishing line that outlived CatchUpLimit is a lost session, not catch-up. While the app's own
+    /// lane is still retrying, the server is what is failing, so the line says that rather than asking for a sign-in.
+    internal static string? NoticeAfterCatchUp(string? notice, bool timedOut, ServerLaneState lane = ServerLaneState.Dormant) =>
+        !timedOut || !BusyNotice(notice) ? notice
+        : lane == ServerLaneState.Retrying ? ServerRetryingNotice
+        : ServerLostNotice;
+
+    /// Sign in is offered only on credential evidence or a session lost with the server answering. A retrying lane
+    /// is never a credential problem: a refused credential parks it signed out instead.
+    internal static bool SignInOffered(
+            bool localServer, bool awaiting, bool expired, bool timedOut, bool foreign, LaunchAvailability availability,
+            ServerLaneState lane) =>
+        !localServer && !awaiting && (expired || (lane != ServerLaneState.Retrying && !foreign && (timedOut
+            || (availability == LaunchAvailability.ServerDisconnected && !LaneIsCatchingUp(lane)))));
 
     /// A local server takes no sign-in, so none of its notices asks for one. With this Mac selected,
     /// the Start banner is the whole story while the server is down, so the generic connecting and
@@ -1038,6 +1314,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             (ServerLostNotice, { } machine)                             => RemoteOfflineNotice(machine),
             (_, not null)                                               => notice,
             (ConnectingNotice or ServerLostNotice, _) when localServerDown => null,
+            _ when localServerDown && IsServerUnreachable(notice)       => null,
             (ServerLostNotice, _)                                       => LocalServerLostNotice,
             _                                                           => notice,
         };
@@ -1053,8 +1330,15 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     public void Dispose() {
         _disposed = true;
         _disposables.Dispose();
+        Notices.Dispose();
         _daemonStartMessageFeed.Dispose();
+        _daemonStartVisibleFeed.Dispose();
+        _daemonRetryVisibleFeed.Dispose();
+        _daemonRepairVisibleFeed.Dispose();
+        _openHarnessesSettings.Dispose();
+        _retryServer.Dispose();
         _uploadingChanges.Dispose();
+        _updateFinishing.Dispose();
         _retentionTimer.Dispose();
         _catchUpTimer.Dispose();
         _catchUpTimedOut.Dispose();
@@ -1115,17 +1399,22 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// offered only when that list is empty — with real repos, an empty selection adopts the
     /// most recently used known path instead.
     ///
-    /// A remote machine selection swaps this entirely: only that machine's own advertised
-    /// RepoPaths are offered (no known-repos merge, no scratch adoption — a remote path is never
-    /// verified locally), each labelled DefaultVendor since there is no per-repo remembered
-    /// harness for a machine that is not this one.
+    /// A remote machine selection swaps this entirely: that machine's advertised RepoPaths as the
+    /// registry reports them now (none once it is gone, or only a local twin of the same name is
+    /// left), plus a typed path not yet among them (no known-repos merge, no
+    /// scratch adoption — a remote path is never verified locally), each labelled with the harness
+    /// the pick keeps, since there is no per-repo remembered harness for a machine that is not this one.
     public async Task<IReadOnlyList<RepositoryOption>> ListRepositoriesAsync() {
         if (RemoteMachineSelected) {
             var remoteSelected = SelectedRepoPath;
-            return (_selectedRemoteMachine?.RepoPaths ?? [])
+            var live = _currentDaemons.Where(d => !IsLocalTwin(d)).ToList();
+            var remotePaths = (FindMachine(live, SelectedMachine, _lastViewerId)?.RepoPaths ?? []).ToList();
+            if (remoteSelected.Length > 0 && !remotePaths.Contains(remoteSelected, RemotePathComparer))
+                remotePaths.Add(remoteSelected);
+            return remotePaths
                 .OrderBy(RepoLabel.Leaf, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(p => p, StringComparer.Ordinal)
-                .Select(p => new RepositoryOption(p, DefaultVendor, PathComparer.Equals(p, remoteSelected)))
+                .Select(p => new RepositoryOption(p, RemoteRepoVendor(Harnesses), RemotePathComparer.Equals(p, remoteSelected)))
                 .ToList();
         }
 
@@ -1134,17 +1423,37 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         var (byRepo, paths) = await GatherLocalRepoDataAsync();
 
         var selected = SelectedRepoPath;
+        var harnesses = Harnesses;
         var options = paths
             .OrderBy(RepoLabel.Leaf, StringComparer.OrdinalIgnoreCase)
             .ThenBy(p => p, StringComparer.Ordinal)
-            .Select(p => new RepositoryOption(p, Lookup(byRepo, p) ?? DefaultVendor, PathComparer.Equals(p, selected)))
+            .Select(p => new RepositoryOption(p, RepoVendor(Lookup(byRepo, p), harnesses), PathComparer.Equals(p, selected)))
             .ToList();
 
         if (paths.Count == 0)
             options.Add(new RepositoryOption(
-                ScratchRepoPath, Lookup(byRepo, ScratchRepoPath) ?? DefaultVendor, selected.Length == 0));
+                ScratchRepoPath, RepoVendor(Lookup(byRepo, ScratchRepoPath), harnesses), selected.Length == 0));
         return options;
     }
+
+    /// The harness picking a local repository lands on, so its menu entry never names one the pick
+    /// would not use: the remembered harness while it is available, then DefaultVendor, then the
+    /// selected one, then the first available. With nothing available it is the remembered one or
+    /// DefaultVendor, and the menu shows no badge.
+    string RepoVendor(string? remembered, IReadOnlyList<HarnessOption> harnesses) {
+        if (IsAvailable(harnesses, remembered)) return remembered!;
+        if (IsAvailable(harnesses, DefaultVendor)) return DefaultVendor;
+        if (IsAvailable(harnesses, SelectedVendor)) return SelectedVendor;
+        return harnesses.FirstOrDefault(o => o.Available)?.Vendor ?? remembered ?? DefaultVendor;
+    }
+
+    /// A remote pick keeps the selected harness while the machine offers it; see RevalidateVendor.
+    string RemoteRepoVendor(IReadOnlyList<HarnessOption> harnesses) =>
+        IsAvailable(harnesses, SelectedVendor) ? SelectedVendor
+            : harnesses.FirstOrDefault(o => o.Available)?.Vendor ?? DefaultVendor;
+
+    internal static bool IsAvailable(IReadOnlyList<HarnessOption> harnesses, string? vendor) =>
+        vendor is not null && harnesses.Any(o => o.Available && string.Equals(o.Vendor, vendor, StringComparison.OrdinalIgnoreCase));
 
     /// The path-gathering half of ListRepositoriesAsync's local branch, split out so
     /// ListMachinesAsync can reuse it for the local MachineOption's RepoPaths without a second
@@ -1213,7 +1522,6 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         if (isLocal) {
             var wasRemote = RemoteMachineSelected;
             SetMachineSelection(daemonName, remote: false);
-            _selectedRemoteMachine = null;
             _remoteVendorOverride.OnNext(null);
             if (!wasRemote) return; // already local — nothing a remote pick could have left behind
 
@@ -1235,7 +1543,6 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             VendorModelMaps.FromRegistry(match.VendorModelsByAccount));
 
         SetMachineSelection(daemonName, remote: true);
-        _selectedRemoteMachine = machine;
         _remoteVendorOverride.OnNext(machine.SupportedVendors);
         SelectedRepoPath = machine.RepoPaths.FirstOrDefault() is { Length: > 0 } first ? first : ScratchRepoPath;
         RevalidateVendorAgainst(machine.SupportedVendors);
@@ -1345,12 +1652,13 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     }
 
     /// When nothing is selected, adopt the most recently used known repository (then a remembered
-    /// harness key, then an agent root). No-op when a selection already exists or nothing is known.
+    /// harness key, then an agent root). No-op when a selection already exists or nothing is known,
+    /// and for a remote machine, which these local paths do not describe.
     public async Task EnsureDefaultRepositoryAsync() {
-        if (SelectedRepoPath.Length > 0) return;
+        if (SelectedRepoPath.Length > 0 || RemoteMachineSelected) return;
         if (await PreferRecentRepositoryAsync() is not { Length: > 0 } recent) return;
-        // PreferRecent can await file I/O — a pick made while that ran must win.
-        if (SelectedRepoPath.Length > 0) return;
+        // PreferRecent can await file I/O — a pick or a machine switch made while that ran must win.
+        if (SelectedRepoPath.Length > 0 || RemoteMachineSelected) return;
         await SelectRepositoryAsync(recent);
     }
 
@@ -1372,20 +1680,45 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     }
 
     /// Sets the repository and restores that repository's remembered harness, or DefaultVendor
-    /// when none — never the vendor a DIFFERENT repository had selected. In remote mode the local
-    /// HarnessByRepo store is never consulted. Either way the result is revalidated against the
-    /// selected machine's current harnesses.
+    /// when none — never the vendor a DIFFERENT repository had selected while DefaultVendor is
+    /// available; the selected one is kept only when it is not (RepoVendor). In remote mode the
+    /// local HarnessByRepo store is never consulted. Either way the result is revalidated against
+    /// the selected machine's current harnesses.
     public async Task SelectRepositoryAsync(string repoPath) {
-        SelectedRepoPath = repoPath.Length == 0 ? ScratchRepoPath : PlatformPaths.Normalize(repoPath);
+        // This host's separator rules would rewrite a remote path: on Unix, Windows' C:/ trims to C:.
+        SelectedRepoPath = repoPath.Length == 0 ? ScratchRepoPath
+            : RemoteMachineSelected ? repoPath
+            : PlatformPaths.Normalize(repoPath);
         if (RemoteMachineSelected) {
             RevalidateVendor(Harnesses);
             return;
         }
 
+        var selected = SelectedRepoPath;
         var saved = await _state.LoadAsync();
-        SetVendor(Lookup(saved.HarnessByRepo, SelectedRepoPath) ?? DefaultVendor);
+        // A machine switch or another pick made while the store loaded owns the vendor now.
+        if (RemoteMachineSelected || !string.Equals(SelectedRepoPath, selected, StringComparison.Ordinal)) return;
+        SetVendor(RepoVendor(Lookup(saved.HarnessByRepo, SelectedRepoPath), Harnesses));
         RevalidateVendor(Harnesses);
     }
+
+    /// A remote machine's repository is typed rather than picked: the local folder picker would hand
+    /// it a path from this machine. Returns the reason a path was refused, or null once it is
+    /// selected. Only shape is checked; existence and the daemon's allowed-repo list are judged by
+    /// the daemon at launch.
+    public async Task<string?> EnterRemoteRepositoryAsync(string path) {
+        var trimmed = path.Trim();
+        if (!RemoteMachineSelected) return "Pick a remote machine first.";
+        if (!LooksAbsolute(trimmed)) return $"Enter the full path of the repository on {SelectedMachine}.";
+        await SelectRepositoryAsync(trimmed);
+        return null;
+    }
+
+    /// Absolute on any platform the remote machine might run, which need not be this one's.
+    internal static bool LooksAbsolute(string path) =>
+        path.StartsWith('/')
+     || path.StartsWith(@"\\", StringComparison.Ordinal)
+     || path is [_, ':', '\\' or '/', ..] && char.IsAsciiLetter(path[0]);
 
     /// Read against the draft's machine, not the current selection, which may have moved during an upload.
     string? HarnessErrorFor(LaunchDraft draft) {
@@ -1395,7 +1728,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         var harness = options.FirstOrDefault(o => string.Equals(o.Vendor, draft.Vendor, StringComparison.OrdinalIgnoreCase));
         if (harness is { Available: true }) return null;
         return options.Any(o => o.Available)
-            ? HarnessUnavailableMessage(harness?.Label ?? draft.Vendor)
+            ? HarnessUnavailableMessage(harness?.Label ?? draft.Vendor, draft.Remote ? draft.Machine : null)
             : NoHarnessesNotice(draft.Remote ? draft.Machine : null);
     }
 
@@ -1418,7 +1751,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         var machine = AccountMachine(sel.Name, sel.Remote);
         _applyingAccountInputs = true;
         try {
-            if (_accountTarget is not { } last || !PathComparer.Equals(last.RepoPath, repoPath)
+            if (_accountTarget is not { } last || !PathComparerFor(sel.Remote).Equals(last.RepoPath, repoPath)
              || last.Vendor != vendor || last.Machine != machine || last.Remote != sel.Remote) {
                 _accountTarget = (repoPath, vendor, machine, sel.Remote);
                 _accountChooser.EnterTarget(repoPath, vendor);
@@ -1434,6 +1767,21 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         }
         PublishAccountChoice();
     }
+
+    static IReadOnlyDictionary<string, AccountUsageView> ProjectUsage(AccountsSnapshotDto? snapshot, string vendor, DateTimeOffset now) =>
+        snapshot is null
+            ? FrozenDictionary<string, AccountUsageView>.Empty
+            : (snapshot.Accounts ?? [])
+                .Where(a => string.Equals(a.Vendor, vendor, StringComparison.OrdinalIgnoreCase))
+                .DistinctBy(a => a.Id)
+                .ToFrozenDictionary(a => a.Id, a => AccountUsage.Project(a, now, TimeZoneInfo.Local));
+
+    internal static bool UsageEquals(IReadOnlyDictionary<string, AccountUsageView> a, IReadOnlyDictionary<string, AccountUsageView> b) =>
+        a.Count == b.Count && a.All(p => b.TryGetValue(p.Key, out var other) && p.Value.Equals(other));
+
+    /// Equality over what the launcher draws: age and readiness do not change its rows.
+    internal static bool DrawnUsageEquals(IReadOnlyDictionary<string, AccountUsageView> a, IReadOnlyDictionary<string, AccountUsageView> b) =>
+        a.Count == b.Count && a.All(p => b.TryGetValue(p.Key, out var other) && p.Value.DrawnEquals(other));
 
     string AccountMachine(string name, bool remote) => remote ? name : _daemon.DaemonName;
 
@@ -1457,16 +1805,17 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             && _accountTarget is { } target ? (target.Vendor, chooser.SelectedAccountId!) : null);
     }
 
-    /// Written off the UI thread in call order: the chooser also forgets an entry from inside its recompute.
+    /// Written in call order: the chooser also forgets an entry from inside its recompute.
     void RememberAccount(string hostId, string vendor, string repoPath, string? accountId) {
         _accountMemory = AccountMemory.With(_accountMemory, hostId, vendor, repoPath, accountId);
-        var previous = _accountMemoryWrites;
-        _accountMemoryWrites = Task.Run(async () => {
-            await previous;
+        _accountMemoryWrites = WriteAfterAsync(_accountMemoryWrites);
+
+        async Task WriteAfterAsync(Task previous) {
+            await previous.ConfigureAwait(false);
             await _state.UpdateAsync(s => s with {
                 AccountByRepo = AccountMemory.With(s.AccountByRepo, hostId, vendor, repoPath, accountId),
-            });
-        });
+            }).ConfigureAwait(false);
+        }
     }
 
     /// The Default-badged row follows the daemon's default rather than pinning its account. Any
@@ -1637,13 +1986,26 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                 _retainedDraft = new RetainedDraft(
                     agentId, draft, uploadedAt!.Value, clearedGoal, _goalEdits, clearedTray, Tray.Generation);
         var lane = draft.Remote ? AgentOrigin.Remote : AgentOrigin.Local;
+        var opensUnder = new StrongBox<int>(generation);
         var tracked = RecordPendingLaunch(
-            agentId, lane, draft.Files.Count > 0, uploadedAt, draft.RepoPath, generation, draft.Machine);
-        // The placeholder is a local-lane row. A remote launch opens from ConfirmPendingRows when
-        // its row arrives, or here when that row beat the registration.
+            agentId, lane, draft.Files.Count > 0, uploadedAt, draft.RepoPath, opensUnder, draft.Machine);
         if (draft.Remote) {
-            if (!tracked && RowId(agentId, AgentOrigin.Remote) is { } rowId)
-                _openSessionIfCurrent?.Invoke(rowId, AgentOrigin.Remote, generation);
+            if (!tracked) {
+                if (RowId(agentId, AgentOrigin.Remote) is { } rowId)
+                    _openSessionIfCurrent?.Invoke(rowId, AgentOrigin.Remote, generation);
+                return;
+            }
+            // Keyed by the server's own spelling, which the registry row is expected to share.
+            _directory?.AddRemotePlaceholder(outcome.AgentId!, draft.Machine, _lastViewerId, draft.Vendor, draft.RepoPath,
+                AgentRow.TitleFromPrompt(draft.Goal), draft.Model);
+            // A navigation while the launch was in flight refuses the open, and the launch must stay
+            // unable to open later.
+            if ((_navigationGeneration?.Invoke() ?? 0) != generation) return;
+            _openSessionIfCurrent?.Invoke(outcome.AgentId!, AgentOrigin.Remote, generation);
+            // Opening moved the generation on. Should the registry spell the id differently, its
+            // row lands under another key, and ConfirmPendingRows still swaps the open placeholder
+            // workspace over to it unless the user has navigated since.
+            if (_navigationGeneration?.Invoke() is { } opened) opensUnder.Value = opened;
             return;
         }
         if (tracked)
@@ -1661,7 +2023,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// False when a row or a buffered failure has already settled the launch.
     bool RecordPendingLaunch(
             string agentId, AgentOrigin lane, bool hadAttachments, DateTimeOffset? uploadedAt,
-            string repoPath, int generation, string machine) {
+            string repoPath, StrongBox<int> generation, string machine) {
         // A row for this id confirms success, and it can appear on either side of the registration
         // below: the launch may have succeeded before this method ran at all, or the directory's
         // Add may land while it runs — at which point ConfirmPendingRows finds nothing pending yet
@@ -1787,7 +2149,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     /// Local and remote can share a daemon name and path; RemoteMachineSelected separates them.
     bool SameLaunchTarget(string repoPath, string machine, bool remote) =>
-        PathComparer.Equals(SelectedRepoPath, repoPath)
+        PathComparerFor(remote).Equals(SelectedRepoPath, repoPath)
         && string.Equals(SelectedMachine, machine, StringComparison.Ordinal)
         && RemoteMachineSelected == remote;
 
@@ -1804,12 +2166,14 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// NormalizeAgentId comparison as ApplyFailureIfPending, for the same id-shape reason.
     /// A remote launch's row is also its auto-open: the remote workspace needs that row to exist.
     void ConfirmPendingRows(IChangeSet<AgentRow, string> changes) {
-        List<(string AgentId, int Generation)>? remoteOpens = null;
+        List<(string AgentId, StrongBox<int> Generation)>? remoteOpens = null;
         lock (_launchTrackingLock) {
-            // A pending row is the launch's own stand-in, so only a published one on the launch's
-            // own lane settles it.
+            // A pending row or placeholder is the launch's own stand-in, so only a published row on
+            // the launch's own lane settles it. The registry's row can replace a remote placeholder
+            // under the same key, which arrives as an update.
             foreach (var change in changes)
-                if (change.Reason == ChangeReason.Add && NormalizeAgentId(change.Current.Id) is { } agentId
+                if (change.Reason is ChangeReason.Add or ChangeReason.Update && !change.Current.IsPlaceholder
+                    && NormalizeAgentId(change.Current.Id) is { } agentId
                     && _pendingLaunches.TryGetValue(agentId, out var pending) && pending.Lane == change.Current.Origin) {
                     _pendingLaunches.Remove(agentId);
                     _recentFailures.Remove(agentId);
@@ -1822,7 +2186,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         if (remoteOpens is not null && _openSessionIfCurrent is { } open)
             RxSchedulers.MainThreadScheduler.Schedule(() => {
                 if (_disposed) return;
-                foreach (var (agentId, generation) in remoteOpens) open(agentId, AgentOrigin.Remote, generation);
+                foreach (var (agentId, generation) in remoteOpens) open(agentId, AgentOrigin.Remote, generation.Value);
             });
     }
 
@@ -1884,12 +2248,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         return WorkspacePrepFailed + " " + detail;
     }
 
-    /// Null for Manual (the harness's own default) and for any vendor that takes no mode.
+    /// Null for any vendor that takes no mode. Manual is sent like any other mode: an absent flag
+    /// lets the user's own Claude <c>permissions.defaultMode</c> decide, and that can be <c>auto</c>.
     internal static string? PermissionModeFor(string vendor, string mode) =>
-        HostedHarnessCatalog.SupportsPermissionMode(vendor)
-     && !string.Equals(mode, ClaudePermissionModes.Manual, StringComparison.Ordinal)
-            ? mode
-            : null;
+        HostedHarnessCatalog.SupportsPermissionMode(vendor) ? mode : null;
 
     /// Null for any vendor but codex, and for the daemon's own default pair, so an untouched
     /// launcher sends no posture and a daemon without posture support still accepts the launch.
@@ -1908,6 +2270,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// Applied on READ because System.Text.Json rebuilds the dictionary with a default (ordinal)
     /// comparer on load — a comparer set only at write time would not survive the round-trip.
     static readonly StringComparer PathComparer = PlatformPaths.Comparer;
+    // This host's case rules are not the remote machine's: a Linux remote keeps /w/Repo and /w/repo apart.
+    static readonly StringComparer RemotePathComparer = StringComparer.Ordinal;
+    static StringComparer PathComparerFor(bool remote) => remote ? RemotePathComparer : PathComparer;
 
     static string? Lookup(IReadOnlyDictionary<string, string>? byRepo, string repoPath) {
         if (byRepo is null) return null;

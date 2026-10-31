@@ -2,11 +2,15 @@ using Capacitor.Cli.Core;
 
 namespace Capacitor.App.Services.Mutation;
 
-public enum MutationVerb { Install, Replace, StartVerified, DetachedStart, Reload, AccountAdd, AccountRemove, AccountRename, AccountRewire }
+public enum MutationVerb {
+    Install, Replace, StartVerified, DetachedStart, Reload, AccountAdd, AccountRemove, AccountRename, AccountRewire, AccountRefresh,
+    InstallWindowsService
+}
 
 public static class MutationVerbExtensions {
     public static bool IsAccountVerb(this MutationVerb verb) =>
-        verb is MutationVerb.AccountAdd or MutationVerb.AccountRemove or MutationVerb.AccountRename or MutationVerb.AccountRewire;
+        verb is MutationVerb.AccountAdd or MutationVerb.AccountRemove or MutationVerb.AccountRename or MutationVerb.AccountRewire
+            or MutationVerb.AccountRefresh;
 }
 
 public sealed record MutationRequest(

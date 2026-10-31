@@ -56,6 +56,10 @@ internal interface IHostedAgentLauncher {
     /// <summary>Whether <see cref="BuildArgs"/> resumes the vendor session a restart resume names.</summary>
     bool SupportsResume => false;
 
+    /// <summary>Whether a reviewer launched by this launcher in an owned worktree reopens its session
+    /// across a daemon restart. Declared only once a live probe of the reviewer shape has passed.</summary>
+    bool SupportsReviewerResume => false;
+
     string? BorrowedReviewContainment => null;
 
     /// <summary>
@@ -146,4 +150,6 @@ internal sealed record LauncherContext(
 }
 
 /// <param name="SessionId">The vendor session a local launch runs under, when its args pin or name one.</param>
-internal readonly record struct LaunchArgs(string[] Args, string? McpConfigPath, string? SessionId = null);
+/// <param name="PermissionMode">The permission mode a local launch's args select, recorded so a recovery
+/// relaunch passes it again. Last because callers pass <paramref name="SessionId"/> positionally.</param>
+internal readonly record struct LaunchArgs(string[] Args, string? McpConfigPath, string? SessionId = null, string? PermissionMode = null);

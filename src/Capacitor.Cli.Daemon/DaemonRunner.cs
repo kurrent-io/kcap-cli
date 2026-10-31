@@ -57,6 +57,7 @@ public static partial class DaemonRunner {
         // before DI exists, so it is threaded by hand until the container is built.
         var time = TimeProvider.System;
         if (TryHandleVersionFlag(args, Console.Out)) return 0;
+        var launchBinary = RestartCoordinator.StatProcessBinary();
 
         string?    logFile     = null;
         string?    stderrFile  = null;
@@ -86,6 +87,7 @@ public static partial class DaemonRunner {
             Binaries     = binaries,
             WorktreeRoot = Path.Combine(userHome.Path, ".capacitor", "worktrees"),
             OriginalArgs = args,
+            LaunchBinary = launchBinary,
         };
         var awaitLock = args.Contains("--await-lock");
 
@@ -164,7 +166,6 @@ public static partial class DaemonRunner {
         var builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings { Args = [] });
         builder.Services.AddLogging();
 
-        // Configure logging: file when detached, console when foreground.
         // Minimum level defaults to Information; raise verbosity for transport
         // diagnostics (e.g. per-tick DaemonPing RTT, which logs at Debug) via
         // --log-level or KCAP_DAEMON_LOG_LEVEL=debug. The --log-level arg wins
@@ -175,16 +176,6 @@ public static partial class DaemonRunner {
 
         builder.Logging.ClearProviders();
         builder.Logging.SetMinimumLevel(minLevel);
-
-        if (logFile is not null) {
-            builder.Logging.AddProvider(new RollingFileLoggerProvider(logFile, time, minLevel: minLevel));
-        } else {
-            builder.Logging.AddSimpleConsole(opts => {
-                    opts.TimestampFormat = "yyyy-MM-dd HH:mm:ss.fff ";
-                    opts.UseUtcTimestamp = false;
-                }
-            );
-        }
 
         // Daemon settings from the active profile, with env overrides
         var profileDaemon = profiles.Resolution.Profile?.Daemon;
@@ -217,7 +208,7 @@ public static partial class DaemonRunner {
 
         // Committed before the first advertisement, which carries it to the server.
         var startupCodex = Harness.Codex.CodexTransportResolution.Read(
-            1, config.ReadExperimentalSettings, () => ProbeCliVersion(config.CodexPath),
+            1, config.ReadExperimentalSettings, () => ProbeCliVersion(harnesses.LaunchCommand(HarnessId.Codex, config.CodexPath)),
             problem => {
                 config.ExperimentalSettingsProblem = problem;
                 return Harness.Codex.CodexTransportResolution.Unreadable(1, problem);
@@ -299,8 +290,21 @@ public static partial class DaemonRunner {
             return LockRefusalExit(IsSupervised(config.Name));
         }
 
-        config.InstanceId = daemonLock.InstanceId;
+        config.InstanceId      = daemonLock.InstanceId;
+        config.PriorInstanceId = daemonLock.PriorInstanceId;
         StartupPhase(time, "lock acquired");
+
+        // File when detached, console when foreground. After the lock: Windows opens the log file
+        // write-exclusive, so a duplicate daemon opening it first would crash instead of refusing above.
+        if (logFile is not null) {
+            builder.Logging.AddProvider(new RollingFileLoggerProvider(logFile, time, minLevel: minLevel));
+        } else {
+            builder.Logging.AddSimpleConsole(opts => {
+                    opts.TimestampFormat = "yyyy-MM-dd HH:mm:ss.fff ";
+                    opts.UseUtcTimestamp = false;
+                }
+            );
+        }
 
         // Phase B2-b (sequenced-settlement design §4.2.3): the durable per-daemon state root — used by
         // the pre-host boot-check block immediately below AND (further down) by the coverage journal /
@@ -494,7 +498,8 @@ public static partial class DaemonRunner {
                 connection: sp.GetRequiredService<ServerConnection>(), // interactive approvals reach the user through it
                 policyJudge: sp.GetRequiredService<PolicyJudgeGateway>(),
                 // Resolved per call: the orchestrator is built from the runtime factories.
-                refreshCapabilities: reason => sp.GetRequiredService<AgentOrchestrator>().RefreshAdvertisedCapabilities(reason));
+                refreshCapabilities: reason => sp.GetRequiredService<AgentOrchestrator>().RefreshAdvertisedCapabilities(reason),
+                readings: sp.GetRequiredService<AccountReadingSink>());
         });
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
             new AcpHostedAgentRuntimeFactory(
@@ -639,6 +644,14 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton<AccountsPublisher>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<AccountsPublisher>());
         builder.Services.AddSingleton<AccountsIpc>();
+        builder.Services.AddSingleton(sp => new AccountReadingSink(config.Accounts, time, sp.GetRequiredService<ILogger<AccountReadingSink>>()));
+        builder.Services.AddSingleton(sp => new AccountRefresher(
+            config,
+            account => account.Vendor == HarnessId.Codex
+                ? new Core.Harness.Codex.CodexAccountProbe(harnesses, userHome, time)
+                : new Core.Harness.Claude.ClaudeIdentityProbe(harnesses, userHome, time),
+            time, sp.GetRequiredService<ILogger<AccountRefresher>>()));
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<AccountRefresher>());
 
         builder.Services.AddSingleton<ExperimentalSettingsWatcher>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<ExperimentalSettingsWatcher>());
@@ -760,6 +773,9 @@ public static partial class DaemonRunner {
 
         connection.GetAccountsSnapshot = () => accounts.Current;
         accounts.SendToServer          = connection.AccountsChangedAsync;
+        var refresher = host.Services.GetRequiredService<AccountRefresher>();
+        accounts.RequestRefresh        = refresher.Request;
+        accounts.RequestWiringRefresh  = refresher.RequestSoon;
 
         // Death-rattle instrumentation: without these, a daemon dying mid-run
         // (signal, OOM, unobserved-task FailFast, native crash) leaves no trace

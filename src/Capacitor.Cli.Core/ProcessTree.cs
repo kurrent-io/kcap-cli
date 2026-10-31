@@ -1,0 +1,199 @@
+using System.Diagnostics;
+using System.Globalization;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+
+namespace Capacitor.Cli.Core;
+
+/// <summary>
+/// SIGKILLs a process and every descendant, children before parents, each verified by start identity.
+/// <para><c>Process.Kill(entireProcessTree: true)</c> SIGSTOPs each process before it looks for children.
+/// A stopped member of the caller's own process group is what makes the kernel hang up the whole
+/// group, the caller included, the moment that group becomes orphaned: on macOS a launch agent shares
+/// launchd's session, so the exit of a grandchild that was reparented to launchd orphans the daemon's
+/// group, and every <c>Process.Start</c> child (Pi, Antigravity, ACP agents, git) lives in that group.
+/// The runtime's tree kill is banned in the daemon assembly for that reason; Windows has neither process
+/// groups nor SIGSTOP, so it still uses it.</para>
+/// <para>Nothing is stopped here, so a parent can fork between a listing and its own death, and that
+/// child is reparented out of reach. Killing children first and re-listing the parent until it shows
+/// nothing new keeps the window to the two syscalls between the last listing and the parent's
+/// SIGKILL. A pid is signalled only while it still carries the identity captured when it was listed,
+/// and never twice, so a recycled pid is never a target.</para>
+/// </summary>
+public static partial class ProcessTree {
+    const int Sigkill = 9;
+
+    [LibraryImport("libc", EntryPoint = "kill", SetLastError = true)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    private static partial int kill_native(int pid, int sig);
+
+    /// <summary>Re-listings of a parent after its known children are dead, before it is killed
+    /// regardless; bounds a parent that keeps forking.</summary>
+    const int MaxRescans = 3;
+
+    public static void Kill(Process process) {
+        try { if (process.HasExited) return; } catch (InvalidOperationException) { return; }
+
+        if (OperatingSystem.IsWindows()) {
+#pragma warning disable RS0030 // no SIGSTOP on Windows, so the runtime's tree kill is the right tool there
+            process.Kill(entireProcessTree: true);
+#pragma warning restore RS0030
+            return;
+        }
+
+        Kill(process.Id);
+    }
+
+    public static void Kill(int pid) {
+        if (pid <= 0) return;
+
+        if (OperatingSystem.IsWindows()) {
+            try { using var process = Process.GetProcessById(pid); Kill(process); }
+            catch (ArgumentException) { /* already gone */ }
+            return;
+        }
+
+        if (ProcessStartToken.ForPid(pid) is { } identity) KillSubtree(pid, identity);
+    }
+
+    /// <summary>Kills only while <paramref name="pid"/> still carries <paramref name="identity"/>. Use
+    /// when the caller captured the identity itself — otherwise the bare <see cref="Kill(int)"/> would
+    /// take a FRESH identity, and a pid recycled between the caller's capture and here would let it
+    /// signal the replacement process. A mismatch is a no-op, not a failure.</summary>
+    public static void Kill(int pid, string identity) {
+        if (pid <= 0) return;
+
+        if (OperatingSystem.IsWindows()) {
+            try {
+                // Open FIRST, then derive the token from the SAME handle we are about to kill —
+                // checking a pid-based token before opening would let a recycled pid slip through.
+                using var process = Process.GetProcessById(pid);
+                // Force the Process to retain its long-term SafeHandle: StartTime and Kill each
+                // otherwise open their OWN short-term handle, letting the pid be reused between
+                // them. Reading Handle pins one handle for both.
+                _ = process.Handle;
+                if ($"tk:{process.StartTime.ToUniversalTime().Ticks}" != identity) return;
+                Kill(process);
+            } catch (ArgumentException) { /* already gone */ }
+            return;
+        }
+
+        if (Matches(pid, identity)) KillSubtree(pid, identity);
+    }
+
+    static void KillSubtree(int pid, string identity) {
+        var seen = new HashSet<int>();
+
+        for (var rescan = 0; rescan <= MaxRescans; rescan++) {
+            var fresh = false;
+
+            // The listing is trusted only when bracketed: the root must be the captured incarnation just
+            // before it and not proven a different one just after. A root that exited in between leaves
+            // its listed children to be killed, not orphaned; a pid proven reused leaves them alone. What
+            // remains is a reuse, plus the replacement spawning and exiting, inside one listing.
+            if (!Matches(pid, identity)) break;
+            var children = Children(pid).ToList();
+            if (ProcessStartToken.Matches(pid, identity) == false) return;
+
+            foreach (var child in children) {
+                if (!seen.Add(child)) continue; // handled on an earlier pass; a zombie stays listed until its parent dies
+
+                fresh = true;
+                if (child > 0 && ProcessStartToken.ForPid(child) is { } childIdentity) KillSubtree(child, childIdentity);
+            }
+
+            if (!fresh) break;
+        }
+
+        if (Matches(pid, identity)) kill_native(pid, Sigkill);
+    }
+
+    /// <summary>Bounds the walk; a daemon's whole tree is far smaller.</summary>
+    const int MaxWalk = 4096;
+
+    /// <summary>
+    /// Whether <paramref name="pid"/> runs under <paramref name="ancestor"/> now. A process reparented away
+    /// from it, by a double fork or its parent's exit, no longer counts. Always false on Windows, which
+    /// this does not walk.
+    /// </summary>
+    public static bool Descends(int pid, int ancestor) {
+        if (pid <= 0 || ancestor <= 0 || pid == ancestor || OperatingSystem.IsWindows()) return false;
+
+        if (OperatingSystem.IsMacOS()) {
+            var seen     = new HashSet<int> { ancestor };
+            var frontier = new Queue<int>([ancestor]);
+
+            while (frontier.Count > 0 && seen.Count < MaxWalk) {
+                foreach (var child in MacChildren(frontier.Dequeue())) {
+                    if (child == pid) return true;
+                    if (child > 0 && seen.Add(child)) frontier.Enqueue(child);
+                }
+            }
+
+            return false;
+        }
+
+        var current = pid;
+        for (var hop = 0; hop < MaxWalk; hop++) {
+            var parent = LinuxParentOf(current);
+            if (parent == ancestor) return true;
+            if (parent is not { } next || next <= 1) return false;
+            current = next;
+        }
+
+        return false;
+    }
+
+    static bool Matches(int pid, string identity) => pid > 0 && ProcessStartToken.Matches(pid, identity) == true;
+
+    static IEnumerable<int> Children(int parent) =>
+        OperatingSystem.IsMacOS() ? MacChildren(parent) : LinuxChildren(parent);
+
+    // ── macOS: libproc lists a process's children directly ───────────────────────────────────────
+
+    [LibraryImport("libproc", EntryPoint = "proc_listchildpids")]
+    private static unsafe partial int proc_listchildpids(int ppid, int* buffer, int buffersize);
+
+    /// <summary>Returns a count of pids, not bytes; a count equal to the capacity means the buffer
+    /// was too small.</summary>
+    static unsafe int[] MacChildren(int parent) {
+        var buffer = new int[256];
+
+        while (true) {
+            int count;
+            fixed (int* p = buffer) count = proc_listchildpids(parent, p, buffer.Length * sizeof(int));
+
+            if (count < 0) return [];
+            if (count < buffer.Length) return buffer[..count];
+
+            buffer = new int[buffer.Length * 2];
+        }
+    }
+
+    // ── Linux: the ppid field of every /proc/{pid}/stat ───────────────────────────────────────────
+
+    static IEnumerable<int> LinuxChildren(int parent) {
+        foreach (var dir in Directory.EnumerateDirectories("/proc")) {
+            if (!int.TryParse(Path.GetFileName(dir), NumberStyles.None, CultureInfo.InvariantCulture, out var pid)) continue;
+            if (LinuxParentOf(pid) == parent) yield return pid;
+        }
+    }
+
+    /// <summary>The token after the state, which follows the last <c>)</c> because the command name
+    /// can contain spaces and parentheses.</summary>
+    static int? LinuxParentOf(int pid) {
+        try {
+            var stat      = File.ReadAllText($"/proc/{pid}/stat");
+            var afterComm = stat.LastIndexOf(')');
+            if (afterComm < 0) return null;
+
+            var fields = stat[(afterComm + 1)..].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+            return fields.Length > 1 && int.TryParse(fields[1], NumberStyles.None, CultureInfo.InvariantCulture, out var parent)
+                ? parent
+                : null;
+        } catch {
+            return null; // the process left between the directory listing and the read
+        }
+    }
+}

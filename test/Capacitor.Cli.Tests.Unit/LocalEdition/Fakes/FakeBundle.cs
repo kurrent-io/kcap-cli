@@ -21,7 +21,7 @@ sealed class FakeBundle : HttpMessageHandler {
         _rid     = rid;
         _version = version;
 
-        TestBundles.Write(archivePath, entries.Length > 0 ? entries : [TestBundles.RegularFile($"./{Capacitor.Cli.LocalEdition.LocalServerUnit.ServerFileName}", "#!/bin/sh\n")]);
+        TestBundles.Write(archivePath, entries.Length > 0 ? entries : [TestBundles.RegularFile($"./{Capacitor.Cli.Core.LocalEdition.LocalServerConditions.ServerFileName}", "#!/bin/sh\n")]);
         _archive = File.ReadAllBytes(archivePath);
     }
 

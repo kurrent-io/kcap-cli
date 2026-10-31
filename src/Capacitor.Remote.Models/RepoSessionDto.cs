@@ -23,5 +23,7 @@ public sealed record RepoSessionDto {
     [JsonPropertyName("branch")]            public string? Branch { get; init; }
     [JsonPropertyName("cwd")]               public string? Cwd { get; init; }
     [JsonPropertyName("last_prompt")]       public string? LastPrompt { get; init; }
+    /// Null when the server does not send the field at all; withheld below full access.
+    [JsonPropertyName("pull_requests")]     public RepoSessionPullRequests? PullRequests { get; init; }
     [JsonPropertyName("repo")]              public RepoSessionRepositoryDto? Repo { get; init; }
 }

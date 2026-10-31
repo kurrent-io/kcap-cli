@@ -8,9 +8,8 @@ namespace Capacitor.App.Tests.Unit;
 /// The shim offer surface: the once-ever auto-offer gated on PhaseClosed + a positive
 /// probe result, and the "Install command-line tool…" tray item's independent visibility/manual
 /// retry. FakeLoginShellProbe and FakeLifecycleSurface are shared from
-/// DaemonLifecycleControllerTests.cs (same namespace); PathShimInstaller is real, driven through
-/// its destination parameter so nothing
-/// here ever touches the real /usr/local/bin/kcap.
+/// DaemonLifecycleControllerTests.cs (same namespace); PathShimInstaller is real, linking into a
+/// temp home's ~/.local/bin.
 public class ShimOfferCoordinatorTests {
     static async Task WaitUntilAsync(Func<bool> condition, TimeSpan? timeout = null, string what = "condition") {
         var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(5));
@@ -18,21 +17,6 @@ public class ShimOfferCoordinatorTests {
             if (DateTime.UtcNow > deadline) throw new TimeoutException($"Timed out waiting for: {what}");
             await Task.Delay(10);
         }
-    }
-
-    sealed class FakeProcessRunner : IProcessRunner {
-        public readonly List<(string FileName, string[] Args, RunOptions Options)> Calls = [];
-        Func<Task<ProcessResult>> _step = () => Task.FromResult(new ProcessResult(0, "", "", false));
-
-        public void Enqueue(ProcessResult result) => _step = () => Task.FromResult(result);
-
-        public Task<ProcessResult> RunAsync(string fileName, string[] args, RunOptions options, CancellationToken ct) {
-            Calls.Add((fileName, args, options));
-            return _step();
-        }
-
-        public Task<StreamingResult> RunStreamingAsync(string fileName, string[] args, RunOptions options,
-            Action<StreamedLine> onLine, CancellationToken ct) => throw new NotImplementedException();
     }
 
     /// Applies mutations to State only when UpdateSucceeds is true — mirrors AppStateStore's real
@@ -55,7 +39,6 @@ public class ShimOfferCoordinatorTests {
     }
 
     sealed class Harness : IDisposable {
-        public readonly FakeProcessRunner Runner = new();
         public readonly FakeLoginShellProbe Probe = new();
         public readonly FakeAppStateStore Store = new();
         public readonly FakeLifecycleSurface Surface = new();
@@ -73,9 +56,9 @@ public class ShimOfferCoordinatorTests {
                 bool immediatePhaseClosed = false, bool noTarget = false, bool noInstaller = false,
                 bool autoOfferSuppressed = false, Task<string?>? pendingLink = null) {
             Target      = noTarget ? null : Path.Combine(TempDir, "target-cli");
-            Destination = Path.Combine(TempDir, "kcap");
+            Destination = Path.Combine(_tmp.CreateDir(".local", "bin"), "kcap");
             Probe.KcapPathBehavior = _ => Task.FromResult<string?>(Destination);
-            Installer   = new PathShimInstaller(Runner, Probe, Destination);
+            Installer   = new PathShimInstaller(Probe, new UserHome(TempDir));
 
             var phaseClosed = immediatePhaseClosed ? Task.CompletedTask : PhaseClosedSource.Task;
             Coordinator = new ShimOfferCoordinator(
@@ -85,6 +68,20 @@ public class ShimOfferCoordinatorTests {
         }
 
         public void ClosePhase() => PhaseClosedSource.TrySetResult(true);
+
+        /// A file where the link's folder should be makes the next link fail.
+        public void DenyLinking(bool deny = true) {
+            var folder = Path.GetDirectoryName(Destination)!;
+            if (deny) {
+                Directory.Delete(folder);
+                File.WriteAllText(folder, "");
+            } else {
+                File.Delete(folder);
+                Directory.CreateDirectory(folder);
+            }
+        }
+
+        public bool Linked => new FileInfo(Destination).LinkTarget is not null;
 
         public void Dispose() => _tmp.Dispose();
     }
@@ -178,12 +175,12 @@ public class ShimOfferCoordinatorTests {
     }
 
     [Test]
-    public async Task Without_an_installer_manual_install_is_a_no_op_no_installer_spawn() {
+    public async Task Without_an_installer_manual_install_is_a_no_op() {
         using var h = new Harness(noInstaller: true);
 
         await h.Coordinator.RunManualInstallAsync();
 
-        await Assert.That(h.Runner.Calls).IsEmpty();
+        await Assert.That(h.Linked).IsFalse();
         await Assert.That(h.Surface.StatusMessages).IsEmpty();
     }
 
@@ -256,12 +253,12 @@ public class ShimOfferCoordinatorTests {
     // Manual install is a separate code path from the suppressed auto-offer — it must still work.
     [Test]
     public async Task AutoOfferSuppressed_manual_install_still_works() {
+        Skip.When(OperatingSystem.IsWindows(), "macOS lstat semantics");
         using var h = new Harness(autoOfferSuppressed: true);
-        h.Runner.Enqueue(new ProcessResult(0, "", "", false));
 
         await h.Coordinator.RunManualInstallAsync();
 
-        await Assert.That(h.Runner.Calls.Count).IsEqualTo(1);
+        await Assert.That(h.Linked).IsTrue();
         await Assert.That(h.Surface.Prompts).IsEmpty(); // never a dialog — a direct manual click
     }
 
@@ -319,7 +316,6 @@ public class ShimOfferCoordinatorTests {
         await WaitUntilAsync(() => h.Store.State.ShimOffered, what: "the idempotent offered claim");
         await Task.Delay(100);
         await Assert.That(h.Surface.Prompts).IsEmpty();
-        await Assert.That(h.Runner.Calls).IsEmpty();
     }
 
     // ---- claim-before-show ----
@@ -373,7 +369,6 @@ public class ShimOfferCoordinatorTests {
         var probeCalls = 0;
         h.Probe.KcapOnPathBehavior = _ => Task.FromResult<bool?>(++probeCalls == 1 ? false : true);
         h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
-        h.Runner.Enqueue(new ProcessResult(0, "", "", false));
         h.Coordinator.Start();
 
         await WaitUntilAsync(() => h.OfferableValues.Count >= 3, what: "the installed outcome");
@@ -389,7 +384,6 @@ public class ShimOfferCoordinatorTests {
         var probeCalls = 0;
         h.Probe.KcapOnPathBehavior = _ => Task.FromResult<bool?>(++probeCalls == 1 ? false : true);
         h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
-        h.Runner.Enqueue(new ProcessResult(0, "", "", false));
         h.Coordinator.Start();
 
         await WaitUntilAsync(() => h.OfferableValues.Count >= 3, what: "the installed outcome");
@@ -401,7 +395,6 @@ public class ShimOfferCoordinatorTests {
         using var h = new Harness(immediatePhaseClosed: true);
         h.Probe.KcapOnPathBehavior = _ => Task.FromResult<bool?>(false); // stays false on every call, incl. post-install
         h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
-        h.Runner.Enqueue(new ProcessResult(0, "", "", false));
         h.Coordinator.Start();
 
         await WaitUntilAsync(() => h.Surface.StatusMessages.Count == 1, what: "the not-on-PATH status line");
@@ -415,7 +408,6 @@ public class ShimOfferCoordinatorTests {
         using var h = new Harness(immediatePhaseClosed: true);
         h.Probe.KcapOnPathBehavior = _ => Task.FromResult<bool?>(false);
         h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
-        h.Runner.Enqueue(new ProcessResult(0, "", "", false));
         h.Coordinator.Start();
 
         await WaitUntilAsync(() => h.Surface.StatusMessages.Count == 1, what: "the not-on-PATH status line");
@@ -423,27 +415,15 @@ public class ShimOfferCoordinatorTests {
     }
 
     [Test]
-    public async Task Accept_then_Cancelled_persists_ShimDenied_and_surfaces_status() {
+    public async Task Accept_then_Failed_surfaces_the_detail() {
         using var h = new Harness(immediatePhaseClosed: true);
         h.Probe.KcapOnPathBehavior = _ => Task.FromResult<bool?>(false);
         h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
-        h.Runner.Enqueue(new ProcessResult(1, "", "execution error: User canceled. (-128)", false));
-        h.Coordinator.Start();
-
-        await WaitUntilAsync(() => h.Surface.StatusMessages.Count == 1, what: "the canceled status line");
-        await Assert.That(h.Store.State.ShimDenied).IsTrue();
-    }
-
-    [Test]
-    public async Task Accept_then_Failed_surfaces_the_sudo_fallback() {
-        using var h = new Harness(immediatePhaseClosed: true);
-        h.Probe.KcapOnPathBehavior = _ => Task.FromResult<bool?>(false);
-        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
-        h.Runner.Enqueue(new ProcessResult(1, "", "administrator privileges denied", false));
+        h.DenyLinking();
         h.Coordinator.Start();
 
         await WaitUntilAsync(() => h.Surface.StatusMessages.Count == 1, what: "the failed status line");
-        await Assert.That(h.Surface.StatusMessages[0]).Contains("sudo mkdir -p /usr/local/bin");
+        await Assert.That(h.Surface.StatusMessages[0]).Contains(".local");
         await Assert.That(h.Store.State.ShimDenied).IsFalse(); // Failed is not the same as declined/canceled
     }
 
@@ -453,7 +433,7 @@ public class ShimOfferCoordinatorTests {
         using var h = new Harness(immediatePhaseClosed: true);
         h.Probe.KcapOnPathBehavior = _ => Task.FromResult<bool?>(false);
         h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
-        h.Runner.Enqueue(new ProcessResult(1, "", "administrator privileges denied", false));
+        h.DenyLinking();
         h.Coordinator.Start();
 
         await WaitUntilAsync(() => h.Surface.StatusMessages.Count == 1, what: "the failed status line");
@@ -468,7 +448,7 @@ public class ShimOfferCoordinatorTests {
         h.Coordinator.Start();
 
         await WaitUntilAsync(() => h.Store.State.ShimDenied, what: "the decline claim");
-        await Assert.That(h.Runner.Calls).IsEmpty();
+        await Assert.That(h.Linked).IsFalse();
         await Assert.That(h.Surface.StatusMessages).IsEmpty();
     }
 
@@ -476,14 +456,14 @@ public class ShimOfferCoordinatorTests {
 
     [Test]
     public async Task Manual_install_runs_even_when_already_offered() {
+        Skip.When(OperatingSystem.IsWindows(), "macOS lstat semantics");
         using var h = new Harness(immediatePhaseClosed: true);
         h.Store.State = h.Store.State with { ShimOffered = true };
         h.Probe.KcapOnPathBehavior = _ => Task.FromResult<bool?>(false);
-        h.Runner.Enqueue(new ProcessResult(0, "", "", false));
 
         await h.Coordinator.RunManualInstallAsync();
 
-        await Assert.That(h.Runner.Calls.Count).IsEqualTo(1);
+        await Assert.That(h.Linked).IsTrue();
         await Assert.That(h.Surface.StatusMessages.Count).IsEqualTo(1);
         // The auto-offer never ran (no confirm dialog) — this was a direct manual click.
         await Assert.That(h.Surface.Prompts).IsEmpty();
@@ -495,11 +475,11 @@ public class ShimOfferCoordinatorTests {
         using var h = new Harness(immediatePhaseClosed: true);
         h.Store.State = h.Store.State with { ShimOffered = true };
         h.Probe.KcapOnPathBehavior = _ => Task.FromResult<bool?>(false);
-        h.Runner.Enqueue(new ProcessResult(1, "", "administrator privileges denied", false));
+        h.DenyLinking();
         await h.Coordinator.RunManualInstallAsync();
 
         h.Probe.KcapOnPathBehavior = _ => Task.FromResult<bool?>(true);
-        h.Runner.Enqueue(new ProcessResult(0, "", "", false));
+        h.DenyLinking(false);
         await h.Coordinator.RunManualInstallAsync();
 
         await Assert.That(h.Surface.StatusMessages.Count).IsEqualTo(1);
@@ -512,7 +492,7 @@ public class ShimOfferCoordinatorTests {
 
         await h.Coordinator.RunManualInstallAsync();
 
-        await Assert.That(h.Runner.Calls).IsEmpty();
+        await Assert.That(h.Linked).IsFalse();
         await Assert.That(h.Surface.StatusMessages).IsEmpty();
     }
 }

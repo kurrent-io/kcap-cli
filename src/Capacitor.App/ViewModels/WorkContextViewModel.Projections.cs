@@ -14,11 +14,14 @@ namespace Capacitor.App.ViewModels;
 /// answer clears it, and a terminal phase clears everything the server gave.
 public sealed partial class WorkContextViewModel {
     readonly AvaloniaList<WorkContextPartViewModel> _parts = new();
+    readonly AvaloniaList<WorkContextPartViewModel> _thisSessionParts = new();
+    IReadOnlyList<WorkContextPartCount> _partCounts = [];
     readonly AvaloniaList<string> _blockedBy = new();
     readonly AvaloniaList<WorkContextLinkViewModel> _links = new();
     readonly AvaloniaList<WorkContextLinkViewModel> _issues = new();
     readonly List<WorkContextLinkViewModel> _summaryPrs = [];
     readonly AvaloniaList<WorkContextPersonViewModel> _contributors = new();
+    IReadOnlyList<WorkItemContributorDto> _contributorRows = [];
     // The card's identity is the id the server served, which for an absorbed item is the survivor's
     // rather than the assignment's; the requested id stands in when a read carried no item.
     string? _primaryId;
@@ -32,6 +35,10 @@ public sealed partial class WorkContextViewModel {
     }
 
     public IAvaloniaReadOnlyList<WorkContextPartViewModel> Parts => _parts;
+    /// What the collapsed section lists: the parts this session is attached to, in part order.
+    public IAvaloniaReadOnlyList<WorkContextPartViewModel> ThisSessionParts => _thisSessionParts;
+    /// Open, this session, done: one entry per mark some part carries, so the numbers add up to the list.
+    public IReadOnlyList<WorkContextPartCount> PartCounts => _partCounts;
     public IAvaloniaReadOnlyList<string> BlockedBy => _blockedBy;
     public IAvaloniaReadOnlyList<WorkContextLinkViewModel> Links => _links;
     public IAvaloniaReadOnlyList<WorkContextLinkViewModel> Issues => _issues;
@@ -128,9 +135,14 @@ public sealed partial class WorkContextViewModel {
     };
     int SettledCount => _parts.Count(p => p.IsSettled);
     public bool HasParts => _parts.Count > 0;
+    public bool HasThisSessionParts => _thisSessionParts.Count > 0;
     public bool HasBlockers => _blockedBy.Count > 0;
     public bool HasTopologyNotes => HasBlockers || !string.IsNullOrEmpty(CycleNote);
     public bool HasContributors => _contributors.Count > 0;
+    public bool ShowsPeople => HasAgent && (_viewer is null
+        || (_contributorRows.Count > 0
+            ? _contributorRows.Any(c => !_viewer.Owns(c.UserId))
+            : _requesterId is not null && !_viewer.Owns(_requesterId)));
     /// The card carries the PR picker and the live checks and review rows, so it stays while it
     /// has a PR to select or something to say, including the empty-list message during discovery
     /// and polling. The pane's own empty copy is a fallback when there is no card content.
@@ -165,13 +177,26 @@ public sealed partial class WorkContextViewModel {
     ViewerIdentityDto? _viewer;
     public ViewerIdentityDto? ViewerIdentity {
         get => _viewer;
-        private set => this.RaiseAndSetIfChanged(ref _viewer, value);
+        private set {
+            this.RaiseAndSetIfChanged(ref _viewer, value);
+            RefreshContributors();
+        }
     }
     string? _requesterAvatarUrl;
     public string? RequesterAvatarUrl { get => _requesterAvatarUrl; private set => this.RaiseAndSetIfChanged(ref _requesterAvatarUrl, value); }
 
-    bool _partsExpanded = true;
-    public bool PartsExpanded { get => _partsExpanded; private set => this.RaiseAndSetIfChanged(ref _partsExpanded, value); }
+    bool _partsExpanded;
+    public bool PartsExpanded {
+        get => _partsExpanded;
+        private set {
+            this.RaiseAndSetIfChanged(ref _partsExpanded, value);
+            this.RaisePropertyChanged(nameof(PartsAccessibleName));
+        }
+    }
+    /// The folded counts are told apart only by their marks, so the header names them in words.
+    public string PartsAccessibleName => PartsExpanded || _partCounts.Count == 0
+        ? $"Parts, {PartsHeader}"
+        : $"Parts, {string.Join(", ", _partCounts.Select(c => c.Label))}";
     bool _peopleExpanded;
     public bool PeopleExpanded { get => _peopleExpanded; private set => this.RaiseAndSetIfChanged(ref _peopleExpanded, value); }
     bool _issuesExpanded;
@@ -182,13 +207,17 @@ public sealed partial class WorkContextViewModel {
             this.RaisePropertyChanged(nameof(VisibleSeparateIssues));
         }
     }
-    bool _sessionExpanded;
+    readonly WorkContextLayout _layout;
+    /// Shared by every session's pane, so switching sessions keeps what the reader opened.
     public bool SessionExpanded {
-        get => _sessionExpanded;
-        private set {
-            this.RaiseAndSetIfChanged(ref _sessionExpanded, value);
-            this.RaisePropertyChanged(nameof(SessionToggleText));
-        }
+        get => _layout.SessionExpanded;
+        private set => _layout.SessionExpanded = value;
+    }
+
+    void OnLayoutChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) {
+        if (e.PropertyName != nameof(WorkContextLayout.SessionExpanded)) return;
+        this.RaisePropertyChanged(nameof(SessionExpanded));
+        this.RaisePropertyChanged(nameof(SessionToggleText));
     }
     public string SessionToggleText => SessionExpanded ? "Less" : "More";
     bool _runsExpanded;
@@ -209,7 +238,10 @@ public sealed partial class WorkContextViewModel {
                 LinkPolicy.Open(_opener, issue.Url);
         });
         ToggleSessionCommand = Toggle(() => SessionExpanded = !SessionExpanded);
+        _layout.PropertyChanged += OnLayoutChanged;
+        _disposables.Add(System.Reactive.Disposables.Disposable.Create(() => _layout.PropertyChanged -= OnLayoutChanged));
         ToggleRunsCommand = Toggle(() => RunsExpanded = !RunsExpanded);
+        WatchOwnWorktree();
     }
 
     ReactiveCommand<Unit, Unit> Toggle(Action flip) {
@@ -224,6 +256,7 @@ public sealed partial class WorkContextViewModel {
         RequesterInitial = WorkContextPersonViewModel.InitialOf(Requester);
         _requesterId = dto.Requester;
         ResolveRequesterAvatar();
+        this.RaisePropertyChanged(nameof(ShowsPeople));
     }
 
     /// A launch with no requester is the daemon owner's, and the viewer only sees their own daemons.
@@ -273,6 +306,7 @@ public sealed partial class WorkContextViewModel {
         IssuesExpanded = false;
         Issue = null;
         _contributors.Clear();
+        _contributorRows = [];
         SessionCount = 0;
         RaiseCardCounts();
     }
@@ -285,11 +319,28 @@ public sealed partial class WorkContextViewModel {
     }
 
     void RaiseCardCounts() {
+        SyncPartsFold();
         this.RaisePropertyChanged(nameof(PartsHeader));
+        this.RaisePropertyChanged(nameof(PartsAccessibleName));
         this.RaisePropertyChanged(nameof(HasParts));
+        this.RaisePropertyChanged(nameof(HasThisSessionParts));
         this.RaisePropertyChanged(nameof(HasBlockers));
         this.RaisePropertyChanged(nameof(HasTopologyNotes));
         this.RaisePropertyChanged(nameof(HasContributors));
+        this.RaisePropertyChanged(nameof(ShowsPeople));
+    }
+
+    void SyncPartsFold() {
+        StableRows.Sync(_thisSessionParts, _parts.Where(p => p.IsThisSession));
+        WorkContextPartCount[] counts = [
+            new(WorkContextPartMark.Unknown, _parts.Count(p => p.Mark == WorkContextPartMark.Unknown)),
+            new(WorkContextPartMark.ThisSession, _thisSessionParts.Count),
+            new(WorkContextPartMark.Settled, SettledCount),
+        ];
+        var present = counts.Where(c => c.Count > 0).ToArray();
+        if (present.SequenceEqual(_partCounts)) return;
+        _partCounts = present;
+        this.RaisePropertyChanged(nameof(PartCounts));
     }
 
     void RaiseRelated() {
@@ -302,6 +353,8 @@ public sealed partial class WorkContextViewModel {
     void ApplyReady(WorkContextRead read) {
         ViewerIdentity = read.Viewer;
         ResolveRequesterAvatar();
+        // A failed summary keeps the last figures, marked stale with the rest of the pane.
+        if (!read.SummaryFailed) ApplySessionFacts(read.Summary);
         if (read.Primary is null) {
             ClearCard();
             ApplyLinks(read);
@@ -333,6 +386,24 @@ public sealed partial class WorkContextViewModel {
         IsStale = read.ItemFailed || read.TopologyFailed || read.SummaryFailed;
     }
 
+    bool _hasSessionFacts;
+
+    void ApplySessionFacts(SessionSummaryDto? summary) {
+        _hasSessionFacts = summary is not null;
+        Tokens = SessionFactText.Tokens(summary?.Stats);
+        Cost = SessionFactText.Cost(summary?.Stats);
+        ContextUse = SessionFactText.Context(summary?.Stats);
+        SessionSharing = summary is null ? SessionFactText.Unknown : SessionFactText.SessionSharing(summary);
+        AgentSharing = SessionFactText.AgentSharing(summary?.AgentVisibility);
+        _storedBranch = FirstNonBlank(summary?.RepoBranch, summary?.Repositories.FirstOrDefault(r => r.IsPrimary)?.Branch);
+        _storedRepository = FirstNonBlank(summary?.Repositories.FirstOrDefault(r => r.IsPrimary)?.RepoName, summary?.RepoName);
+        if (_isRemote) {
+            ResolveBranch();
+            if (_dto is not null) ResolveRepository(_dto.RepoPath);
+        }
+        this.RaisePropertyChanged(nameof(PhaseNote));
+    }
+
     static bool Same(string a, string? b) => string.Equals(a, b, StringComparison.Ordinal);
 
     void ApplyItem(WorkItemDto item, IReadOnlyList<SessionWorkItemAssignmentDto> assignments) {
@@ -352,24 +423,33 @@ public sealed partial class WorkContextViewModel {
 
         ApplyIssues(item.Links.Where(l => l.Kind == "issue" && l.LinkClass == "link"));
 
+        _contributorRows = item.Contributors;
+        RefreshContributors();
+        SessionCount = item.SessionCount;
+        RaiseCardCounts();
+    }
+
+    void RefreshContributors() {
         var now = _time.GetUtcNow();
-        var people = item.Contributors
-            .Select(c => new WorkContextPersonViewModel(PersonName(c), c.AvatarUrl, c.LastActivityAt, now, c.UserId))
+        var people = _contributorRows
+            .Select(c => new WorkContextPersonViewModel(PersonName(c),
+                _viewer?.Owns(c.UserId) == true ? _viewer.AvatarUrl ?? c.AvatarUrl : c.AvatarUrl,
+                c.LastActivityAt, now, c.UserId))
             .ToList();
         Replace(_contributors, people, c => (c.UserId, c.Name, c.AvatarUrl, c.LastActivityText));
-        SessionCount = item.SessionCount;
         RaiseCardCounts();
     }
 
     /// DisplayName is null for an owner with no user row; the session requester's email/name
     /// stands in when it is the same person, else the name this pane last showed for the id.
     string PersonName(WorkItemContributorDto contributor) {
+        if (_viewer?.Owns(contributor.UserId) == true) return "You";
         if (HumanLabel(contributor.DisplayName) is { } display) return display;
         if (string.Equals(contributor.UserId, _dto?.Requester, StringComparison.Ordinal)
             && HumanLabel(FirstNonBlank(_dto?.RequesterDisplay, _dto?.Requester)) is { } mine)
             return mine;
         if (_contributors.FirstOrDefault(p => string.Equals(p.UserId, contributor.UserId, StringComparison.Ordinal)) is { } previous
-            && HumanLabel(previous.Name) is { } kept)
+            && previous.Name != "You" && HumanLabel(previous.Name) is { } kept)
             return kept;
         return HumanLabel(contributor.UserId) ?? "Someone";
     }

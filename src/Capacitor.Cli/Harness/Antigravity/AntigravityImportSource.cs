@@ -63,7 +63,7 @@ internal sealed class AntigravityImportSource : IImportSource {
     public bool   SupportsTitleGeneration => false; // server computes a fallback title at session-end
     public bool   AttachesChildContentOnReplay => true;  // AlreadyLoaded repair branch imports children
 
-    void Log(string message) => Console.Error.WriteLine($"[{_time.GetLocalNow():HH:mm:ss.fff}] [antigravity-import] {message}");
+    void Log(TextWriter? stderr, string message) => (stderr ?? Console.Error).WriteLine($"[{_time.GetLocalNow():HH:mm:ss.fff}] [antigravity-import] {message}");
 
     public Task<IReadOnlyList<DiscoveredSession>> DiscoverAsync(DiscoveryFilters filters, CancellationToken ct) {
         var result = new List<DiscoveredSession>();
@@ -82,7 +82,7 @@ internal sealed class AntigravityImportSource : IImportSource {
         // unique UUIDs, so results concatenate with no cross-root dedup.
         foreach (var brainRoot in BrainRoots) {
             ct.ThrowIfCancellationRequested();
-            DiscoverInRoot(brainRoot, sessionFilter, sinceUtc, result, ct);
+            DiscoverInRoot(brainRoot, sessionFilter, sinceUtc, result, filters.Stderr, ct);
         }
 
         return Task.FromResult<IReadOnlyList<DiscoveredSession>>(result);
@@ -90,7 +90,7 @@ internal sealed class AntigravityImportSource : IImportSource {
 
     void DiscoverInRoot(
             string brainRoot, string? sessionFilter, DateTimeOffset? sinceUtc,
-            List<DiscoveredSession> result, CancellationToken ct) {
+            List<DiscoveredSession> result, TextWriter? stderr, CancellationToken ct) {
         if (!Directory.Exists(brainRoot)) return;
 
         // The product root this brain dir belongs to (brainRoot is "<productRoot>/brain"), carried
@@ -120,7 +120,7 @@ internal sealed class AntigravityImportSource : IImportSource {
         var msgButNoInvoke = convIds.Count(id =>
             Directory.Exists(_paths.MessagesDirUnder(productRoot, id))
             && !parentMap.ContainsKey(id) && !linkedChildIds.Contains(id));
-        Log($"Antigravity import ({Path.GetFileName(productRoot)}): {invokeEdges} invoke edge(s); {danglingChild} invoked child id(s) with no conversation dir; {msgButNoInvoke} conversation(s) with messages/ but no invoke edge");
+        Log(stderr, $"Antigravity import ({Path.GetFileName(productRoot)}): {invokeEdges} invoke edge(s); {danglingChild} invoked child id(s) with no conversation dir; {msgButNoInvoke} conversation(s) with messages/ but no invoke edge");
 
         foreach (var (convId, descendants) in byRoot) {
             ct.ThrowIfCancellationRequested();
@@ -188,6 +188,9 @@ internal sealed class AntigravityImportSource : IImportSource {
                 serverLastLine = await FetchServerLastLineAsync(ctx.HttpClient, ctx.BaseUrl, s.SessionId, agentId: null, ct);
             } catch (OperationCanceledException) {
                 throw;
+            } catch (SessionDeletedException) {
+                results.Add(Make(s, meta, ImportCommand.ClassificationStatus.Deleted, nonBlank));
+                continue;
             } catch {
                 results.Add(Make(s, meta, ImportCommand.ClassificationStatus.ProbeError, nonBlank, "watermark probe failed"));
                 continue;
@@ -628,6 +631,7 @@ internal sealed class AntigravityImportSource : IImportSource {
             HttpClient http, string baseUrl, string sessionId, string? agentId, CancellationToken ct) {
         var url = $"{baseUrl}/api/sessions/{sessionId}/last-line" + (agentId is not null ? $"?agentId={Uri.EscapeDataString(agentId)}" : "");
         using var resp = await http.GetWithRetryAsync(url, _time, ct: ct);
+        SessionDeletedException.ThrowIfDeleted(resp, sessionId);
         if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
         if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"watermark probe returned {(int)resp.StatusCode}");
         var body = await resp.Content.ReadAsStringAsync(ct);

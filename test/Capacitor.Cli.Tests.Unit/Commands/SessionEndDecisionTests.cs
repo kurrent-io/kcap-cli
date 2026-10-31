@@ -10,7 +10,7 @@ public class SessionEndDecisionTests {
     static HostedAgent Agent(string? id) => new(id, false, DaemonBridge.None);
 
     static Func<HostedAgent, bool> Ledger(ResumeState? state) =>
-        hosted => ResumeEndSuppression.ShouldSuppress(hosted, _ => state is { } s ? ResumeLedgerEntries.For("agent-1", s) : null);
+        hosted => state == ResumeState.Resuming;
 
     [Test]
     public async Task A_parent_exit_end_is_held_while_the_entry_is_resuming() {

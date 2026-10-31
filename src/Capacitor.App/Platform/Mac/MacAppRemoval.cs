@@ -84,11 +84,13 @@ public sealed partial class MacAppRemoval : IAppRemoval {
         }
     }
 
-    public void DeleteSupportFiles() {
+    public bool DeleteSupportFiles() {
         if (ReadBundleId(_bundleRoot) is not { } id) {
             Console.Error.WriteLine($"kcap: no bundle identifier in {_bundleRoot}; support files were left in place");
-            return;
+            return false;
         }
+
+        var removed = true;
 
         var library = Path.Combine(_home.Path, "Library");
         foreach (var dir in new[] {
@@ -97,9 +99,11 @@ public sealed partial class MacAppRemoval : IAppRemoval {
                      Path.Combine(library, "Saved Application State", id + ".savedState"),
                  }.Concat(_updaterFiles?.Directories ?? [])) {
             try {
-                if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+                Directory.Delete(dir, recursive: true);
+            } catch (DirectoryNotFoundException) {
             } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
                 Console.Error.WriteLine($"kcap: could not remove {dir}: {ex.Message}");
+                removed = false;
             }
         }
 
@@ -109,8 +113,11 @@ public sealed partial class MacAppRemoval : IAppRemoval {
             } catch (DirectoryNotFoundException) {
             } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
                 Console.Error.WriteLine($"kcap: could not remove {path}: {ex.Message}");
+                removed = false;
             }
         }
+
+        return removed;
     }
 
     public Task<bool> TrashBundleAsync(CancellationToken ct) {

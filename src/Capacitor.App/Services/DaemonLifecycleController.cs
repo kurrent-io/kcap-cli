@@ -23,9 +23,11 @@ internal static class VerifyExitCodes {
     public const int StartGate           = 28;
     public const int StartGateDrift      = 29;
     public const int RetireRefused       = 30;
+    public const int ElevationDeclined   = 1223; // Win32 ERROR_CANCELLED: the UAC prompt for the Windows service was declined
     public const int DigestGate          = 43; // not a VerifyExit code (DaemonCommands' own digest gate) — mapped in Token() below like every other coded exit
 
     public static string Token(int exitCode) => exitCode switch {
+        ElevationDeclined   => "elevation_declined",
         Contended           => "verify_contended",
         Viability           => "verify_viability",
         BootoutUnknown      => "verify_bootout_unknown",
@@ -50,7 +52,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
     /// Every unit rewrite the app offers carries this disclosure.
     internal const string TakeoverDisclosure =
-        "This replaces the existing daemon service and re-captures its settings; a failed replacement leaves it uninstalled rather than restored.";
+        "kcap reinstalls the daemon service. Custom settings, including agent limits, reset. If installation fails, the service stays uninstalled.";
 
     /// Status when Start finds a live service and only kicks reattach. MainWindow replaces this
     /// (and its own Retry reconnect copy) if attach lands Unreachable again.
@@ -58,6 +60,24 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         "Daemon service is already running. Reconnecting…";
 
     internal const string RenameRestartStatus = "The daemon name changed. Restart this app before managing it.";
+
+    internal const string UnsupervisedAttention =
+        "The daemon was started manually. It will not restart automatically.";
+
+    /// <summary>The move stops the daemon keeping its agents, so one that resumes them carries them over</summary>
+    internal static string WindowsServiceDisclosure(int activeAgents, bool resumes) =>
+        "The Windows service starts the daemon at sign-in and restarts it if it stops. " +
+        "Administrator approval is required. The daemon keeps the same user account.\n\nThe daemon restarts now." +
+        (activeAgents == 0 || !resumes ? ""
+            : $" Its {activeAgents} running agent{(activeAgents == 1 ? " resumes" : "s resume")} if auto-resume is on.");
+
+    internal const string MovingToWindowsServiceStatus = "Moving the daemon to the Windows service…";
+
+    internal const string WindowsServiceUpdateDisclosure =
+        "The Windows service needs an update. Administrator approval is required. The daemon and its agents keep running.";
+
+    internal const string UnsupervisedDisclosure =
+        "The service will replace this manually started daemon. Running agents will stop. The service will keep the new daemon running.";
 
     internal static readonly TimeSpan TxnActiveRequeryDelay = TimeSpan.FromSeconds(2);
 
@@ -84,6 +104,9 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     // When true, RunStartupBranchAsync never admits; PhaseClosed still resolves, StartActionAsync unaffected.
     readonly bool _autoActionsPermanentlyClosed;
     readonly Func<bool> _requiresAppRestart;
+    readonly Func<Task<bool>> _windowsServiceDeclined;
+    readonly Func<Task> _rememberWindowsServiceDeclined;
+    readonly Func<MutationRequest, CancellationToken, Task<string?>> _replacementCliVersion;
 
     readonly SemaphoreSlim _gate = new(1, 1);
     readonly CancellationTokenSource _lifetime = new();
@@ -91,11 +114,13 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     readonly Lock _lock = new();
 
     internal const string StandardPriorityStatus = "Daemon runs at standard priority.";
-    internal const string PromptStaleStatus      = "The daemon changed while the prompt was open — canceled, nothing changed.";
+    internal const string PromptStaleStatus      = "The daemon changed while the prompt was open. Nothing was changed.";
+    internal const string PromptBusyStatus       = "Agents started while the prompt was open. Nothing was changed.";
 
     readonly BehaviorSubject<bool>         _backgroundPriority = new(false);
     readonly BehaviorSubject<ReloadState?> _reloadState        = new(null);
     readonly BehaviorSubject<bool>         _isReloading        = new(false);
+    readonly BehaviorSubject<bool>         _isMovingToService  = new(false);
     IDisposable? _snapshots;
     DaemonInfoDto? _latestDaemon;
     string? _reportedMismatch; // under _lock: the identity mismatch last reported, so a reattach does not repeat it
@@ -103,6 +128,11 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     int  _latestActiveAgents;
     DaemonActivity? _latestActivity;
     readonly BehaviorSubject<string?> _identityReport = new(null);
+    readonly BehaviorSubject<string?> _staleMarkerOffer = new(null);
+    // Serializes the marker offer and its withdrawal, which status reads inside and outside _gate both drive.
+    readonly Lock _markerLock = new();
+    long _markerSeq;           // under _markerLock: start stamp of the newest read that spoke about the marker
+    string? _staleMarkerShown; // under _markerLock: the exact line Attention received, so Withdraw can match it
 
     /// The attached daemon's latest reported activity; null until a snapshot arrives and whenever the attach drops.
     public DaemonActivity? LatestActivity => Volatile.Read(ref _latestActivity);
@@ -110,6 +140,10 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     /// The standing report about the attached daemon's identity, null while it matches. A state, not an event:
     /// a banner that resets on connect returns to it rather than losing it to however the two are ordered.
     public IObservable<string?> IdentityReport => _identityReport;
+
+    /// The banner line <see cref="RepairStaleMarkerAsync"/> answers while a leftover transaction marker
+    /// stands, else null. A Repair button shows only beside this exact line.
+    public IObservable<string?> RepairOffer => _staleMarkerOffer.DistinctUntilChanged();
     // Running or starting, admitted launches included; an older daemon that sends no Busy falls back to the lists.
     volatile bool _latestBusy;
     bool _latestResumes;
@@ -124,16 +158,22 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     bool _armClaimed;
     DateTimeOffset? _lastRecovery; // under _lock
     bool _recoveryPending;         // under _lock
+    bool _supervisionOffered;      // under _lock: the unsupervised-daemon offer is made once per run
+    bool _windowsServiceOffered;   // under _lock: the Windows service install or update is offered once per run
+    bool _movingToWindowsService;  // under _lock: the moving line stays up until the daemon attaches again
     int _recoveriesSinceConnect;   // under _lock
     bool _disposed;
     int _generation;
     (AttachState State, string? Reason) _lastObserved = (AttachState.Connecting, null);
+    string? _unreachableVersion; // under _lock: the hello reply's version on the last Unreachable
 
     public DaemonLifecycleController(
             IDaemonClientService client, IKcapCli cli, ILoginShellProbe probe,
             ILifecycleSurface surface, Func<Task<string?>> resolveProfileName, TimeProvider time,
             string? canonicalServer, Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation,
-            bool autoActionsPermanentlyClosed = false, Func<bool>? requiresAppRestart = null) {
+            bool autoActionsPermanentlyClosed = false, Func<bool>? requiresAppRestart = null,
+            Func<Task<bool>>? windowsServiceDeclined = null, Func<Task>? rememberWindowsServiceDeclined = null,
+            Func<MutationRequest, CancellationToken, Task<string?>>? replacementCliVersion = null) {
         _client                        = client;
         _cli                           = cli;
         _probe                         = probe;
@@ -144,6 +184,9 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         _runMutation                   = runMutation;
         _autoActionsPermanentlyClosed  = autoActionsPermanentlyClosed;
         _requiresAppRestart             = requiresAppRestart ?? (() => false);
+        _windowsServiceDeclined         = windowsServiceDeclined ?? (() => Task.FromResult(false));
+        _rememberWindowsServiceDeclined = rememberWindowsServiceDeclined ?? (() => Task.CompletedTask);
+        _replacementCliVersion          = replacementCliVersion ?? ((_, ct) => _cli.VersionAsync(ct));
     }
 
     /// Completes permanently on the first terminal attach outcome (Connected /
@@ -154,6 +197,18 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     /// Cached once at Start(); null when the CLI is missing or --version failed.
     public string? CliVersion { get; private set; }
 
+    /// The version of the daemon the last attach reached: its snapshot's while connected, the hello reply's after a
+    /// failed attach, else null. The snapshot outlives a dropped attach, so it is never read once one fails.
+    public string? AttachedDaemonVersion {
+        get {
+            lock (_lock) return _lastObserved.State switch {
+                AttachState.Connected   => Volatile.Read(ref _latestDaemon)?.Version,
+                AttachState.Unreachable => _unreachableVersion,
+                _                       => null,
+            };
+        }
+    }
+
     /// True while launchd holds the service in the background band; unchanged by an unknown word or a failed read.
     public IObservable<bool> BackgroundPriority => _backgroundPriority.DistinctUntilChanged();
     /// The last Reload outcome that still stands, or null. Replays to a late subscriber.
@@ -161,17 +216,20 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     /// True from the claim before the prompt until the outcome is recorded and the follow-up read is done.
     public IObservable<bool> IsReloading => _isReloading.DistinctUntilChanged();
 
+    /// <summary>From the move to the Windows service until the daemon attaches again: no daemon, on purpose</summary>
+    public IObservable<bool> IsMovingToWindowsService => _isMovingToService.DistinctUntilChanged();
+
     /// The capability a daemon that keeps its agents for a successor advertises; one without it ends them on a reload.
     internal const string ResumeCapability = "shutdown/1";
 
     internal static string ReloadDisclosure(int activeAgents, bool resumes) => resumes
         ? "Reloading restarts the daemon now. " +
           (activeAgents == 0 ? ""
-              : $"Its {activeAgents} running agent{(activeAgents == 1 ? " is" : "s are")} stopped, mid-turn if need be, and resumed on the new daemon " +
-                "unless daemon.auto_resume is off. ") +
+              : $"Its {activeAgents} running agent{(activeAgents == 1 ? " is" : "s are")} stopped, even mid-turn. " +
+                "Eligible agents resume if auto-resume is on. ") +
           "A review or evaluation still running when it exits may end."
-        : $"Reloading restarts the daemon and ends everything it hosts: {activeAgents} agent{(activeAgents == 1 ? "" : "s")} now, " +
-          "plus any agent, launch or evaluation running when it exits. Uncommitted work in their worktrees is lost.";
+        : $"Reloading restarts the daemon and stops its {activeAgents} agent{(activeAgents == 1 ? "" : "s")}. " +
+          "Any other agents, launches or evaluations running when it exits also end. Uncommitted work in their worktrees is lost.";
 
     bool ResumesAgents() {
         lock (_lock) return _latestResumes;
@@ -217,6 +275,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         lock (_lock) {
             _generation++;
             _lastObserved = (status.State, status.Reason);
+            _unreachableVersion = status.State == AttachState.Unreachable ? status.DaemonVersion : null;
             if (status.State == AttachState.Connected) _latestResumes = status.Capabilities?.Contains(ResumeCapability) == true;
             if (status.State == AttachState.Connected) _recoveriesSinceConnect = 0;
 
@@ -224,12 +283,15 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             if (isFirstTerminalOutcome) _armClaimed = true;
         }
 
-        if (status.State == AttachState.Connected) _ = CheckAttachedIdentityAsync();
+        if (status.State == AttachState.Connected) {
+            WithdrawMovingToWindowsService();
+            _ = CheckAttachedIdentityAsync();
+        }
 
         if (!isFirstTerminalOutcome) {
             // A later Connected is a daemon that came up after the arm, or came back after a reload
             // outside the app: read its spawn type, arm nothing.
-            if (status.State == AttachState.Connected) _ = PassiveReadAsync();
+            if (status.State == AttachState.Connected) _ = LaterConnectedAsync();
             else if (status.State == AttachState.Unreachable && status.Reason != IncompatibleReason
                      && !_autoActionsPermanentlyClosed)
                 _ = RunRecoveryAsync((status.State, status.Reason));
@@ -248,12 +310,32 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             case AttachState.Unreachable:
                 // Closed: PhaseClosed still resolves here — only the ensure matrix itself never admits.
                 if (_autoActionsPermanentlyClosed) ClosePhase();
-                else {
-                    lock (_lock) _lastRecovery = _time.GetUtcNow();
-                    _ = RunStartupBranchAsync((status.State, status.Reason));
-                }
+                else _ = RunStartupBranchAfterExpectedRestartAsync((status.State, status.Reason));
                 break;
         }
+    }
+
+    /// Whether the daemon is restarting on its own, as <see cref="ExpectedDaemonRestart"/> judges it. An ensure
+    /// then waits: its start would race the service manager that is already bringing the daemon back.
+    public Func<bool> RestartExpected { get; set; } = () => false;
+
+    async Task RunStartupBranchAfterExpectedRestartAsync((AttachState State, string? Reason) triggering) {
+        if (!await WaitOutExpectedRestartAsync().ConfigureAwait(false)) {
+            ClosePhase();
+            return;
+        }
+        lock (_lock) _lastRecovery = _time.GetUtcNow();
+        await RunStartupBranchAsync(triggering).ConfigureAwait(false);
+    }
+
+    /// False when the daemon came back while this waited, or the app is closing.
+    async Task<bool> WaitOutExpectedRestartAsync() {
+        try {
+            while (RestartExpected()) await Task.Delay(TimeSpan.FromSeconds(1), _time, _lifetime.Token).ConfigureAwait(false);
+        } catch (OperationCanceledException) {
+            return false;
+        }
+        lock (_lock) return _lastObserved.State == AttachState.Unreachable;
     }
 
     void ClosePhase() => _phaseClosed.TrySetResult(true);
@@ -291,14 +373,34 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         return snap;
     }
 
-    async Task PassiveReadAsync() {
-        try { await ReadStatusAsync(_lifetime.Token).ConfigureAwait(false); }
-        catch (OperationCanceledException) { /* shutdown */ }
-        catch (Exception ex) { Console.Error.WriteLine($"kcap: daemon lifecycle passive status read failed: {ex.Message}"); }
+    /// The startup branch starting the daemon is what an update looks like, so this Connected is the run's only
+    /// chance at the Windows service offer. That daemon connects while the branch still holds the gate inside its
+    /// install transaction, where a status read can fail outright: on Windows a failed read is settled under the
+    /// gate rather than taken as nothing to offer.
+    async Task LaterConnectedAsync() {
+        try {
+            var passive = await ReadStatusAsync(_lifetime.Token).ConfigureAwait(false);
+            if (passive is null ? !OffersSupervision() : !OffersWindowsService(passive)) return;
+            lock (_lock) {
+                if (_windowsServiceOffered) return;
+            }
+            if (!await TryAcquireGateAsync(_lifetime.Token).ConfigureAwait(false)) return;
+            try {
+                if (IsCurrentlyAttached() && await QueryStatusForActionAsync(_lifetime.Token).ConfigureAwait(false) is { } snap)
+                    await OfferWindowsServiceAsync(snap, _lifetime.Token).ConfigureAwait(false);
+            } finally {
+                _gate.Release();
+            }
+        } catch (OperationCanceledException) {
+            // shutdown
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"kcap: daemon lifecycle later-connect status read failed: {ex.Message}");
+        }
     }
 
     void NoteSnapshot(ServiceSnapshot? snap, long readStart) {
         if (snap is null) return;
+        NoteMarker(snap, readStart);
         var changedBackground = false;
         var clear = false;
         lock (_lock) {
@@ -362,7 +464,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         if (outcome == QueryOutcome.Stale) (snap, outcome) = await QueryStatusAsync(ct).ConfigureAwait(false);
 
         if (outcome != QueryOutcome.Ok) {
-            _surface.Status("Could not read the daemon service status — skipping automatic action this run.");
+            _surface.Status("Couldn't read the daemon service status, so kcap left it as it is.");
             Console.Error.WriteLine("kcap: daemon service status query failed, was unparseable, or never settled");
             return null;
         }
@@ -384,7 +486,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             snap = await ReadStatusAsync(ct).ConfigureAwait(false); // one re-evaluation against fresh state
 
         if (snap is null) {
-            _surface.Status("Could not read the daemon service status — skipping automatic action this run.");
+            _surface.Status("Couldn't read the daemon service status, so kcap left it as it is.");
             Console.Error.WriteLine("kcap: daemon service status query failed or was unparseable during startup");
         }
 
@@ -397,7 +499,11 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
         try {
             var snap = await QueryStatusForActionAsync(_lifetime.Token).ConfigureAwait(false);
-            if (snap is not null) Reconcile(snap, attached, allowTxnActiveRequery: true);
+            if (snap is not null) {
+                Reconcile(snap, attached, allowTxnActiveRequery: true);
+                if (attached && OffersSupervision() && IsUnsupervised(snap)) await OfferSupervisionAsync(snap, _lifetime.Token).ConfigureAwait(false);
+                else if (attached) await OfferWindowsServiceAsync(snap, _lifetime.Token).ConfigureAwait(false);
+            }
         } catch (OperationCanceledException) {
             // shutdown mid-query
         } catch (Exception ex) {
@@ -426,6 +532,10 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             lock (_lock) _recoveryPending = false;
             return;
         }
+        if (!await WaitOutExpectedRestartAsync().ConfigureAwait(false)) {
+            lock (_lock) _recoveryPending = false;
+            return;
+        }
 
         lock (_lock) {
             _recoveryPending = false;
@@ -450,7 +560,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     async Task RunStartupBranchAsync((AttachState State, string? Reason) triggering) {
         try {
             if (_cli.CliPath is null) {
-                _surface.Status("kcap CLI not found — daemon lifecycle management is off for this run.");
+                _surface.Status("The kcap command-line tool wasn't found, so the app can't manage the daemon.");
                 return;
             }
 
@@ -496,7 +606,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     async Task RunStartupMatrixAsync(ServiceSnapshot snap, CancellationToken ct) {
         var state = ServiceStateClassifier.Parse(snap.State);
         if (state == ServiceState.Unknown) {
-            _surface.Status("Daemon service reported an unrecognized state — skipping automatic action this run.");
+            _surface.Status("The daemon service is in an unknown state, so kcap left it as it is.");
             Console.Error.WriteLine($"kcap: daemon lifecycle startup matrix saw an unrecognized service state: {snap.State}");
             return;
         }
@@ -507,7 +617,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             if (!snap.UnitPresent) {
                 // A live pid could be another identity's daemon on this name, and a replace would kill it.
                 if (snap.DaemonPid is not null) {
-                    _surface.Attention("The daemon service label is loaded but its unit file is missing — needs repair.");
+                    _surface.Attention("The daemon service is loaded, but its unit file is missing. It needs a repair.");
                     return;
                 }
 
@@ -550,22 +660,22 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
     void AttentionCoexistence(int daemonPid) =>
         _surface.Attention(
-            $"A daemon is already running (PID {daemonPid}) alongside the installed service — not starting a second one.");
+            $"A daemon (PID {daemonPid}) is already running beside the installed service, so kcap won't start a second one.");
 
     /// Install-only preconditions — start performs no viability check, so this
     /// is never called on a start row. Returns the honest line to surface on failure, or null
     /// once every precondition passes.
     async Task<string?> FailingPreconditionAsync(ServiceSnapshot snap, CancellationToken ct) {
         if (snap.InstallBinaryPath is null)
-            return "kcap can't resolve its own daemon binary — skipping automatic install.";
+            return "kcap can't find its own daemon binary, so it skipped the automatic install.";
 
         var profile = await _resolveProfileName().ConfigureAwait(false);
         if (profile is null)
-            return "No profile with a valid server URL is configured — skipping automatic install.";
+            return "No profile has a valid server URL, so kcap skipped the automatic install.";
 
         var terminalPath = await _probe.TerminalPathAsync(ct).ConfigureAwait(false);
         if (terminalPath is null)
-            return "Terminal PATH could not be determined — skipping automatic install.";
+            return "kcap couldn't read your terminal PATH, so it skipped the automatic install.";
 
         return null;
     }
@@ -577,19 +687,23 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     }
 
     /// Routes execution through the lane, then kicks reattach unless the graph requires a restart.
-    async Task<bool> RunLaneMutationAsync(MutationVerb verb, CancellationToken ct) {
-        if (RequireAppRestart()) return false;
+    async Task<bool> RunLaneMutationAsync(MutationVerb verb, CancellationToken ct) =>
+        await RunLaneMutationOutcomeAsync(verb, ct).ConfigureAwait(false) is MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout;
+
+    /// <returns>Null when the app must restart first, before or after the attempt</returns>
+    async Task<MutationOutcome?> RunLaneMutationOutcomeAsync(MutationVerb verb, CancellationToken ct) {
+        if (RequireAppRestart()) return null;
         var profileName = await _resolveProfileName().ConfigureAwait(false);
         var refusal = MutationRequestFactory.TryBuild(verb, profileName, _canonicalServer, _client.DaemonName, out var request);
         if (refusal is MutationOutcome.Refused(var guardReason, _)) {
             _surface.Status($"kcap: {guardReason}");
-            return false;
+            return refusal;
         }
 
         var outcome = await _runMutation(request!, ct).ConfigureAwait(false);
-        if (RequireAppRestart()) return false;
+        if (RequireAppRestart()) return null;
         _ = _client.RestartLoopAsync(); // any mutation attempt may have restarted the daemon; kicking reattach is idempotent
-        return outcome is MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout;
+        return outcome;
     }
 
     /// The ONE accept path for a unit rewrite this controller offers, so a future dialog can never
@@ -597,27 +711,51 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     /// is discarded: the evidence the dialog disclosed may no longer hold.
     /// <param name="requireIdle">Refuse an accepted consent if agents started while the prompt was open:
     /// snapshots do not move the attach generation, so the stale-consent check cannot see them.</param>
-    async Task ConfirmAndReplaceAsync(LifecyclePrompt prompt, CancellationToken ct, bool requireIdle = false) {
+    /// <param name="stillEligible">Re-checks, after consent, evidence the attach generation does not track.</param>
+    async Task ConfirmAndReplaceAsync(
+            LifecyclePrompt prompt, CancellationToken ct, bool requireIdle = false,
+            Func<CancellationToken, Task<bool>>? stillEligible = null) {
         if (RequireAppRestart()) return;
+        var target = await ReplacementCliVersionAsync(ct).ConfigureAwait(false);
+        prompt = WithVersionChange(prompt, AttachedDaemonVersion, target);
         var gen0     = CurrentGeneration(); // captured immediately before ConfirmAsync (stale-consent check below)
         var accepted = await _surface.ConfirmAsync(prompt, ct).ConfigureAwait(false);
         if (!accepted || RequireAppRestart()) return;
 
         if (CurrentGeneration() != gen0) {
-            _surface.Status("The daemon changed while the prompt was open — canceled, nothing changed.");
+            _surface.Status("The daemon changed while the prompt was open. Nothing was changed.");
             return;
         }
 
         if (requireIdle && _latestBusy) {
-            _surface.Status("Agents started on the daemon while the prompt was open — canceled, nothing changed.");
+            _surface.Status(PromptBusyStatus);
             // Offered again once they finish; the flag goes first so an idle snapshot landing now still finds it.
             lock (_lock) _mismatchWaitsForIdle = true;
             if (!_latestBusy) _ = CheckAttachedIdentityAsync();
             return;
         }
 
+        if (stillEligible is not null && !await stillEligible(ct).ConfigureAwait(false)) {
+            _surface.Status(PromptStaleStatus);
+            return;
+        }
+
         await RunLaneMutationAsync(MutationVerb.Replace, ct).ConfigureAwait(false);
     }
+
+    /// The kcap the lane would run the replace with, probed now: the cached <see cref="CliVersion"/> can predate it.
+    async Task<string?> ReplacementCliVersionAsync(CancellationToken ct) {
+        var profileName = await _resolveProfileName().ConfigureAwait(false);
+        return MutationRequestFactory.TryBuild(MutationVerb.Replace, profileName, _canonicalServer, _client.DaemonName, out var request) is null
+            ? await _replacementCliVersion(request!, ct).ConfigureAwait(false)
+            : null;
+    }
+
+    /// The replace installs the app's own kcap, so the prompt says which version that moves the daemon to.
+    internal static LifecyclePrompt WithVersionChange(LifecyclePrompt prompt, string? daemonVersion, string? cliVersion) =>
+        DaemonVersionChange.Describe(daemonVersion, cliVersion) is { } change
+            ? prompt with { Disclosure = $"{prompt.Disclosure}\n\n{change}" }
+            : prompt;
 
     /// The rail's Reload button. One operation at a time, claimed before the prompt: the confirmation
     /// surface queues dialogs and releases its gate when one is answered, so a claim taken on acceptance
@@ -670,16 +808,94 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         PublishReloadState();
     }
 
+    internal static string StaleMarkerMessage(string daemonName, ServiceSnapshot snap) {
+        var what  = snap.TxnOperation is { } op ? $"service {op}" : "service install";
+        var where = snap.TxnPhase is { } phase ? $" at '{phase}'" : "";
+        var when  = snap.TxnMarkedAt is { } at ? $" on {at.ToLocalTime():MMM d, HH:mm}" : "";
+        return $"An earlier daemon {what} for '{daemonName}' did not finish: it stopped{where}{when}. " +
+               "Repair reinstalls the daemon service and restarts the daemon.";
+    }
+
+    internal static string? RepairInterruptsWarning(int activeAgents) => activeAgents == 0
+        ? null
+        : $"{activeAgents} running agent{(activeAgents == 1 ? "" : "s")} on this daemon may be interrupted.";
+
+    /// The stale-marker offer follows every status read, passive ones included, since a later attach
+    /// only reads passively. Reads overlap, so the one that started last decides; a marker an operation
+    /// still holds is left as it stands.
+    void NoteMarker(ServiceSnapshot snap, long readStart) {
+        lock (_markerLock) {
+            if (readStart < _markerSeq) return;
+            _markerSeq = readStart;
+
+            if (snap.TxnMarker) {
+                if (snap.TxnActive) return;
+                var message = StaleMarkerMessage(_client.DaemonName, snap);
+                _staleMarkerShown = message;
+                _staleMarkerOffer.OnNext(message);
+                _surface.Attention(message);
+            } else if (_staleMarkerShown is { } shown) {
+                _staleMarkerShown = null;
+                _staleMarkerOffer.OnNext(null);
+                _surface.Withdraw(shown);
+            }
+        }
+    }
+
+    /// The banner's Repair button: a confirmed reinstall, whose transaction recovers the leftover
+    /// marker. Caller-awaited from the UI, so every path is exception-safe.
+    public async Task RepairStaleMarkerAsync(CancellationToken ct) {
+        try {
+            if (RequireAppRestart() || _cli.CliPath is null) return;
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _lifetime.Token);
+            var lct = linked.Token;
+
+            if (!await TryAcquireGateAsync(lct).ConfigureAwait(false)) return;
+            try {
+                var snap = await QueryStatusForActionAsync(lct).ConfigureAwait(false);
+                if (RequireAppRestart() || snap is null) return;
+
+                if (snap.TxnMarker && !snap.TxnActive) {
+                    var missing = await FailingRepairPreconditionAsync(snap).ConfigureAwait(false);
+                    if (missing is not null) {
+                        _surface.Status(missing);
+                        return;
+                    }
+
+                    var terminalPath = await _probe.TerminalPathAsync(lct).ConfigureAwait(false);
+                    var prompt = new LifecyclePrompt(
+                        LifecyclePrompt.KindRepair, null, null, terminalPath is null, TakeoverDisclosure,
+                        RepairInterruptsWarning(LatestActivity?.ActiveAgents ?? 0));
+                    // The marker can be settled while the prompt is open, which moves no attach generation.
+                    await ConfirmAndReplaceAsync(prompt, lct, stillEligible: async token =>
+                            await QueryStatusForActionAsync(token).ConfigureAwait(false) is { TxnMarker: true, TxnActive: false })
+                        .ConfigureAwait(false);
+
+                    snap = await QueryStatusForActionAsync(lct).ConfigureAwait(false);
+                    if (snap is null) return;
+                }
+
+                Reconcile(snap, IsCurrentlyAttached(), allowTxnActiveRequery: false);
+            } finally {
+                _gate.Release();
+            }
+        } catch (OperationCanceledException) {
+            // shutdown or caller cancel
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"kcap: daemon service repair failed unexpectedly: {ex.Message}");
+        }
+    }
+
     /// Preconditions every unit rewrite needs short of the silent install's terminal PATH: a repair,
     /// and an install the user asked for, proceed without it. A missing install binary or an
     /// unresolvable profile would make the rewrite a guaranteed coded viability failure.
     async Task<string?> FailingRepairPreconditionAsync(ServiceSnapshot snap) {
         if (snap.InstallBinaryPath is null)
-            return "kcap can't resolve its own daemon binary — the daemon service was left as it is.";
+            return "kcap can't find its own daemon binary, so the daemon service was left as it is.";
 
         var profile = await _resolveProfileName().ConfigureAwait(false);
         if (profile is null)
-            return "No profile with a valid server URL is configured — the daemon service was left as it is.";
+            return "No profile has a valid server URL, so the daemon service was left as it is.";
 
         return null;
     }
@@ -699,15 +915,12 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
                 _surface.Attention("The service reports its job running, but no attached-daemon evidence backs it.");
         }
 
-        if (snap.TxnMarker && !snap.TxnActive)
-            _surface.Attention("A previous daemon service operation left a stale transaction marker — repair may be needed.");
-
         if (snap.TxnActive && allowTxnActiveRequery)
             _ = RunTxnActiveRequeryAsync();
 
         if (attached && snap.UnitPresent && state == ServiceState.NotInstalled && snap.DaemonPid is not null)
             _surface.Attention(
-                $"A daemon is running outside the installed service — the service is stopped while a manual daemon (PID {snap.DaemonPid}) owns the name.");
+                $"A daemon (PID {snap.DaemonPid}) is running outside the installed service, which is stopped.");
     }
 
     // The inline, AWAITED building block: used by RunStartupBranchAsync, which already holds the
@@ -761,7 +974,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             var lct = linked.Token;
 
             if (_cli.CliPath is null) {
-                _surface.Status("kcap CLI not found. Can't start the daemon service.");
+                _surface.Status("The kcap command-line tool wasn't found, so the daemon can't start.");
                 return;
             }
 
@@ -779,7 +992,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
                 var state = ServiceStateClassifier.Parse(snap.State);
                 if (state == ServiceState.Unknown) {
-                    _surface.Status("Daemon service reported an unrecognized state. Skipping this action.");
+                    _surface.Status("The daemon service is in an unknown state, so kcap didn't start it.");
                     Console.Error.WriteLine($"kcap: daemon lifecycle start action saw an unrecognized service state: {snap.State}");
                     return;
                 }
@@ -828,8 +1041,8 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         var ok = await RunLaneMutationAsync(verb, ct).ConfigureAwait(false);
         if (RequireAppRestart()) return;
         _surface.Status(ok
-            ? "Daemon start requested. Waiting to connect…"
-            : "Daemon start did not finish. Press Retry.");
+            ? "Starting the daemon. Waiting for it to connect…"
+            : "The daemon didn't start. Press Start daemon to try again.");
     }
 
     async Task ReportUnitRewriteAsync(ServiceSnapshot snap, MutationVerb verb, CancellationToken ct) {
@@ -931,6 +1144,110 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     }
 
     /// The Start button's one dialog: a manual daemon holds the name, and replacing it is the user's call.
+    /// No service and no unit, yet a daemon answers: started by hand, so nothing brings it back. The
+    /// startup matrix never sees this row, because it only runs when no daemon answers.
+    internal static bool IsUnsupervised(ServiceSnapshot snap) =>
+        ServiceStateClassifier.Parse(snap.State) == ServiceState.NotInstalled && !snap.UnitPresent && snap.DaemonPid is not null;
+
+    /// <summary>Windows only: the takeover it leads to ends a standalone owner only on the Windows CLI</summary>
+    internal Func<bool> OffersSupervision { get; init; } = OperatingSystem.IsWindows;
+
+    /// Asked while the daemon is idle only, since the replacement ends what it hosts; a busy daemon
+    /// keeps the attention line and is offered again on the next run.
+    async Task OfferSupervisionAsync(ServiceSnapshot snap, CancellationToken ct) {
+        lock (_lock) {
+            if (_supervisionOffered) return;
+            _supervisionOffered = true;
+        }
+
+        _surface.Attention(UnsupervisedAttention);
+        if (_latestBusy || await FailingRepairPreconditionAsync(snap).ConfigureAwait(false) is not null) return;
+
+        var terminalPath = await _probe.TerminalPathAsync(ct).ConfigureAwait(false);
+        var prompt = new LifecyclePrompt(LifecyclePrompt.KindTakeover, null, CliVersion, terminalPath is null, UnsupervisedDisclosure);
+        await ConfirmAndReplaceAsync(prompt, ct, requireIdle: true).ConfigureAwait(false);
+
+        if (await QueryStatusForActionAsync(ct).ConfigureAwait(false) is { } after && !IsUnsupervised(after))
+            _surface.Withdraw(UnsupervisedAttention);
+    }
+
+    /// <summary>The task supervising a daemon the bundled Windows service could take over, or an installed
+    /// service older than the bundled one. Asked once per run; a declined install is remembered and not asked
+    /// again, leaving the explicit action. The update leaves the daemon running, and the move resumes its
+    /// agents, so only a busy daemon that cannot resume them waits, without spending the run's offer</summary>
+    async Task OfferWindowsServiceAsync(ServiceSnapshot snap, CancellationToken ct) {
+        if (!OffersWindowsService(snap)) return;
+        var install = snap.Supervisor == "windows_scheduled_task";
+        var resumes = ResumesAgents();
+        if (install && _latestBusy && !resumes) return;
+
+        lock (_lock) {
+            if (_windowsServiceOffered) return;
+            _windowsServiceOffered = true;
+        }
+        if (install && await _windowsServiceDeclined().ConfigureAwait(false)) return;
+
+        var prompt = new LifecyclePrompt(
+            install ? LifecyclePrompt.KindWindowsService : LifecyclePrompt.KindWindowsServiceUpdate, null, CliVersion, false,
+            install ? WindowsServiceDisclosure(_latestActiveAgents, resumes) : WindowsServiceUpdateDisclosure);
+        var gen0 = CurrentGeneration();
+        if (!await _surface.ConfirmAsync(prompt, ct).ConfigureAwait(false)) {
+            // A prompt closed by the app shutting down was not answered
+            if (install && !ct.IsCancellationRequested) await _rememberWindowsServiceDeclined().ConfigureAwait(false);
+            return;
+        }
+        // The consent was for the daemon the prompt described, ending none of the work started since. Offered
+        // again on the next connect.
+        var stale = CurrentGeneration() != gen0;
+        if (stale || install && _latestBusy && !resumes) {
+            _surface.Status(stale ? PromptStaleStatus : PromptBusyStatus);
+            lock (_lock) _windowsServiceOffered = false;
+            return;
+        }
+        if (install) await MoveToWindowsServiceAsync(ct).ConfigureAwait(false);
+        else await RunLaneMutationAsync(MutationVerb.InstallWindowsService, ct).ConfigureAwait(false);
+    }
+
+    /// The takeover stops the task's daemon before the service starts its own, so for that gap the banner
+    /// says why there is no daemon instead of reporting it down.
+    async Task<MutationOutcome?> MoveToWindowsServiceAsync(CancellationToken ct) {
+        lock (_lock) _movingToWindowsService = true;
+        _isMovingToService.OnNext(true);
+        _surface.Status(MovingToWindowsServiceStatus);
+        var outcome = await RunLaneMutationOutcomeAsync(MutationVerb.InstallWindowsService, ct).ConfigureAwait(false);
+        if (outcome is not (MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout)) WithdrawMovingToWindowsService();
+        return outcome;
+    }
+
+    void WithdrawMovingToWindowsService() {
+        lock (_lock) {
+            if (!_movingToWindowsService) return;
+            _movingToWindowsService = false;
+        }
+        _isMovingToService.OnNext(false);
+        _surface.Withdraw(MovingToWindowsServiceStatus);
+    }
+
+    static bool OffersWindowsService(ServiceSnapshot snap) =>
+        (snap.Supervisor == "windows_scheduled_task" && snap.WindowsServiceInstallable == true)
+        || (snap.Supervisor == "windows_service" && snap.ServiceUpgradeAvailable == true);
+
+    /// <summary>The explicit "run as a Windows service" action in Settings, available after a declined offer</summary>
+    /// <returns>Null when nothing ran: the app is shutting down or must restart first</returns>
+    public async Task<MutationOutcome?> InstallWindowsServiceAsync(CancellationToken ct) {
+        try {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _lifetime.Token);
+            if (!await TryAcquireGateAsync(linked.Token).ConfigureAwait(false)) return null;
+            try {
+                return await MoveToWindowsServiceAsync(linked.Token).ConfigureAwait(false);
+            } finally {
+                _gate.Release();
+            }
+        } catch (OperationCanceledException) {
+            return null;
+        }
+    }
+
     async Task OfferRepairAsync(ServiceSnapshot snap, CancellationToken ct, bool requireIdle = false) {
         var missing = await FailingRepairPreconditionAsync(snap).ConfigureAwait(false);
         if (missing is not null) {

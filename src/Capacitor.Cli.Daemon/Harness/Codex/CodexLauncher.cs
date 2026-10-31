@@ -22,7 +22,7 @@ internal sealed partial class CodexLauncher(
         account is null ? Paths : AccountLayouts.Codex(config.Home, account.Directory);
 
     public string Vendor  => "codex";
-    public string CliPath => config.CodexPath;
+    public string CliPath => harnesses.LaunchCommand(HarnessId.Codex, config.CodexPath);
     public bool   SupportsUnattended => true;
     public bool   SupportsPrReview   => true;
     public bool   SupportsResume     => true;
@@ -70,7 +70,7 @@ internal sealed partial class CodexLauncher(
     /// rather than proceeding with an incomplete view of what the reviewer inherits.
     /// </summary>
     internal Func<IReadOnlyList<InheritedMcpServer>> ReadInheritedMcpServers { get; init; } =
-        () => CodexMcpInventory.ListInheritedServers(config.CodexPath);
+        () => CodexMcpInventory.ListInheritedServers(harnesses.LaunchCommand(HarnessId.Codex, config.CodexPath));
 
     /// <summary>Inert <c>command</c> stamped on a disabled TRANSPORT-LESS server's override. Codex
     /// requires a transport to be present to accept an <c>mcp_servers.&lt;name&gt;</c> override — a
@@ -175,10 +175,11 @@ internal sealed partial class CodexLauncher(
 
         var args = new List<string>();
 
-        // `codex resume` accepts every flag below, so the subcommand and id simply lead.
+        // `codex resume` accepts every flag below, so the subcommand and id simply lead. Rollout
+        // discovery records the id dashless, and Codex resumes only the dashed form.
         if (ctx.ResumeSessionId is { } resumeId) {
             args.Add("resume");
-            args.Add(resumeId);
+            args.Add(Guid.TryParse(resumeId, out var resumeGuid) ? resumeGuid.ToString("D") : resumeId);
         }
 
         args.AddRange([
@@ -512,7 +513,7 @@ internal sealed partial class CodexLauncher(
     /// fail the Codex `-c` config parse. Covers Windows paths and arbitrary URLs.
     // Shared with the codex app-server argv builder so the two transports encode -c overrides
     // identically; the implementation lives in CodexToml.
-    static string TomlString(string value) => CodexToml.String(value);
+    static string TomlString(string value) => CodexToml.Quote(value);
 
     /// Local launch: emit the mandatory daemon-level flags Codex always needs, then append
     /// the user's verbatim post-`--` args. A user duplicate of a mandatory flag is rejected

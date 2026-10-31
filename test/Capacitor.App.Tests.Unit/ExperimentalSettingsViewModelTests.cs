@@ -60,6 +60,34 @@ public class ExperimentalSettingsViewModelTests {
     });
 
     [Test]
+    [Arguments(false, "")]
+    [Arguments(true, ExperimentalFeatureRowViewModel.WaitingForServerText)]
+    public Task An_unregistered_daemon_reads_as_no_change_until_the_switch_is_flipped(bool on, string expected) =>
+        AvaloniaSession.RunOnUiAsync(async () => {
+            var store = new ExperimentalSettingsStore(Config.Root);
+            if (on) await store.SetAsync("work", Id, true, CancellationToken.None);
+            var service = Connected();
+            using var vm = new ExperimentalSettingsViewModel(store, "work", service);
+            await vm.Loaded;
+            var row = vm.Features.Single();
+
+            service.SnapshotsSubject.OnNext(Reporting(resolved: on, active: on, acknowledged: false, failed: true));
+            await Until(() => row.StatusText == expected, "an unprompted registration failure");
+
+            row.IsEnabled = !on;
+            service.SnapshotsSubject.OnNext(Reporting(resolved: !on, active: !on, acknowledged: false, failed: true));
+            await Until(() => row.StatusText == ExperimentalFeatureRowViewModel.AppliedLocallyText, "a flipped switch");
+
+            // The CLI sets it back; each snapshot rereads the store, as the page does while it is open.
+            await Until(() => store.Load("work").IsEnabled(Id) == !on, "the flip saved");
+            await store.SetAsync("work", Id, on, CancellationToken.None);
+            await Until(() => {
+                service.SnapshotsSubject.OnNext(Reporting(resolved: on, active: on, acknowledged: false, failed: true));
+                return row.IsEnabled == on && row.StatusText == expected;
+            }, "a value set elsewhere");
+        });
+
+    [Test]
     public Task Status_text_follows_each_snapshot() => AvaloniaSession.RunOnUiAsync(async () => {
         var store = new ExperimentalSettingsStore(Config.Root);
         var service = Connected();
@@ -69,7 +97,7 @@ public class ExperimentalSettingsViewModelTests {
         await Assert.That(row.StatusText).IsEqualTo("");
 
         service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
-        await Until(() => row.StatusText == "This daemon is too old to apply it. Update kcap and restart the daemon", "a pre-feature daemon");
+        await Until(() => row.StatusText == "The daemon runs an older version of kcap. Update kcap. The daemon then restarts on its own.", "a pre-feature daemon");
         await Assert.That(row.StatusIsWarning).IsTrue();
 
         service.SnapshotsSubject.OnNext(Reporting(resolved: false, active: false));
@@ -86,14 +114,14 @@ public class ExperimentalSettingsViewModelTests {
         await Until(() => row.StatusText == "Applying…", "applying");
 
         service.SnapshotsSubject.OnNext(Reporting(resolved: true, active: true, acknowledged: false, failed: true));
-        await Until(() => row.StatusText == "Applied; the server has not been told yet", "applied locally");
+        await Until(() => row.StatusText == ExperimentalFeatureRowViewModel.AppliedLocallyText, "applied locally");
 
         service.SnapshotsSubject.OnNext(Reporting(resolved: true, active: false, reason: "codex is older than 0.146.0"));
         await Until(() => row.StatusText == "On, not active: codex is older than 0.146.0", "not active");
         await Assert.That(row.StatusIsWarning).IsTrue();
 
         service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, null, null));
-        await Assert.That(row.StatusText).IsEqualTo("Saved; applies when the daemon starts");
+        await Assert.That(row.StatusText).IsEqualTo("Saved. Applies when the daemon starts.");
         await Assert.That(row.StatusIsWarning).IsFalse();
     });
 

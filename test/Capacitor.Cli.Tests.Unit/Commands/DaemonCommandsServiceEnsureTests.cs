@@ -1,5 +1,6 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Services;
+using Capacitor.Cli.Tests.Unit.Services;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -56,6 +57,30 @@ public class DaemonCommandsServiceEnsureTests {
 
         var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), manager, "test-id", Home, TimeProvider.System).Ensure(["--json"]);
         await Assert.That(exit).IsEqualTo(1);
+    }
+
+    /// <summary>kcap-service holds one enrollment per user and stops the daemon of the one an install replaces, so
+    /// ensure installing a name with no unit, inside an agent the enrolled daemon hosts, refuses before the
+    /// service is asked anything and leaves the enrollment as it was.</summary>
+    [Test]
+    public async Task Ensure_install_refuses_inside_an_agent_the_enrollment_it_replaces_hosts() {
+        using var err = ConsoleOutput.StartErrorCapture();
+        var pipe        = new FakeServicePipe();
+        var enrollment  = new ServiceEnrollment("work", @"C:\kcap\kcap-daemon.exe", null, null, null);
+        var enrollments = new FakeServiceEnrollmentStore { Current = enrollment };
+        var manager     = new WindowsServiceManager(Config.Root, pipe, enrollments, tasks: null, stopDaemon: _ => true);
+
+        var (result, exit) = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), manager, "personal", Home, TimeProvider.System) {
+            HostsCaller = id => id == "work",
+        }.EvaluateEnsureAsync("default");
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(result.Action).IsEqualTo("install");
+        await Assert.That(result.Reason).IsEqualTo("hosted_caller");
+        await Assert.That(err.GetCapturedError()).Contains("daemon 'work' hosts");
+        await Assert.That(err.GetCapturedError()).Contains("`kcap daemon service ensure --name personal --profile default`");
+        await Assert.That(pipe.Verbs).IsEmpty();
+        await Assert.That(enrollments.Current).IsEqualTo(enrollment);
     }
 
     // F1: on launchd a unit baked without a resolvable profile can never pass the start gate's

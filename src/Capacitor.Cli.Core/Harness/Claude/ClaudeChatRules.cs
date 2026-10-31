@@ -45,6 +45,7 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
         var slug = SchemaExtensions.Slug(evt.Payload, ClaudeCodeExtension.Slug);
         if (SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain)
             || SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsMeta)
+            || SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsCompactSummary)
             || IsTaskNotification(slug, raw)
             || PeerMessage(slug, raw.Text) is not null) return null;
 
@@ -72,6 +73,11 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
 
         switch (envelope.Kind) {
             case AcpEventKind.UserMessage: {
+                // Claude Code writes its compaction summary as a user record; the user never typed it.
+                if (SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsCompactSummary))
+                    return envelope.Text?.Trim() is { Length: > 0 } summary
+                        ? envelope with { Kind = AcpEventKind.SystemNote, Text = summary, ToolKind = ChatDisplayKind.CompactSummary }
+                        : null;
                 if (IsTaskNotification(slug, envelope)) return TaskNotificationNote(envelope);
                 var raw = envelope.Text ?? "";
                 // A bang command is its own user record: the command in bash-input, the output in

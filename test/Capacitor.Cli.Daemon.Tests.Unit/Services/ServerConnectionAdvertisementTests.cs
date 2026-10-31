@@ -51,12 +51,15 @@ public class ServerConnectionAdvertisementTests {
     }
 
     [Test]
-    public async Task DaemonConnect_advertises_branch_base_refs() {
+    public async Task DaemonConnect_advertises_branch_and_abbreviated_sha_base_refs() {
         var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1", ConfigRoot = Config.Root };
         await using var conn = new ServerConnection(config, new FixedCredentialSource(), NullLoggerFactory.Instance,
             NullLogger<ServerConnection>.Instance, TimeProvider.System);
 
-        await Assert.That(conn.BuildDaemonConnect("mac", [], [], null, config.Advertisement).SupportsBranchBaseRef).IsTrue();
+        var connect = conn.BuildDaemonConnect("mac", [], [], null, config.Advertisement);
+
+        await Assert.That(connect.SupportsBranchBaseRef).IsTrue();
+        await Assert.That(connect.SupportsAbbreviatedShaBaseRef).IsTrue();
     }
 
     [Test]
@@ -217,5 +220,25 @@ public class ServerConnectionAdvertisementTests {
             CapacitorJsonContext.Default.SendRawInputCommand);
 
         await Assert.That(json).IsEqualTo("{\"agent_id\":\"a-1\",\"data\":\"Gw==\",\"dispatch_id\":\"00000000-0000-0000-0000-000000000001\"}");
+    }
+
+    /// <summary>A connect takes its live agents, claims and completeness from one recovery snapshot, so a
+    /// participant that publishes or fails between two reads can never be missing from both lists while
+    /// the connect reports startup complete.</summary>
+    [Test]
+    public async Task DaemonConnect_takes_live_agents_claims_and_completeness_from_one_snapshot() {
+        var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1", ConfigRoot = Config.Root };
+        await using var conn = new ServerConnection(config, new FixedCredentialSource(), NullLoggerFactory.Instance,
+            NullLogger<ServerConnection>.Instance, TimeProvider.System);
+        var claim = new ResumingAgentClaim("reviewer-1", "instance-old", "session-1");
+        conn.GetStartupReapComplete = () => true;
+        conn.GetResumingAgents      = () => [];
+        conn.GetRecoverySnapshot    = () => new RecoverySnapshot(["live-1"], [], [claim], StartupReapComplete: false);
+
+        var connect = conn.BuildDaemonConnect("mac", [], [], null, config.Advertisement, conn.GetRecoverySnapshot());
+
+        await Assert.That(connect.LiveAgentIds).IsEquivalentTo(["live-1"]);
+        await Assert.That(connect.ResumingAgents!).IsEquivalentTo([claim]);
+        await Assert.That(connect.StartupReapComplete).IsFalse();
     }
 }

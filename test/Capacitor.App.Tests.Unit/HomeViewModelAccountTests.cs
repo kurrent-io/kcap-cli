@@ -3,6 +3,7 @@ using System.Reactive.Subjects;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Accounts.Readings;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Remote.Models;
 using Microsoft.Extensions.Time.Testing;
@@ -52,6 +53,26 @@ public class HomeViewModelAccountTests {
         ],
     };
 
+    static readonly DateTimeOffset Now = new(2026, 10, 27, 12, 0, 0, TimeSpan.Zero);
+
+    /// A five-hour window at 42% that resets in 2h30m30s, confirmed at Now.
+    static readonly AccountReadingDto FiveHour = new(
+        0, [new UsageWindowDto("claude", 300, 42, Now.AddMinutes(150).AddSeconds(30), Now)], null, null, null);
+
+    static AccountViewDto WithReading(AccountViewDto account) => account with { Reading = FiveHour };
+
+    static DaemonAccountsDto RemoteWithReading(string daemonName, string hostId, string accountId) {
+        var row = AccountsOf(daemonName, hostId, Account(accountId, accountId, "/u/." + accountId));
+        row.Accounts![0] = row.Accounts[0] with {
+            Reading = new ListedReadingDto {
+                Windows = [new ListedUsageWindowDto {
+                    LimitId = "claude", WindowMinutes = 300, UsedPercent = 42, ResetsAt = Now.AddMinutes(150).AddSeconds(30), ConfirmedAt = Now,
+                }],
+            },
+        };
+        return row;
+    }
+
     static string Refusal(string label) => $"{label} is not available on this machine. Use the default account or pick another.";
 
     sealed class RecordingLaunchClient : ILaunchClient {
@@ -72,6 +93,7 @@ public class HomeViewModelAccountTests {
         public BehaviorSubject<ServerLaneStatus> Lane { get; } = new(new ServerLaneStatus(ServerLaneState.Connected));
         public RecordingLaunchClient Launch { get; } = new();
         public AppStateStore Store { get; } = new(statePath);
+        public BehaviorSubject<DateTimeOffset> Clock { get; } = new(Now);
         public Func<Task> OnRetry { get; set; } = () => Task.CompletedTask;
         public HomeViewModel Vm { get; private set; } = null!;
 
@@ -90,7 +112,9 @@ public class HomeViewModelAccountTests {
                 daemons: Remote.Daemons, viewerId: viewerId ?? (_ => Task.FromResult<string?>(Viewer)), laneStatus: Lane,
                 localMachineId: localMachineId,
                 listing: listings.Listing, daemonAccounts: listings.DaemonAccounts, localAccounts: LocalAccounts,
-                retryListing: () => OnRetry());
+                retryListing: () => OnRetry(),
+                readings: new AccountReadings(LocalAccounts, Remote.DrawableDaemonAccounts, Clock));
+            await Vm.AccountMemoryLoadedForTesting;
             return Vm;
         }
 
@@ -108,6 +132,7 @@ public class HomeViewModelAccountTests {
         public void Dispose() {
             Vm?.Dispose();
             LocalAccounts.Dispose();
+            Clock.Dispose();
             Lane.Dispose();
             Remote.Dispose();
         }
@@ -833,6 +858,115 @@ public class HomeViewModelAccountTests {
             await vm.StartCommand.Execute();
             await Assert.That(rig.Launch.Requests.Single().AccountId).IsEqualTo("a2");
             await Assert.That(rig.Launch.Requests.Single().Model).IsEqualTo("work-model");
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Usage_is_projected_for_the_selected_hosts_accounts() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var rig = new Rig(Tmp.PathTo("app-state.json"));
+            var vm = await rig.LocalAsync(Snapshot("h1", 1, WithReading(Home), Work, CodexWork));
+
+            await Assert.That(vm.AccountUsageById.Keys).IsEquivalentTo(new[] { "a1", "a2" });
+            var bar = vm.AccountUsageById["a1"].Bars.Single();
+            await Assert.That(bar.Label).IsEqualTo("5h");
+            await Assert.That(bar.PercentText).IsEqualTo("42%");
+            await Assert.That(vm.AccountUsageById["a2"].LineText).IsEqualTo("no reading yet");
+
+            await vm.ChooseHarnessAsync("codex");
+            await Assert.That(vm.AccountUsageById.Keys).IsEquivalentTo(new[] { "c2" });
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_snapshot_with_a_duplicate_account_id_keeps_the_first() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var rig = new Rig(Tmp.PathTo("app-state.json"));
+            var vm = await rig.LocalAsync(Snapshot("h1", 1, WithReading(Home), Home with { Label = "dup", Reading = null }));
+
+            await Assert.That(vm.AccountUsageById.Keys).IsEquivalentTo(new[] { "a1" });
+            await Assert.That(vm.AccountUsageById["a1"].Bars.Single().PercentText).IsEqualTo("42%");
+        });
+    }
+
+    [Test]
+    public async Task The_launcher_comparison_ignores_age_and_readiness() {
+        var a = new AccountUsageView([], "line", null, null, null, "updated 1m ago", false);
+
+        await Assert.That(HomeViewModel.DrawnUsageEquals(new Dictionary<string, AccountUsageView> { ["a1"] = a },
+            new Dictionary<string, AccountUsageView> { ["a1"] = a with { AgeText = "updated 2m ago", Ready = true } })).IsTrue();
+        await Assert.That(HomeViewModel.DrawnUsageEquals(new Dictionary<string, AccountUsageView> { ["a1"] = a },
+            new Dictionary<string, AccountUsageView> { ["a1"] = a with { BlockedText = "Limit hit" } })).IsFalse();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_tick_that_changes_no_text_publishes_nothing() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var rig = new Rig(Tmp.PathTo("app-state.json"));
+            var vm = await rig.LocalAsync(Snapshot("h1", 1, WithReading(Home), Work));
+            var published = 0;
+            vm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(HomeViewModel.AccountUsageById)) published++; };
+
+            rig.Clock.OnNext(Now.AddSeconds(10));
+
+            await Assert.That(published).IsEqualTo(0);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_tick_crossing_a_reset_updates_the_usage() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var rig = new Rig(Tmp.PathTo("app-state.json"));
+            var vm = await rig.LocalAsync(Snapshot("h1", 1, WithReading(Home), Work));
+            var before = vm.AccountUsageById["a1"];
+
+            rig.Clock.OnNext(Now.AddHours(3));
+
+            await Assert.That(vm.AccountUsageById["a1"]).IsNotEqualTo(before);
+            await Assert.That(vm.AccountUsageById["a1"].Bars.Single().Percent).IsNull();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Usage_empties_when_the_remote_gate_closes_while_choice_rows_stay() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var rig = new Rig(Tmp.PathTo("app-state.json"));
+            var box = Listed("box", repos: ["/w/repo"]);
+            rig.Remote.DaemonsSubject.OnNext([box]);
+            var vm = await rig.StartAsync();
+            rig.Remote.ListingSubject.OnNext(Answered(1, Listed(LocalName), box));
+            await vm.SelectRepositoryAsync("/w/repo");
+            await vm.SelectMachineAsync("box", isLocal: false);
+            var row = RemoteWithReading("box", "h2", "d1");
+            row = row with { Accounts = [.. row.Accounts!, row.Accounts![0] with { Id = "d2", Label = "d2", Directory = "/u/.d2", DirectoryKey = "/u/.d2", Reading = null }] };
+            rig.Remote.DaemonAccountsSubject.OnNext([row]);
+            rig.Remote.DrawableDaemonAccountsSubject.OnNext([row]);
+
+            await Assert.That(vm.AccountUsageById["d1"].Bars.Single().PercentText).IsEqualTo("42%");
+
+            rig.Remote.DrawableDaemonAccountsSubject.OnNext([]);
+
+            await Assert.That(vm.AccountUsageById).IsEmpty();
+            await Assert.That(vm.AccountRows.Select(c => c.Row.Id)).Contains("d1");
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Local_usage_empties_on_detach() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var rig = new Rig(Tmp.PathTo("app-state.json"));
+            var vm = await rig.LocalAsync(Snapshot("h1", 1, WithReading(Home), Work));
+            await Assert.That(vm.AccountUsageById).IsNotEmpty();
+
+            rig.LocalAccounts.OnNext(null);
+
+            await Assert.That(vm.AccountUsageById).IsEmpty();
         });
     }
 }

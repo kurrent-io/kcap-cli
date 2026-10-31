@@ -9,6 +9,7 @@ using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Pty;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
@@ -42,10 +43,12 @@ public class AgentOrchestratorAccountTests {
     string RefusalFor(string accountId) =>
         AccountResolution.Resolve(Store.TryLoad(), HarnessId.Claude, accountId, ClaudeDefault).Refusal!;
 
-    AgentOrchestrator Build(CaptureServerConnection server, SpyPtyProcessFactory pty, SpyHostedAgentLauncher launcher, string? allowedRepo = null) =>
+    AgentOrchestrator Build(CaptureServerConnection server, SpyPtyProcessFactory pty, SpyHostedAgentLauncher launcher, string? allowedRepo = null,
+            AccountReadingSink? readings = null) =>
         AgentOrchestratorHarness.BuildOrchestrator(
             server, pty, new Dictionary<string, IHostedAgentLauncher> { [launcher.Vendor] = launcher },
             allowedRepoPath: allowedRepo,
+            readings: readings,
             configure: c => {
                 c.Accounts           = Store;
                 c.DefaultDirectories = new Dictionary<HarnessId, string> { [HarnessId.Claude] = ClaudeDefault, [HarnessId.Codex] = CodexDefault };
@@ -321,6 +324,76 @@ public class AgentOrchestratorAccountTests {
         await Assert.That(row.AccountLabel).IsEqualTo("Work");
     }
 
+    static AccountsSnapshotDto SnapshotLabelling(string accountId, string label) => new(
+        "host", 1,
+        [new AccountViewDto(accountId, "claude", "/unused", "unused", label, "installed")],
+        []);
+
+    [Test]
+    public async Task Heartbeat_reports_the_current_account_label() {
+        Register(WorkId, HarnessId.Claude, Tmp.CreateDir(".claude-work"), "old@x");
+        using var repo = GitRepo.CreateWithCommit();
+        await using var orch = Build(new CaptureServerConnection(), LivePty(), Spy(), repo);
+        await orch.HandleLaunchAgentForTest(Launch("acct-heartbeat", repo, WorkId));
+
+        orch.AccountsSnapshot = () => SnapshotLabelling(WorkId, "new@x");
+
+        await Assert.That(orch.BuildLiveAgents().Single(a => a.Id == "acct-heartbeat").AccountLabel).IsEqualTo("new@x");
+    }
+
+    [Test]
+    public async Task Status_reports_the_current_account_label() {
+        Register(WorkId, HarnessId.Claude, Tmp.CreateDir(".claude-work"), "old@x");
+        using var repo = GitRepo.CreateWithCommit();
+        await using var orch = Build(new CaptureServerConnection(), LivePty(), Spy(), repo);
+        await orch.HandleLaunchAgentForTest(Launch("acct-status-now", repo, WorkId));
+
+        orch.AccountsSnapshot = () => SnapshotLabelling(WorkId, "new@x");
+
+        await Assert.That(orch.SnapshotAgentsForStatus().Single(a => a.Id == "acct-status-now").AccountLabel).IsEqualTo("new@x");
+    }
+
+    [Test]
+    public async Task Ledger_status_row_reports_the_current_account_label() {
+        var work = Register(WorkId, HarnessId.Claude, Tmp.CreateDir(".claude-work"), "old@x");
+        await using var orch = Build(new CaptureServerConnection(), LivePty(), Spy());
+        var entry = ResumeLedgerEntries.For("acct-ledger-now", ResumeState.Interrupted);
+        orch.ResumeLedger!.Write(entry with { Launch = entry.Launch with { AccountDirectory = work, AccountId = WorkId, AccountLabel = "old@x" } });
+
+        orch.AccountsSnapshot = () => SnapshotLabelling(WorkId, "new@x");
+
+        await Assert.That(orch.SnapshotAgentsForStatus().Single(a => a.Id == "acct-ledger-now").AccountLabel).IsEqualTo("new@x");
+    }
+
+    /// <summary>A status subscriber is woken by a relabel alone, and not by a snapshot whose labels are
+    /// unchanged, which reading updates produce every few seconds.</summary>
+    [Test]
+    public async Task A_relabel_wakes_status_subscribers_and_a_reading_change_does_not() {
+        await using var orch = Build(new CaptureServerConnection(), LivePty(), Spy());
+        var notifier = orch.StatusNotifierForTest;
+        orch.OnAccountsChanged(SnapshotLabelling(WorkId, "old@x"));
+        var baseline = notifier.Version;
+
+        orch.OnAccountsChanged(SnapshotLabelling(WorkId, "old@x") with { Revision = 2 });
+        await Assert.That(notifier.Version).IsEqualTo(baseline);
+
+        orch.OnAccountsChanged(SnapshotLabelling(WorkId, "new@x") with { Revision = 3 });
+        await Assert.That(notifier.Version).IsGreaterThan(baseline);
+    }
+
+    [Test]
+    public async Task Unknown_account_id_keeps_the_launch_label() {
+        Register(WorkId, HarnessId.Claude, Tmp.CreateDir(".claude-work"), "old@x");
+        using var repo = GitRepo.CreateWithCommit();
+        await using var orch = Build(new CaptureServerConnection(), LivePty(), Spy(), repo);
+        await orch.HandleLaunchAgentForTest(Launch("acct-keeps", repo, WorkId));
+
+        orch.AccountsSnapshot = () => SnapshotLabelling("another-account", "new@x");
+
+        await Assert.That(orch.BuildLiveAgents().Single(a => a.Id == "acct-keeps").AccountLabel).IsEqualTo("old@x");
+        await Assert.That(orch.SnapshotAgentsForStatus().Single(a => a.Id == "acct-keeps").AccountLabel).IsEqualTo("old@x");
+    }
+
     [Test]
     public async Task Malformed_registry_refuses_an_explicit_id_and_defaults_a_null_one() {
         Register(WorkId, HarnessId.Claude, Tmp.CreateDir(".claude-work"), "Work");
@@ -427,5 +500,34 @@ public class AgentOrchestratorAccountTests {
         while (await FrameCodec.ReadAsync(client.WrittenStream, default) is { } f) frames.Add(f);
 
         return frames;
+    }
+
+    /// <summary>The menu blocks the account the agent launched under, with the unknown constraint: the
+    /// scrape names no window, so no reset lifts it.</summary>
+    [Test]
+    public async Task Claude_limit_menu_blocks_the_agents_account() {
+        Register(WorkId, HarnessId.Claude, Tmp.CreateDir(".claude-work"), "Work");
+        using var repo = GitRepo.CreateWithCommit();
+        var pty = new ScriptedPtyProcess();
+        Store.Readings.ProducerBudget = TimeSpan.FromSeconds(60);
+        var recorded = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var sink = new AccountReadingSink(Store, TimeProvider.System, NullLogger<AccountReadingSink>.Instance) {
+            Processed = (_, written) => recorded.TrySetResult(written),
+        };
+        await using var orch = Build(new CaptureServerConnection(), new SpyPtyProcessFactory(pty), Spy(), repo, sink);
+
+        await orch.HandleLaunchAgentForTest(Launch("acct-limit", repo, WorkId));
+        pty.Emit(
+            "You've hit your session limit · resets 3:10pm\n\n" +
+            "What do you want to do?\n\n" +
+            "1. Stop and wait for limit to reset\n" +
+            "2. Wait here, then continue automatically shortly\n");
+
+        await Assert.That(await recorded.Task.WaitAsync(TimeSpan.FromSeconds(60))).IsTrue();
+        var file = Store.Readings.LoadAll()[WorkId];
+        await Assert.That(file.Reading.Blocked?.BlockedAt).IsNotNull();
+        await Assert.That(orch.GetAgentForTest("acct-limit")!.UsageLimit).IsNotNull();
+        await Assert.That(file.Reading.Blocked!.Constraints.Select(c => c.ResetsAt)).IsEquivalentTo(new DateTimeOffset?[] { null });
+        await Assert.That(Store.Readings.LoadAll().Keys).IsEquivalentTo([WorkId]);
     }
 }

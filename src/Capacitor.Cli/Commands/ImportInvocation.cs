@@ -7,6 +7,7 @@ namespace Capacitor.Cli.Commands;
 /// call. A record (not a bare argument list) so a test can capture and assert on it through
 /// <see cref="ISetupImportRunner"/> without running a real import.
 /// </summary>
+/// <param name="Skip">Projects left out of this import only; null leaves nothing out.</param>
 public sealed record ImportInvocation(
     ImportScope                  Scope,
     int?                         MaxSessions,
@@ -15,4 +16,5 @@ public sealed record ImportInvocation(
     bool                         AutoSkipExclusions,
     bool                         ForcePrivate,
     bool                         SkipTitle,
-    ProfileContext               Profiles);
+    ProfileContext               Profiles,
+    ImportSkip?                  Skip = null);

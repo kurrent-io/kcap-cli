@@ -12,7 +12,10 @@ public static class ImportScopeArgs {
             IReadOnlyList<string> RepoArgs,
             bool                  Yes,
             bool                  Private,
-            string?               OrgArg = null // explicit owner after `--org`, or null for bare `--org`
+            string?               OrgArg = null, // explicit owner after `--org`, or null for bare `--org`
+            IReadOnlyList<string>? FolderArgs     = null,
+            IReadOnlyList<string>? SkipRepoArgs   = null,
+            IReadOnlyList<string>? SkipFolderArgs = null
         );
 
     public sealed record ResolveInput(
@@ -28,23 +31,11 @@ public static class ImportScopeArgs {
             bool         Yes,
             bool         Private,
             string?      Error,
-            bool         NeedOrgPick = false // bare `--org`, no value/stored org: pick from discovered repos
+            bool         NeedOrgPick = false, // bare `--org`, no value/stored org: pick from discovered repos
+            ImportSkip?  Skip        = null   // --skip-repo / --skip-folder, whatever the scope
         );
 
     public static ParsedFlags ParseFlags(string[] args) {
-        // Repeatable: one occurrence per repo. A trailing `--repo`, or one followed by another flag,
-        // records the empty string so Resolve can say the value is missing — dropping it silently would
-        // let `--repo a/b --repo` import half of what was asked for and report nothing.
-        var repos = new List<string>();
-
-        for (var i = 0; i < args.Length; i++) {
-            if (args[i] != "--repo") continue;
-
-            var value = i + 1 < args.Length ? args[i + 1] : "";
-
-            repos.Add(value.StartsWith('-') ? "" : value);
-        }
-
         // `--org` may be bare or take an explicit owner. Only treat the next token
         // as the owner when it isn't another flag (so `--org --yes` stays bare).
         string? org    = null;
@@ -54,16 +45,73 @@ public static class ImportScopeArgs {
         return new(
             All: args.Contains("--all"),
             Org: args.Contains("--org"),
-            RepoArgs: repos,
+            RepoArgs: Values(args, "--repo"),
             Yes: args.Contains("--yes") || args.Contains("-y"),
             Private: args.Contains("--private"),
-            OrgArg: org
+            OrgArg: org,
+            FolderArgs: Values(args, "--folder"),
+            SkipRepoArgs: Values(args, "--skip-repo"),
+            SkipFolderArgs: Values(args, "--skip-folder")
         );
     }
 
+    /// <summary>Every value of a repeatable flag. A trailing flag, or one followed by another flag,
+    /// records the empty string so the caller can say the value is missing: dropping it would let
+    /// <c>--repo a/b --repo</c> import half of what was asked for and report nothing.</summary>
+    internal static List<string> Values(string[] args, string flag) {
+        var values = new List<string>();
+
+        for (var i = 0; i < args.Length; i++) {
+            if (args[i] != flag) continue;
+
+            var value = i + 1 < args.Length ? args[i + 1] : "";
+
+            values.Add(value.StartsWith('-') ? "" : value);
+        }
+
+        return values;
+    }
+
+    /// <summary>Parses <c>--skip-repo</c> and <c>--skip-folder</c>, or says which value is wrong. Each
+    /// value must parse before any is used, as with <c>--repo</c>.</summary>
+    public static (ImportSkip? Skip, string? Error) ParseSkip(
+            IReadOnlyList<string> repoArgs, IReadOnlyList<string> folderArgs, string repoFlag = "--skip-repo",
+            string folderFlag = "--skip-folder") {
+        var repos = new List<(string Owner, string Name)>();
+
+        foreach (var value in repoArgs) {
+            if (OwnerName(value) is not { } repo) {
+                return (null, value.Length == 0
+                    ? $"{repoFlag} needs a value: pass `{repoFlag} <owner/name>`."
+                    : $"{repoFlag} expects owner/name (got '{value}').");
+            }
+
+            repos.Add(repo);
+        }
+
+        if (folderArgs.Any(f => f.Length == 0)) return (null, $"{folderFlag} needs a value: pass `{folderFlag} <path>`.");
+
+        return (repos.Count == 0 && folderArgs.Count == 0 ? ImportSkip.None : new ImportSkip(repos, folderArgs), null);
+    }
+
+    static (string Owner, string Name)? OwnerName(string value) {
+        var parts = value.Split('/');
+
+        return parts.Length == 2 && parts[0].Length > 0 && parts[1].Length > 0 ? (parts[0], parts[1]) : null;
+    }
+
     public static ResolveResult Resolve(ResolveInput input) {
-        var f     = input.Flags;
-        var count = (f.All ? 1 : 0) + (f.Org ? 1 : 0) + (f.RepoArgs.Count == 0 ? 0 : 1);
+        var (skip, skipError) = ParseSkip(input.Flags.SkipRepoArgs ?? [], input.Flags.SkipFolderArgs ?? []);
+
+        if (skipError is not null) return new(null, input.Flags.Yes, input.Flags.Private, skipError);
+
+        return ResolveScope(input) with { Skip = skip };
+    }
+
+    static ResolveResult ResolveScope(ResolveInput input) {
+        var f       = input.Flags;
+        var folders = f.FolderArgs ?? [];
+        var count   = (f.All ? 1 : 0) + (f.Org ? 1 : 0) + (f.RepoArgs.Count == 0 && folders.Count == 0 ? 0 : 1);
 
         switch (count) {
             case > 1:
@@ -71,7 +119,7 @@ public static class ImportScopeArgs {
                     null,
                     f.Yes,
                     f.Private,
-                    "--all, --org, and --repo are mutually exclusive."
+                    "--all, --org, and --repo/--folder are mutually exclusive."
                 );
             case 0 when input.IsInteractive:
                 return new(null, f.Yes, f.Private, Error: null);
@@ -162,7 +210,11 @@ public static class ImportScopeArgs {
             repos.Add((parts[0], parts[1]));
         }
 
+        if (folders.Any(v => v.Length == 0)) {
+            return new(null, f.Yes, f.Private, "--folder needs a value: pass `--folder <path>`.");
+        }
+
         // `--repo . --repo owner/name` naming the same repo twice is one selection; the scope dedupes.
-        return new(new ImportScope.Repo(repos), f.Yes, f.Private, null);
+        return new(new ImportScope.Repo(repos, folders), f.Yes, f.Private, null);
     }
 }

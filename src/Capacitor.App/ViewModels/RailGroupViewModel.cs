@@ -24,18 +24,25 @@ public sealed class RailGroupViewModel : ReactiveObject, IDisposable {
     public string Label { get => _label; private set => this.RaiseAndSetIfChanged(ref _label, value); }
     public bool ShowsHeader => Kind != RailGrouping.None;
     public bool IsNoRepository { get; }
+    /// Grouped by its folder rather than by a repository's remote, so the header must not read as one.
+    public bool IsFolder => Kind == RailGrouping.Repository && !IsNoRepository && !Key.StartsWith("repo:", StringComparison.Ordinal);
     bool _isExpanded;
     public bool IsExpanded {
         get => _isExpanded;
         private set => this.RaiseAndSetIfChanged(ref _isExpanded, value);
     }
     public ReactiveCommand<Unit, Unit> ToggleCommand { get; }
-    public string ToggleAccessibleName => $"{(IsExpanded ? "Collapse" : "Expand")} {Label}{(HeaderStatus is { } status ? $", {status.AccessibleName}" : "")}";
+    public string ToggleAccessibleName => $"{(IsExpanded ? "Collapse" : "Expand")} {(IsFolder ? "folder " : "")}{Label}{(HeaderStatus is { } status ? $", {status.AccessibleName}" : "")}";
     readonly ObservableAsPropertyHelper<AgentStatusPresentation?> _headerStatus;
     public AgentStatusPresentation? HeaderStatus => _headerStatus.Value;
     readonly ObservableAsPropertyHelper<bool> _showsHeaderBadge;
     public bool ShowsHeaderBadge => _showsHeaderBadge.Value;
-    public string Tooltip => HeaderStatus is { } status ? $"{RootDisplay}\n\n{status.Tip}" : RootDisplay;
+    public string Tooltip {
+        get {
+            var root = IsFolder ? $"{RootDisplay}\nFolder, not a repository with a remote" : RootDisplay;
+            return HeaderStatus is { } status ? $"{root}\n\n{status.Tip}" : root;
+        }
+    }
 
     readonly ObservableAsPropertyHelper<string> _countText;
     public string CountText => _countText.Value;
@@ -135,11 +142,12 @@ public sealed class RailGroupViewModel : ReactiveObject, IDisposable {
         this.RaisePropertyChanged(nameof(ToggleAccessibleName));
     }
 
-    /// Mixed groups count each kind; a group of one kind reads as it always did.
+    /// Mixed groups count each kind; a group of one kind reads as it always did. A local row whose
+    /// agent completed is ended, as its row and its workspace header already say.
     static string CountTextFor(IEnumerable<AgentRow> rows) {
         int live = 0, ended = 0;
         foreach (var row in rows) {
-            if (row.IsEndedSession) ended++;
+            if (row.IsEndedSession || row is { Origin: AgentOrigin.Local, Status: "Completed" }) ended++;
             else live++;
         }
         if (ended > 0 && live > 0) return $"{live} live · {ended} ended";

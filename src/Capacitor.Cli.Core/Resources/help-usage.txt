@@ -53,7 +53,7 @@ Harness setup nudges:
 
 Agents:
   agent start <vendor> [-d] [--worktree] [--private] [--title T] [-- <args>]  Start a daemon-hosted agent
-  agent ls                         List this daemon's agents (id, status, state, kind, repo, title)
+  agent ls                         List this daemon's agents (id, status, state, activity, kind, harness, session, repo, worktree, title)
   agent attach <id>                Attach your terminal to a running agent (id prefix ok)
   agent resume <id>                Retry an agent a daemon restart left interrupted
   agent stop <id> | --all [-y] [--force]  Stop one agent, or all of them
@@ -137,6 +137,9 @@ Hooks (internal — invoked by Claude Code / Codex / Cursor / Copilot / Gemini /
   hook --antigravity <event>       Dispatch a Google Antigravity control-hook event (event as positional arg; payload on stdin)
   hook --mistral-vibe              Dispatch a Mistral Vibe hook event (reads payload from stdin)
   hook --muse                      Dispatch a Muse Code hook event (reads payload from stdin)
+
+Status line (internal — installed into each Claude account by kcap accounts wiring):
+  statusline --account <id>        Record the account's usage from the payload on stdin, then run the original status line
 
 Environment:
   KCAP_URL              Server URL (overrides config file)

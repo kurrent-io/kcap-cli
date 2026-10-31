@@ -20,6 +20,19 @@ public class PiModelCatalogProbeParseTests {
         await Assert.That(parsed.Models[0].Label).IsEqualTo("Claude Opus 5 · anthropic");
     }
 
+    /// A "(latest)" alias keeps its id but loses the claim: it reads as its id beside a pinned model
+    /// of the same name, and as the bare name otherwise.
+    [Test]
+    public async Task A_latest_alias_drops_its_suffix_and_reads_as_its_id_beside_its_pinned_model() {
+        var line = """{"type":"response","command":"get_available_models","success":true,"data":{"models":[{"id":"claude-opus-4-5","name":"Claude Opus 4.5 (latest)","provider":"anthropic"},{"id":"claude-opus-4-5-20251101","name":"Claude Opus 4.5","provider":"anthropic"},{"id":"opus","name":"Opus (latest)","provider":"anthropic"}]}}""";
+        var parsed = PiModelCatalogProbe.Parse(line);
+        await Assert.That(parsed.Models!.Select(m => (m.Value, m.Label))).IsEquivalentTo([
+            ("anthropic/claude-opus-4-5", "claude-opus-4-5 · anthropic"),
+            ("anthropic/claude-opus-4-5-20251101", "Claude Opus 4.5 · anthropic"),
+            ("anthropic/opus", "Opus · anthropic"),
+        ], CollectionOrdering.Matching);
+    }
+
     [Test]
     public async Task Entry_missing_id_or_provider_or_not_an_object_is_skipped_and_name_falls_back_to_id() {
         var line = """{"type":"response","command":"get_available_models","success":true,"data":{"models":[{"name":"x","provider":"p"},{"id":"a","name":"A"},"junk",{"id":"b","provider":"p"}]}}""";

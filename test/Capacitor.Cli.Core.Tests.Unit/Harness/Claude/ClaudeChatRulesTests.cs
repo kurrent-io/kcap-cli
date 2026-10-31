@@ -100,6 +100,31 @@ public class ClaudeChatRulesTests {
         await Assert.That(e[0].TimestampIso).IsEqualTo("2026-08-26T12:00:00Z");
     }
 
+    /// The summary is Claude Code's, not the user's, even when it quotes a slash command the user ran.
+    [Test]
+    public async Task A_compaction_summary_is_a_note_and_never_acknowledges_input() {
+        var chat = TranscriptChat.For("claude")!;
+        var result = chat.ProjectWithInputs("""{"type":"user","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"content":"This session is being continued from a previous conversation.\n\n<command-name>/review</command-name>\n"}}""", 1, Received, chat.CreateContext("a1", null));
+        var note = result.Envelopes.Single();
+        await Assert.That(note.Kind).IsEqualTo(AcpEventKind.SystemNote);
+        await Assert.That(note.ToolKind).IsEqualTo(ChatDisplayKind.CompactSummary);
+        await Assert.That(note.Text).IsEqualTo("This session is being continued from a previous conversation.\n\n<command-name>/review</command-name>");
+        await Assert.That(result.SubmittedInputs).IsEmpty();
+    }
+
+    /// Claude Code also flags a message queued while compaction runs; a peer's hand-back keeps its own label.
+    [Test]
+    public async Task A_queued_handback_flagged_as_compact_summary_stays_a_subagent_report() {
+        var note = P("""{"type":"attachment","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"<agent-message from=\"a1\">\n[Subagent hand-back] Preamble. The report follows:\n  **Done.**\n</agent-message>","isMeta":true,"isCompactSummary":true,"origin":{"kind":"peer","from":"a1"}}}""").Single();
+        await Assert.That(note.Kind).IsEqualTo(AcpEventKind.SystemNote);
+        await Assert.That(note.ToolKind).IsEqualTo(ChatDisplayKind.AgentReport);
+        await Assert.That(note.Text).IsEqualTo("**Done.**");
+    }
+
+    [Test]
+    public async Task A_blank_compaction_summary_projects_to_nothing() =>
+        await Assert.That(P("""{"type":"user","isCompactSummary":true,"message":{"content":"  "}}""")).IsEmpty();
+
     [Test]
     public async Task Meta_and_sidechain_records_project_to_nothing() {
         await Assert.That(P("""{"type":"user","isMeta":true,"message":{"content":"x"}}""")).IsEmpty();

@@ -278,6 +278,11 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     StringBuilder?  _openRunText;
     string?         _openRunAgent; // the subagent the open run belongs to; null for the hosted agent
 
+    // Pending tool calls announced before their input was known (OpenCode sends one while the model streams the
+    // arguments, its input empty or only the working directory). Each waits for an update that supplies the input, and
+    // is released, in order, once every call before it is ready, or ahead of whatever transcript content comes next.
+    readonly List<(AcpSessionUpdate Call, string? AgentId, bool Ready)> _heldCalls = [];
+
     Task    _turnWorkerTask    = Task.CompletedTask;
     string? _sessionId;
     string? _cwd;
@@ -1507,7 +1512,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 Prompt: [new PromptContentBlock(Type: "text", Text: turn.Text)]),
             CapacitorJsonContext.Default.SessionPromptParams);
 
-        await connection.RequestAsync(
+        var result = await connection.RequestAsync(
             "session/prompt", promptParams, ct, () => {
                 turn.Written?.TrySetResult();
 
@@ -1518,6 +1523,10 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                         inFlight.WriteState = InFlightTurn.Written;
                 }
             }).ConfigureAwait(false);
+
+        // A vendor with its own reader reports the turn there; reading the response too would count it twice.
+        if (_turnUsageReader is null)
+            EmitTurnUsage(AcpPromptUsage.Read(result, _resolvedModel));
     }
 
     sealed record PendingTurn(string Text, TaskCompletionSource? Written);
@@ -1766,6 +1775,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 AcpUpdateKind.ToolCallUpdate,
                 ToolCallId: GetStringOrNull(update, "toolCallId"),
                 ToolStatus: GetStringOrNull(update, "status"),
+                ToolInputJson: GetRawTextOrNull(update, "rawInput"),
                 ToolResultText: ExtractToolResultText(update),
                 ToolIsError: GetStringOrNull(update, "status") == "failed",
                 Raw: update),
@@ -1779,14 +1789,8 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 Title: GetStringOrNull(update, "title"),
                 Raw: update),
 
-            // The ACP spec's Session Usage RFD. No vendor implements it yet, so this arm is
-            // dormant; it exists so the context chip lights up for every ACP-hosted vendor the
-            // moment any of them ships it. Content-free unless both fields are present and
-            // sane - a partial reading is worse than none, since `size` is the chip's
-            // denominator. `used > size` is kept: reported windows can be advisory. A zero
-            // `used` is dropped to match the server's re-validation, where it would be
-            // durably appended yet invisible to every consumer (the peak comparison they all
-            // share ignores a zero candidate). Any `cost` or unknown siblings are ignored.
+            // The ACP spec's Session Usage RFD, which drives the context chip. Both fields or nothing:
+            // `size` is the chip's denominator. A zero `used` is dropped, as the server would drop it.
             "usage_update" => update.Num("used") is { } used and > 0 && update.Num("size") is { } size and > 0
                 ? new AcpSessionUpdate(
                     AcpUpdateKind.UsageUpdate,
@@ -1900,11 +1904,36 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                         EmitEnvelope(m);
                     break;
 
+                // Calls held before it stay held: parallel calls each wait for their own input. The call is the agent's
+                // output, so it moves the activity clock and the silence watch as an emitted one would.
+                case AcpUpdateKind.ToolCall when update is { ToolStatus: "pending", ToolCallId.Length: > 0 } && AwaitsInput(update.ToolInputJson):
+                    FlushRunTextLocked();
+                    _heldCalls.Add((update, agentId, false));
+                    ActivityClock?.Advance();
+                    Interlocked.Increment(ref _turnOutputEnvelopes);
+                    break;
+
+                // A placeholder input does not make the call ready. Its result must follow it, so a result releases
+                // it and every call before it, ready or not.
+                case AcpUpdateKind.ToolCallUpdate when HeldIndex(update.ToolCallId, agentId) is >= 0 and var held:
+                    if (update.ToolInputJson is { } supplied && !AwaitsInput(supplied))
+                        _heldCalls[held] = (_heldCalls[held].Call with { ToolInputJson = supplied }, agentId, true);
+                    if (AcpEventTranslator.Translate(update, seq: 0, NowIso(), logger: _logger, debugFrames: _debugFrames) is { } result) {
+                        ReleaseHeldCallsLocked(held + 1);
+                        EmitEnvelope(For(result, agentId));
+                    } else {
+                        ReleaseHeldCallsLocked(_heldCalls.FindIndex(h => !h.Ready) is >= 0 and var waiting ? waiting : _heldCalls.Count);
+                    }
+                    break;
+
+                // An update with nothing for the transcript leaves held calls waiting.
                 default:
-                    FlushOpenRunLocked(); // kind-transition — the open run (if any) ends here
-                    var envelope = AcpEventTranslator.Translate(update, seq: 0, NowIso(), logger: _logger, debugFrames: _debugFrames);
-                    if (envelope is { } e)
-                        EmitEnvelope(For(e, agentId));
+                    if (AcpEventTranslator.Translate(update, seq: 0, NowIso(), logger: _logger, debugFrames: _debugFrames) is not { } envelope) {
+                        FlushRunTextLocked(); // kind-transition — the open run (if any) ends here
+                        break;
+                    }
+                    FlushOpenRunLocked();
+                    EmitEnvelope(For(envelope, agentId));
                     break;
             }
         }
@@ -1927,9 +1956,14 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// <see cref="AcpEventKind.AssistantText"/> vs <see cref="AcpEventKind.AssistantThinking"/> when
     /// <c>aggregatedText</c> is supplied — see <c>AcpEventTranslator.Translate</c>'s remarks) and
     /// translates it with the accumulated buffer as <c>aggregatedText</c>, emitting exactly ONE
-    /// envelope for the whole run.
+    /// envelope for the whole run. Held tool calls are released first.
     /// </summary>
     void FlushOpenRunLocked() {
+        ReleaseHeldCallsLocked();
+        FlushRunTextLocked();
+    }
+
+    void FlushRunTextLocked() {
         if (_openRunKind is not { } kind)
             return;
 
@@ -1943,6 +1977,26 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         var envelope        = AcpEventTranslator.Translate(representative, seq: 0, NowIso(), aggregatedText: text, logger: _logger, debugFrames: _debugFrames);
         if (envelope is { } e)
             EmitEnvelope(For(e, agent));
+    }
+
+    // Raw text of an element the frame already parsed, so it is always valid JSON.
+    static bool AwaitsInput(string? rawInput) {
+        if (rawInput is null) return true;
+        using var doc = JsonDocument.Parse(rawInput);
+
+        return doc.RootElement.ValueKind == JsonValueKind.Object
+            && doc.RootElement.EnumerateObject().All(p => p.Name is "cwd" or "workdir");
+    }
+
+    int HeldIndex(string? toolCallId, string? agentId) =>
+        _heldCalls.FindIndex(h => h.Call.ToolCallId == toolCallId && h.AgentId == agentId);
+
+    void ReleaseHeldCallsLocked(int count = int.MaxValue) {
+        count = Math.Min(count, _heldCalls.Count);
+        foreach (var (call, agentId, _) in _heldCalls.Take(count))
+            if (AcpEventTranslator.Translate(call, seq: 0, NowIso(), logger: _logger, debugFrames: _debugFrames) is { } e)
+                EmitEnvelope(For(e, agentId));
+        _heldCalls.RemoveRange(0, count);
     }
 
     /// <summary>

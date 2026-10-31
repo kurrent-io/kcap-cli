@@ -28,7 +28,7 @@ public class UninstallModeTests {
     sealed class Removal : IAppRemoval {
         public bool Trashed;
         public Task<IReadOnlyList<string>> RemoveLinksAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>([]);
-        public void DeleteSupportFiles() { }
+        public bool DeleteSupportFiles() => true;
         public Task<bool> TrashBundleAsync(CancellationToken ct) {
             Trashed = true;
             return Task.FromResult(true);

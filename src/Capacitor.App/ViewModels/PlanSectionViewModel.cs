@@ -26,15 +26,21 @@ public sealed class PlanSectionViewModel : ReactiveObject {
     readonly ITimer _settle;
     IReadOnlyList<PlanTaskCount> _counts = [];
     bool _tornDown;
+    bool _serverDown;
+    bool _unreachable;
+    bool _readOnce;
 
     public IAvaloniaReadOnlyList<PlanTaskRow> Tasks => _tasks;
     /// What the collapsed section lists: the rows of Tasks that are in progress, in plan order.
     public IAvaloniaReadOnlyList<PlanTaskRow> InProgressTasks => _inProgress;
 
     public bool HasPlan       => HasTasks;
-    /// Keeps the section chrome while a session switch's first read is in flight.
-    public bool IsLoading => _reader.IsLoading;
-    public bool ShowsPlan => HasPlan || IsLoading;
+    /// Keeps the section chrome while a session switch's first read is in flight, until the server is known to be
+    /// unreachable: a read waiting on a server that gives no answer is not loading anything.
+    public bool IsLoading => _reader.IsLoading && !_serverDown;
+    /// No read for this session has succeeded, and the last one could not reach the server or the server is down.
+    public bool IsUnavailable => !_readOnce && _reader.HasCurrent && !HasTasks && (_unreachable || (_serverDown && _reader.IsLoading));
+    public bool ShowsPlan => HasPlan || IsLoading || IsUnavailable;
     public bool HasTasks      => _tasks.Count > 0;
     public bool HasInProgress => _inProgress.Count > 0;
     public int DoneCount => _tasks.Count(task => task.IsSettled);
@@ -72,6 +78,8 @@ public sealed class PlanSectionViewModel : ReactiveObject {
 
     public void SwitchSession(string? sessionId) {
         if (_tornDown || _source is null) return;
+        _unreachable = false;
+        _readOnce = false;
         if (sessionId is null) {
             _reader.ClearCurrent();
             Clear();
@@ -89,6 +97,13 @@ public sealed class PlanSectionViewModel : ReactiveObject {
         if (!_tornDown) _reader.Refresh();
     }
 
+    /// The pane's word that the server gives no answer; a read in flight then stops reading as loading.
+    public void SetServerDown(bool down) {
+        if (_tornDown || _serverDown == down) return;
+        _serverDown = down;
+        RaiseLoading();
+    }
+
     void OnPlanWritten() {
         if (_tornDown) return;
         Refresh();
@@ -101,13 +116,16 @@ public sealed class PlanSectionViewModel : ReactiveObject {
     }
 
     void Apply(SessionPlansRead read) {
+        _unreachable = read.Kind == SessionPlansReadKind.Unreachable;
         switch (read.Kind) {
             case SessionPlansReadKind.Ready:
+                _readOnce = true;
                 Show(read.Plans.FirstOrDefault(plan => plan.IsCurrent) ?? (read.Plans.Count > 0 ? read.Plans[0] : null));
                 return;
             case SessionPlansReadKind.Unreachable:
                 return;
             default:
+                _readOnce = true;
                 Clear();
                 return;
         }
@@ -160,6 +178,7 @@ public sealed class PlanSectionViewModel : ReactiveObject {
 
     void RaiseLoading() {
         this.RaisePropertyChanged(nameof(IsLoading));
+        this.RaisePropertyChanged(nameof(IsUnavailable));
         this.RaisePropertyChanged(nameof(ShowsPlan));
     }
 

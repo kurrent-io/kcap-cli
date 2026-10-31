@@ -23,6 +23,17 @@ public class InstallStepViewModelTests {
         bool builtinOffered = true) =>
         new(controller, () => appProfile, () => active, () => true, Offering(builtinOffered ? Offered : null));
 
+    static InstallStepViewModel Step(LocalInstallController controller, Func<CancellationToken, Task<ClientRepairOutcome>> repair) =>
+        new(controller, () => "default", () => "default", () => true, Offering(Offered), repairClients: repair);
+
+    /// Answers each repair with the next outcome, repeating the last.
+    sealed class ScriptedRepair(params ClientRepairOutcome[] outcomes) {
+        public int Calls { get; private set; }
+
+        public Task<ClientRepairOutcome> RunAsync(CancellationToken ct) =>
+            Task.FromResult(outcomes[Math.Min(Calls++, outcomes.Length - 1)]);
+    }
+
     static async Task EnterAndInstallAsync(InstallStepViewModel install) {
         await install.OnEnterAsync(CancellationToken.None);
         await install.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
@@ -178,7 +189,7 @@ public class InstallStepViewModelTests {
         });
 
         await Assert.That(message).IsEqualTo(InstallStepViewModel.NotStartedText);
-        await Assert.That(message!).DoesNotContain("kcap ");
+        await Assert.That(message!).DoesNotContain("kcap setup");
         await Assert.That(detail).IsEqualTo("The local server did not confirm it left setup mode. The setup journal is kept.");
         await Assert.That(detailVisible).IsTrue();
     }
@@ -529,5 +540,168 @@ public class InstallStepViewModelTests {
 
         await Assert.That(canInstall).IsFalse();
         await Assert.That(error is null).IsEqualTo(name.Length == 0);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_older_kcap_is_updated_before_anything_is_asked() {
+        var repair = new TaskCompletionSource<ClientRepairOutcome>();
+        var cli = new FakeKcapCli();
+
+        var (during, after) = await AvaloniaSession.DispatchAsync(async () => {
+            var install = Step(Controller(cli, LocalSetupScript.NoSetup(Config), Probe()), _ => repair.Task);
+            var entering = install.OnEnterAsync(CancellationToken.None);
+            var during = (install.Repairing, install.ChoiceVisible, install.ProgressVisible, install.BackVisible);
+
+            repair.SetResult(new ClientRepairOutcome.Repaired("/usr/local/bin/kcap"));
+            await entering;
+
+            return (during, (install.Repairing, install.ChoiceVisible, install.ClientProblemVisible));
+        });
+
+        await Assert.That(during).IsEqualTo((true, false, false, false));
+        await Assert.That(after).IsEqualTo((false, true, false));
+        await Assert.That(cli.SetupLocalCallCount).IsEqualTo(0);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [MethodDataSource(nameof(Unrepaired))]
+    public async Task An_older_kcap_left_in_place_asks_nothing_and_try_again_repairs_again(ClientRepairOutcome first, string named) {
+        var repair = new ScriptedRepair(first, new ClientRepairOutcome.Clear());
+        var cli = new FakeKcapCli();
+
+        var (problem, shown, after) = await AvaloniaSession.DispatchAsync(async () => {
+            var install = Step(Controller(cli, LocalSetupScript.NoSetup(Config), Probe()), repair.RunAsync);
+            await install.OnEnterAsync(CancellationToken.None);
+            var shown = (install.ClientProblemVisible, install.ChoiceVisible, install.ProgressVisible, install.BackVisible);
+            var problem = install.ClientProblem;
+
+            await install.RepairAgainCommand.Execute().ToTask();
+
+            return (problem, shown, (install.ClientProblemVisible, install.ChoiceVisible));
+        });
+
+        await Assert.That(shown).IsEqualTo((true, false, false, true));
+        await Assert.That(problem).Contains(named);
+        await Assert.That(problem!).DoesNotContain("kcap setup");
+        await Assert.That(after).IsEqualTo((false, true));
+        await Assert.That(repair.Calls).IsEqualTo(2);
+        await Assert.That(cli.SetupLocalCallCount).IsEqualTo(0);
+    }
+
+    public static IEnumerable<Func<(ClientRepairOutcome, string)>> Unrepaired() {
+        yield return () => (new ClientRepairOutcome.Cancelled("/usr/local/bin/kcap"), "/usr/local/bin/kcap");
+        yield return () => (new ClientRepairOutcome.Failed("/usr/local/bin/kcap", "disk full."), "disk full.");
+        yield return () => (new ClientRepairOutcome.OldApp("/Users/me/Applications/kcap.app/Contents/MacOS/kcap"), "/Users/me/Applications/kcap.app");
+    }
+
+    /// Back, then the page again, is how a user leaves a refused run: it must check again rather than replay the
+    /// refusal, and must not ask the search question a second time.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Re_entry_after_an_older_kcap_refusal_checks_again_and_installs_with_the_same_answer() {
+        var cli = new FakeKcapCli { SetupLocalBehavior = RefusedThenCommitted() };
+        var repair = new ScriptedRepair(new ClientRepairOutcome.Clear());
+
+        var (refused, outcome, choice) = await AvaloniaSession.DispatchAsync(async () => {
+            var controller = Controller(cli, LocalSetupScript.NoSetup(Config), Probe());
+            var install = Step(controller, repair.RunAsync);
+            await EnterAndInstallAsync(install);
+            var refused = (install.FailureMessage, install.TryAgainVisible);
+
+            var reopened = Step(controller, repair.RunAsync);
+            await reopened.OnEnterAsync(CancellationToken.None);
+
+            return (refused, controller.Outcome, reopened.ChoiceVisible);
+        });
+
+        await Assert.That(refused).IsEqualTo((InstallStepViewModel.OldClientText, true));
+        await Assert.That(outcome).IsTypeOf<LocalInstallOutcome.Installed>();
+        await Assert.That(choice).IsFalse();
+        await Assert.That(cli.SetupLocalCallCount).IsEqualTo(2);
+        await Assert.That(repair.Calls).IsEqualTo(3);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Try_again_after_an_older_kcap_refusal_repairs_before_rerunning() {
+        var cli = new FakeKcapCli { SetupLocalBehavior = RefusedThenCommitted() };
+        var repair = new ScriptedRepair(new ClientRepairOutcome.Clear());
+
+        var outcome = await AvaloniaSession.DispatchAsync(async () => {
+            var controller = Controller(cli, LocalSetupScript.NoSetup(Config), Probe());
+            var install = Step(controller, repair.RunAsync);
+            await EnterAndInstallAsync(install);
+
+            await install.TryAgainCommand.Execute().ToTask();
+
+            return controller.Outcome;
+        });
+
+        await Assert.That(outcome).IsTypeOf<LocalInstallOutcome.Installed>();
+        await Assert.That(repair.Calls).IsEqualTo(3);
+        await Assert.That(cli.SetupLocalCallCount).IsEqualTo(2);
+    }
+
+    static Func<Action<StreamedLine>, CancellationToken, CancellationToken, Task<StreamingResult>> RefusedThenCommitted() {
+        var refused   = LocalSetupScript.Prints(1, LocalSetupScript.Failed("client_below_floor",
+            "The kcap on PATH (/usr/local/bin/kcap) is 1.3.0-beta.8, and a local installation needs a kcap newer than 1.3.0. Update or remove it before setting up a local installation."));
+        var committed = LocalSetupScript.Prints(0, LocalSetupScript.Committed);
+        var runs      = 0;
+
+        return (onLine, interrupt, ct) => (runs++ == 0 ? refused : committed)(onLine, interrupt, ct);
+    }
+
+    /// The choice can stay up across Back and a return to the page, so Install checks again before it starts anything.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Install_from_the_choice_checks_for_an_older_kcap_again() {
+        var repair = new ScriptedRepair(new ClientRepairOutcome.Clear(), new ClientRepairOutcome.Cancelled("/usr/local/bin/kcap"));
+        var cli    = new FakeKcapCli { SetupLocalBehavior = LocalSetupScript.Prints(0, LocalSetupScript.Committed) };
+
+        var (problem, choice) = await AvaloniaSession.DispatchAsync(async () => {
+            var install = Step(Controller(cli, LocalSetupScript.NoSetup(Config), Probe()), repair.RunAsync);
+            await EnterAndInstallAsync(install);
+
+            return (install.ClientProblemVisible, install.ChoiceVisible);
+        });
+
+        await Assert.That(problem).IsTrue();
+        await Assert.That(choice).IsFalse();
+        await Assert.That(repair.Calls).IsEqualTo(2);
+        await Assert.That(cli.SetupLocalCallCount).IsEqualTo(0);
+    }
+
+    /// After refused arguments the controller still holds the earlier run's answer, so Try again on a blocked Install
+    /// must start with what the user chose this time.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Try_again_on_a_blocked_install_starts_with_the_answer_chosen_now() {
+        var repair  = new ScriptedRepair(new ClientRepairOutcome.Clear(), new ClientRepairOutcome.Clear(),
+            new ClientRepairOutcome.Cancelled("/usr/local/bin/kcap"), new ClientRepairOutcome.Clear());
+        var runs    = 0;
+        var refused = LocalSetupScript.Prints(2, LocalSetupScript.Failed("invalid_arguments"));
+        var cli     = new FakeKcapCli {
+            SetupLocalBehavior = (onLine, interrupt, ct) =>
+                (runs++ == 0 ? refused : LocalSetupScript.Prints(0, LocalSetupScript.Committed))(onLine, interrupt, ct),
+        };
+
+        var (problem, started) = await AvaloniaSession.DispatchAsync(async () => {
+            var install = Step(Controller(cli, LocalSetupScript.NoSetup(Config), Probe()), repair.RunAsync);
+            await EnterAndInstallAsync(install);
+            install.Search.UseKeyword = true;
+            await install.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+            var problem = install.ClientProblemVisible;
+
+            await install.RepairAgainCommand.Execute().ToTask();
+
+            return (problem, cli.SetupLocalEmbeddings.ToList());
+        });
+
+        await Assert.That(problem).IsTrue();
+        await Assert.That(started.Count).IsEqualTo(2);
+        await Assert.That(started[1]).IsEqualTo(LocalEmbeddingChoice.KeywordOnly);
+        await Assert.That(started[0]).IsNotEqualTo(LocalEmbeddingChoice.KeywordOnly);
     }
 }

@@ -127,7 +127,7 @@ public class SessionRailViewModelTests {
             using var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, time);
             directory.Rows.AddOrUpdate(AgentRow.FromLocal(Dto("a", "/repo", created: time.GetUtcNow().UtcDateTime), new RepoIdentity("path:/repo", "repo")));
             var session = rail.Groups.Single().Sessions.Single();
-            await Assert.That(session.Meta).IsEqualTo("0s");
+            await Assert.That(session.Meta).IsEqualTo("<1m");
             time.Advance(TimeSpan.FromMinutes(2));
             await Assert.That(session.Meta).IsEqualTo("2m");
         });
@@ -273,6 +273,22 @@ public class SessionRailViewModelTests {
         });
     }
 
+    /// A stopped agent's row reads Done before the server lists its session ended; the group count
+    /// agrees with the row instead of calling it live.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_completed_local_row_counts_as_ended() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var directory = new FakeAgentDirectory();
+            using var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System);
+            var repo = new RepoIdentity("path:/repo", "repo");
+            directory.Rows.AddOrUpdate(AgentRow.FromLocal(Dto("a", "/repo"), repo));
+            directory.Rows.AddOrUpdate(AgentRow.FromLocal(Dto("b", "/repo", status: "Completed"), repo));
+
+            await Assert.That(rail.Groups.Single().CountText).IsEqualTo("1 live · 1 ended");
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Selecting_a_session_does_not_reorder_the_directory_rows() {
@@ -350,6 +366,29 @@ public class SessionRailViewModelTests {
         });
     }
 
+    /// A quit can still drive the rail's controls after the app has disposed it; that must not
+    /// throw, reach the service or persist.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Control_changes_after_dispose_are_ignored() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var (directory, sessions, _, persisted, rail) = BuildWithControls();
+            using (directory) using (sessions) {
+                rail.Dispose();
+                rail.SetScopeCommand.Execute(RailScope.Team).Subscribe();
+                rail.Scope = RailScope.Team;
+                rail.State = RailState.Ended;
+                rail.Grouping = RailGrouping.Date;
+                rail.Sort = RailSort.Title;
+                rail.Descending = !rail.Descending;
+                rail.ApplyPreferences(new RailPreferences(RailScope.Team, RailState.Ended, RailGrouping.Date, RailSort.Title, false, []));
+
+                await Assert.That(sessions.Scope).IsEqualTo(RailScope.Mine);
+                await Assert.That(persisted).IsEmpty();
+            }
+        });
+    }
+
     /// A local checkout and a remote agent on the same GitHub repo land in one repo group — the
     /// remote session carries the machine badge, the local one doesn't.
     [Test]
@@ -416,6 +455,28 @@ public class SessionRailViewModelTests {
         });
     }
 
+    /// A group named by its folder says so; one named by a repository's remote does not.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_folder_group_reads_as_a_folder_and_a_remote_repository_does_not() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var (service, remote, rail) = Build();
+            using (rail) {
+                service.Agents.AddOrUpdate(Dto("a1", "/dev/scratch"));
+                remote.Cache.AddOrUpdate(RemoteDto("b1", "kurrent-io", "kcap-cli"));
+
+                var folder = rail.Groups.Single(r => r.Label == "scratch");
+                await Assert.That(folder.IsFolder).IsTrue();
+                await Assert.That(folder.Tooltip).StartsWith("/dev/scratch\nFolder, not a repository with a remote");
+                await Assert.That(folder.ToggleAccessibleName).Contains(" folder scratch");
+
+                var repository = rail.Groups.Single(r => r.Label == "kurrent-io/kcap-cli");
+                await Assert.That(repository.IsFolder).IsFalse();
+                await Assert.That(repository.ToggleAccessibleName).DoesNotContain("folder");
+            }
+        });
+    }
+
     // ── controls, grouping, sorting, paging ────────────────────────────────────────────────────
 
     static readonly DateTime Noon = new(2026, 10, 24, 12, 0, 0, DateTimeKind.Utc);
@@ -460,6 +521,28 @@ public class SessionRailViewModelTests {
 
                 await Assert.That(rail.IsEmpty).IsTrue();
             }
+        });
+    }
+
+    /// The PR tone cache reads only what this filter admits, so it must follow the state filter and
+    /// the selected row the rail shows whatever the filter says.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_rail_publishes_the_rows_it_shows() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var directory = new FakeAgentDirectory();
+            var shown = new System.Reactive.Subjects.ReplaySubject<Func<AgentRow, bool>>(1);
+            using var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System, shownRows: shown);
+            var ended = Server("ended");
+            Func<AgentRow, bool>? current = null;
+            using var _s = shown.Subscribe(filter => current = filter);
+            await Assert.That(current!(ended)).IsTrue();
+
+            rail.State = RailState.Live;
+            await Assert.That(current!(ended)).IsFalse();
+
+            rail.SelectedSessionKey = ended.Key;
+            await Assert.That(current!(ended)).IsTrue();
         });
     }
 
@@ -616,6 +699,17 @@ public class SessionRailViewModelTests {
                 await Assert.That(Labels(rail)).IsEquivalentTo(["Waiting on you", "Running", "Ended"], CollectionOrdering.Matching);
             }
         });
+    }
+
+    /// The chip reads Working for a parent waiting on input with a subagent still running, so the
+    /// group must say Running too.
+    [Test]
+    public async Task Status_grouping_puts_a_waiting_parent_with_a_live_subagent_under_running() {
+        var row = Local("parent", awaiting: true) with { LiveSubagents = 1 };
+
+        await Assert.That(SessionStatusDots.Label(row)).IsEqualTo("Working");
+        await Assert.That(SessionRailViewModel.GroupKey(row, RailGrouping.Status, DateOnly.FromDateTime(Noon), TimeZoneInfo.Utc))
+            .IsEqualTo("status:1");
     }
 
     [Test]

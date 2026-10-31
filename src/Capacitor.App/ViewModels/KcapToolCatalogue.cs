@@ -19,6 +19,7 @@ public static class KcapToolCatalogue {
         new("get_page_results",          ToolCategory.Artefact, "Read answers",             null),
         new("close_page_responses",      ToolCategory.Artefact, "Closed answers",           null),
         new("list_my_pages",             ToolCategory.Artefact, "Listed pages",             null),
+        new("get_page",                  ToolCategory.Artefact, "Read page",                null),
         // the same tools under their artefact names, which recorded transcripts still carry
         new("publish_artefact",          ToolCategory.Artefact, "Published page",           "title",  ToolCardKind.Page),
         new("set_artefact_visibility",   ToolCategory.Artefact, "Shared page",              "visibility"),

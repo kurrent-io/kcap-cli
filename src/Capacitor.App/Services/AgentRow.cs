@@ -21,7 +21,7 @@ public sealed record AgentRow(
         int? LiveSubagents = null,
         // A usage-limit question or notice from the local daemon. Null on a remote or pending row.
         UsageLimitNoticeDto? UsageLimit = null,
-        // The select dialog on the local agent's terminal. Null on a remote or pending row.
+        // The select dialog on the agent's terminal. Null on a pending or server row, and from an older server.
         TerminalDialogDto? TerminalDialog = null,
         // Why the local daemon could not resume the agent after a restart; null unless Interrupted.
         string? Interruption = null,
@@ -41,9 +41,15 @@ public sealed record AgentRow(
         bool IsTerminalSession = false,
         // The listing's access level for the viewer; below "full" the server grants no chat.
         string? AccessLevel = null,
+        // The PR links the listing carried for the session; null while no listing row carried the field.
+        RepoSessionPullRequests? ListedPullRequests = null,
         // The account the session runs under. Null from an older daemon and on a pending row.
         string? AccountDirectory = null,
         string? AccountId = null,
+        // The branch the listing reported; null below full access and on a daemon row.
+        string? Branch = null,
+        // The app's own stand-in on the remote lane, until the registry publishes the launch.
+        bool IsPlaceholder = false,
         string? AccountLabel = null) {
 
     /// A session the server lists as ended; a daemon row's Completed is not this.
@@ -66,10 +72,14 @@ public sealed record AgentRow(
         return new AgentRow(
             Key: $"remote:{dto.AgentId}", Origin: AgentOrigin.Remote, Id: dto.AgentId, SessionId: dto.SessionId,
             Kind: "agent", Vendor: dto.Vendor ?? "", Status: CanonicalRemoteStatus(dto.Status), CreatedAt: dto.RegisteredAt,
-            RepoPath: dto.RepoPath, Title: TitleFromPrompt(dto.Prompt), Model: dto.Model, RequesterDisplay: null,
+            RepoPath: dto.RepoPath, Title: dto.Title is { Length: > 0 } ? dto.Title : TitleFromPrompt(dto.Prompt),
+            Model: dto.Model, RequesterDisplay: null,
             WorktreePath: null, WorkLocation: null, BorrowedFrom: null,
             MachineBadge: dto.DaemonName, RepoGroupKey: repo.Key, RepoGroupLabel: repo.Label,
             CheckoutKey: $"@{daemonKey}", CheckoutLabel: $"on {dto.DaemonName}",
+            TerminalDialog: dto.TerminalDialog is { } dialog
+                ? new TerminalDialogDto(dialog.Heading, dialog.Body, dialog.Options, dialog.Selected, dialog.Screen)
+                : null,
             OwnerUserId: dto.OwnerUserId,
             AccountDirectory: dto.AccountDirectory, AccountId: dto.AccountId, AccountLabel: dto.AccountLabel);
     }
@@ -91,7 +101,8 @@ public sealed record AgentRow(
             OwnerUserId: dto.Owner?.UserId, OwnerName: dto.Owner?.DisplayName ?? dto.Owner?.Username,
             OwnerAvatarUrl: dto.Owner?.AvatarUrl,
             LastActivityAt: dto.LastActivityAt.UtcDateTime, EndedAt: dto.EndedAt?.UtcDateTime,
-            IsStale: dto.Stale, IsTerminalSession: active && !hostedPresentation, AccessLevel: dto.AccessLevel);
+            IsStale: dto.Stale, IsTerminalSession: active && !hostedPresentation, AccessLevel: dto.AccessLevel,
+            ListedPullRequests: dto.PullRequests, Branch: dto.Branch);
     }
 
     static string CanonicalRemoteStatus(string status) => status.ToLowerInvariant() switch {
@@ -119,6 +130,18 @@ public sealed record AgentRow(
             string agentId, string vendor, string repoPath, string? title, string? model, DateTime createdAt, RepoIdentity repo) =>
         FromPending(new PendingLaunchDto(agentId, vendor, repoPath, title, createdAt, null), repo)
             with { Model = string.IsNullOrEmpty(model) ? null : model };
+
+    /// The app's stand-in for a launch the server accepted at another machine, keyed as the
+    /// registry will key the agent so a workspace opened on it follows the real row in place.
+    public static AgentRow RemotePlaceholder(
+            string agentId, string machine, string vendor, string repoPath, string? title, string? model,
+            DateTime createdAt, RepoIdentity repo, string daemonKey) => new(
+        Key: $"remote:{agentId}", Origin: AgentOrigin.Remote, Id: agentId, SessionId: null, Kind: "agent",
+        Vendor: vendor, Status: "Starting", CreatedAt: createdAt, RepoPath: repoPath,
+        Title: title, Model: string.IsNullOrEmpty(model) ? null : model, RequesterDisplay: null,
+        WorktreePath: null, WorkLocation: null, BorrowedFrom: null,
+        MachineBadge: machine, RepoGroupKey: repo.Key, RepoGroupLabel: repo.Label,
+        CheckoutKey: $"@{daemonKey}", CheckoutLabel: $"on {machine}", IsPlaceholder: true);
 
     internal static string? TitleFromPrompt(string? prompt) {
         if (string.IsNullOrWhiteSpace(prompt)) return null;

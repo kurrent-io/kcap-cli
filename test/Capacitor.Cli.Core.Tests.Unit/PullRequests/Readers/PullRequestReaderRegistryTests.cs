@@ -85,6 +85,21 @@ public class PullRequestReaderRegistryTests {
         await Assert.That(list.Data.Items[0].HeadRef).IsEqualTo("feature");
     }
 
+    /// A subject picked from a lowercase listing must match the merged row, whatever casing the repository carries.
+    [Test]
+    [Arguments(PullRequestReadKind.Ready)]
+    [Arguments(PullRequestReadKind.Unavailable)]
+    public async Task Discovered_links_are_lowercased_to_match_listed_subjects(PullRequestReadKind serverList) {
+        var links = new StubLinks { Links = [Link("github.com", 5)], ListKind = serverList };
+        var gh = new StubProvider("gh", ready: true, hosts: ["github.com"]) {
+            Discovered = [Link("github.com", 5) with { Owner = "Example", RepoName = "Repo" }] };
+        var registry = new PullRequestReaderRegistry(links, [gh], TimeProvider.System);
+        await registry.DiscoverAsync(false, default);
+        registry.DescribeSession("session", new("github", "github.com", "Example", "Repo", "hash"), "feature");
+        var list = await registry.ListAsync("session", default);
+        await Assert.That(list.Data!.Items.Select(PullRequestWire.Subject).ToArray()).IsEquivalentTo(new[] { Subject(number: 5) });
+    }
+
     [Test]
     public async Task Local_discovery_serves_the_list_when_the_server_links_are_unavailable() {
         var links = new StubLinks { ListKind = PullRequestReadKind.Unavailable };

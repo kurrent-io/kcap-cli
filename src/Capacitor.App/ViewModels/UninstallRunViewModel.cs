@@ -47,6 +47,7 @@ public sealed class UninstallRunViewModel : ReactiveObject {
             this.RaisePropertyChanged(nameof(Description));
             this.RaisePropertyChanged(nameof(ProgressValue));
             this.RaisePropertyChanged(nameof(CloseButtonText));
+            this.RaisePropertyChanged(nameof(DetailsLabel));
             if (value is UninstallRunState.Failed or UninstallRunState.TrashFailed) DetailsExpanded = true;
         }
     }
@@ -65,7 +66,12 @@ public sealed class UninstallRunViewModel : ReactiveObject {
         }
     }
 
-    public string DetailsLabel => DetailsExpanded ? "Hide details" : "Show details";
+    public string DetailsLabel => (DetailsExpanded, IsFinished) switch {
+        (false, true)  => "Show what was removed",
+        (true, true)   => "Hide what was removed",
+        (false, false) => "Show details",
+        (true, false)  => "Hide details",
+    };
 
     public string Description => State switch {
         UninstallRunState.Preparing => "Closing kcap before removing its background services and app.",
@@ -84,6 +90,10 @@ public sealed class UninstallRunViewModel : ReactiveObject {
 
     public ObservableCollection<string> Lines { get; } = [];
 
+    /// What a finished run removed, in the user's terms; the raw <see cref="Lines"/> are for a run that
+    /// is still going or has failed.
+    public ObservableCollection<UninstallReceiptItem> Receipt { get; } = [];
+
     public ReactiveCommand<Unit, Unit> RetryCommand { get; }
     public ReactiveCommand<Unit, Unit> CloseCommand { get; }
     public ReactiveCommand<Unit, bool> ToggleDetailsCommand { get; }
@@ -91,6 +101,7 @@ public sealed class UninstallRunViewModel : ReactiveObject {
     /// Call on the UI thread; only streamed lines arrive through the injected post.
     public async Task RunAsync() {
         Lines.Clear();
+        Receipt.Clear();
 
         // Running disables Close, so no exception may leave the run there.
         try {
@@ -110,9 +121,12 @@ public sealed class UninstallRunViewModel : ReactiveObject {
     async Task RunStepsAsync() {
         StreamingResult result;
         var streamed = 0;
+        var purged = 0;
         try {
             result = await _cli.UninstallAsync(_purgeLocal, line => {
                 Interlocked.Increment(ref streamed);
+                // The CLI's own outcome line: a purge that was asked for may have found no server to purge.
+                if (line.Text.StartsWith("Purged the local server", StringComparison.Ordinal)) Interlocked.Exchange(ref purged, 1);
                 _post(() => Lines.Add(line.Text));
             }, CancellationToken.None);
         } catch (Exception ex) {
@@ -143,10 +157,12 @@ public sealed class UninstallRunViewModel : ReactiveObject {
         }
         Lines.Add("Removed kcap command links.");
 
+        var supportFilesLeft = false;
         try {
             Lines.Add("Cleaning up app support files…");
-            _removal.DeleteSupportFiles();
+            supportFilesLeft = !_removal.DeleteSupportFiles();
         } catch (Exception ex) {
+            supportFilesLeft = true;
             Lines.Add($"Some app support files could not be removed: {ex.Message}");
             Console.Error.WriteLine($"kcap: could not remove the app's support files: {ex.Message}");
         }
@@ -167,7 +183,20 @@ public sealed class UninstallRunViewModel : ReactiveObject {
         }
 
         Lines.Add("Moved the app to the Trash.");
+        FillReceipt(Volatile.Read(ref purged) == 1, supportFilesLeft);
         State = UninstallRunState.Finished;
+    }
+
+    /// Claims only what a zero exit from `kcap uninstall` and the steps after it guarantee.
+    void FillReceipt(bool purgedLocal, bool supportFilesLeft) {
+        Receipt.Add(new("Removed kcap from your coding agents’ user settings"));
+        Receipt.Add(new("Removed kcap’s background services"));
+        if (purgedLocal) Receipt.Add(new("Deleted the local server and every session it recorded"));
+        Receipt.Add(new("Removed your kcap settings and sign-in"));
+        Receipt.Add(new("Removed the kcap command the app installed"));
+        Receipt.Add(new(_removal.Trashed));
+        if (supportFilesLeft)
+            Receipt.Add(new("A few of the app’s own files couldn’t be removed. They don’t keep kcap running.", Done: false));
     }
 
     void Fail(string message) {

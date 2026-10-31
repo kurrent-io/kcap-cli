@@ -27,6 +27,20 @@ public sealed class LifecycleLease : IDisposable {
 
     public LocalRoot Root { get; }
 
+    /// <summary>Probes an existing lifecycle lock without creating or changing any files.</summary>
+    public static bool IsHeld(LocalRoot root) {
+        try {
+            using var probe = new FileStream(root.LockPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            return false;
+        } catch (FileNotFoundException) {
+            return false;
+        } catch (DirectoryNotFoundException) {
+            return false;
+        } catch (IOException ex) when ((ex.HResult & 0xffff) == (OperatingSystem.IsWindows() ? 32 : OperatingSystem.IsMacOS() ? 35 : 11)) {
+            return true;
+        }
+    }
+
     /// <summary>Waits up to <paramref name="wait"/> for the lock. Another holder past that is an error
     /// naming it, not a silent skip: the caller's operation did not run.</summary>
     public static async Task<LifecycleLease> AcquireAsync(LocalRoot root, TimeSpan wait, TimeProvider time, CancellationToken ct) {

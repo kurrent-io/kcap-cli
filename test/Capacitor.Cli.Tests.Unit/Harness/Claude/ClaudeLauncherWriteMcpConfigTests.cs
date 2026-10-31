@@ -100,6 +100,55 @@ public class ClaudeLauncherWriteMcpConfigTests {
         await Assert.That(File.Exists(Path.Combine(worktree, ".mcp.json"))).IsFalse();
     }
 
+    /// <summary>A worktree of a repo that commits its own <c>.mcp.json</c> keeps those servers and gains the user's.</summary>
+    [Test]
+    public async Task Merges_into_a_committed_mcp_json() {
+        var (paths, configDir, sourceRepo, worktree) = Seed();
+
+        WriteClaudeJson(configDir, ClaudeLauncher.NormalizeClaudeProjectKey(sourceRepo));
+        File.WriteAllText(Path.Combine(worktree, ".mcp.json"), """{ "mcpServers": { "committed": { "command": "repo-mcp" } } }""");
+
+        ClaudeLauncher.WriteMcpConfig(sourceRepo, worktree, paths);
+
+        var servers = ReadWorktreeMcpServers(worktree);
+        await Assert.That(servers).IsNotNull();
+        await Assert.That(servers!.ContainsKey("committed")).IsTrue();
+        await Assert.That(servers.ContainsKey("my-server")).IsTrue();
+    }
+
+    /// <summary>A committed <c>.mcp.json</c> keeps its other top-level keys when kcap merges servers into it.</summary>
+    [Test]
+    public async Task Merge_preserves_unrelated_top_level_keys() {
+        var (paths, configDir, sourceRepo, worktree) = Seed();
+
+        WriteClaudeJson(configDir, ClaudeLauncher.NormalizeClaudeProjectKey(sourceRepo));
+        File.WriteAllText(
+            Path.Combine(worktree, ".mcp.json"),
+            """{ "$schema": "https://example.test/mcp.json", "mcpServers": { "committed": { "command": "repo-mcp" } } }"""
+        );
+
+        ClaudeLauncher.WriteMcpConfig(sourceRepo, worktree, paths);
+
+        var root = JsonNode.Parse(File.ReadAllText(Path.Combine(worktree, ".mcp.json")))!.AsObject();
+        await Assert.That(root["$schema"]?.GetValue<string>()).IsEqualTo("https://example.test/mcp.json");
+        await Assert.That(root["mcpServers"]!.AsObject().ContainsKey("committed")).IsTrue();
+        await Assert.That(root["mcpServers"]!.AsObject().ContainsKey("my-server")).IsTrue();
+    }
+
+    /// <summary>Claude prompts for any server not listed by name, so trusting a worktree lists every one.</summary>
+    [Test]
+    public async Task Trust_lists_every_unlisted_mcp_json_server() {
+        var (paths, _, _, worktree) = Seed();
+
+        File.WriteAllText(Path.Combine(worktree, ".mcp.json"), """{ "mcpServers": { "one": {}, "two": {}, "three": {} } }""");
+
+        ClaudeLauncher.TrustWorktreeInClaudeConfig(worktree, paths);
+
+        var settings = JsonNode.Parse(File.ReadAllText(Path.Combine(worktree, ".claude", "settings.local.json")))!;
+        var enabled  = settings["enabledMcpjsonServers"]!.AsArray().Select(n => n!.GetValue<string>());
+        await Assert.That(enabled).IsEquivalentTo(["one", "two", "three"]);
+    }
+
     static void WriteClaudeJsonWithServers(string configDir, string projectKey, JsonObject servers) {
         var json = new JsonObject {
             ["projects"] = new JsonObject {

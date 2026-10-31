@@ -25,6 +25,16 @@ public sealed record TxnMarker(
 public static partial class ServiceTxnMarker {
     public static bool Exists(DaemonStore store, string daemonName) => File.Exists(store.ServiceTxnPath(daemonName));
 
+    /// <summary>When the marker last recorded a phase; null when it is absent or unreadable.</summary>
+    public static DateTimeOffset? WrittenAt(DaemonStore store, string daemonName) {
+        try {
+            var info = new FileInfo(store.ServiceTxnPath(daemonName));
+            return info.Exists ? new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero) : null;
+        } catch {
+            return null;
+        }
+    }
+
     /// <summary>Null on missing OR corrupt — a torn/unreadable marker must never crash a caller.</summary>
     public static TxnMarker? Read(DaemonStore store, string daemonName) {
         var path = store.ServiceTxnPath(daemonName);

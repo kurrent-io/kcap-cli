@@ -249,15 +249,12 @@ sealed class LocalInstaller(
         return committed;
     }
 
-    /// <summary>Brings the recorded embedding setting and the unit together. The setting is marked pending before the
-    /// unit changes and cleared after, so a setup that stops anywhere in between rewrites the unit next time; a refused
-    /// rewrite restores what was recorded before. Files fetched for the recorded built-in model set are a repair: the
-    /// server loads the model only once, so the files land only once the record is marked pending, and the unit is
-    /// rewritten to restart it.</summary>
+    /// <summary>A pending setting forces the next setup to rewrite the unit. A refused rewrite preserves the old
+    /// choice, but built-in changes stay pending because the server loads its model only once.</summary>
     /// <returns>The unit as installed.</returns>
     async Task<LocalServerUnit> ReuseEmbeddingsAsync(LocalServerUnit unit, LocalInstallAnswers answers, Func<LocalInstallFailure> notOurs,
         CancellationToken ct) {
-        // Before the decision, which may pull a model: a refused setup changes nothing, Ollama included.
+        // Check ownership before pulling a model.
         var owner = service.Owner(unit);
         if (owner is not { Loaded: OwnerReading.Absent, OnDisk: OwnerReading.Absent } && LocalRootIdentity.Decide(root, owner) != OwnerDecision.Ours)
             throw notOurs();
@@ -265,8 +262,8 @@ sealed class LocalInstaller(
         var previous  = LocalEmbeddingFile.Read(root);
         var repairing = false;
         var models    = new LocalModelSetDownloader(root, bundles) {
-            Publishing = m => {
-                if (previous is not { Provider: LocalEmbeddingProvider.Builtin } || previous.ModelSetId != m.ModelSet) return true;
+            Publishing = _ => {
+                if (previous is not { Provider: LocalEmbeddingProvider.Builtin }) return true;
 
                 return repairing = LocalEmbeddingStep.Record(root, previous with { Pending = true }, _progress);
             },
@@ -282,7 +279,9 @@ sealed class LocalInstaller(
             LocalOwnUnit.Ensure(root, unit, service, notOurs, startPresent: true, replace: rewrite);
         } catch (LocalInstallFailure refused) when (rewrite) {
             try {
-                LocalEmbeddingStep.Restore(root, previous);
+                LocalEmbeddingStep.Restore(root,
+                    previous is { Provider: LocalEmbeddingProvider.Builtin } && target is { Provider: LocalEmbeddingProvider.Builtin }
+                        ? previous with { Pending = true } : previous);
             } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
                 throw new LocalInstallFailure(refused.Code,
                     $"{refused.Message} {LocalEmbeddingFile.PathFor(root)} could not be restored ({ex.Message}).");
@@ -293,7 +292,7 @@ sealed class LocalInstaller(
 
         if (target is null) return unit;
 
-        if (rewrite && !repairing) LocalEmbeddingStep.Applied(previous, target, _progress);
+        if (rewrite && (!repairing || previous?.ModelSetId != target.ModelSetId)) LocalEmbeddingStep.Applied(previous, target, _progress);
 
         LocalEmbeddingStep.Record(root, target, _progress);
 

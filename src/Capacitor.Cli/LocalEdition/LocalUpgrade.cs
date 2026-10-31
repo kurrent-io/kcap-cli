@@ -136,7 +136,7 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
 
         if (modelSet is null) {
             progress.Report(new LocalInstallEvent.EmbeddingsSkipped(LocalEmbeddingSkipCode.BuiltinUnavailable,
-                $"kcap local {version} offers no built-in search model; the server searches by keyword."));
+                $"kcap local {version} has no built-in search model. The server searches by keyword."));
             return;
         }
 
@@ -154,7 +154,7 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
         if (LocalEmbeddingFile.Read(stack.Root) is { Provider: LocalEmbeddingProvider.Builtin } recorded) {
             recordedSet = recorded.ModelSetId;
 
-            if (recordedSet != modelSet.ModelSet && LocalModelSets.IsPresent(stack.Root, modelSet)) {
+            if ((recorded.Pending || recordedSet != modelSet.ModelSet) && LocalModelSets.IsPresent(stack.Root, modelSet)) {
                 try {
                     if (LocalEmbeddingFile.Write(stack.Root, LocalEmbeddingSetting.Builtin(modelSet.ModelSet))) recordedSet = modelSet.ModelSet;
                 } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
@@ -211,7 +211,7 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
             LocalBin.Switch(stack.Root, details.To);
         } catch (Exception ex) {
             throw new LocalUpgradeFailure(LocalInstallFailureCode.CommitFailed,
-                $"The switch to kcap local {details.To} could not be confirmed ({ex.Message}). Nothing was restored; the next kcap local upgrade, start or setup --local finishes it.",
+                $"The switch to kcap local {details.To} could not be confirmed ({ex.Message}). Nothing was restored. Run kcap local upgrade to finish.",
                 switched: true);
         }
 
@@ -249,8 +249,8 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
             CompleteOrThrow(lease, details);
 
             throw new LocalUpgradeFailure(LocalInstallFailureCode.StartFailed,
-                $"kcap local {details.To} did not start: {ex.Message} It stays selected and stopped, and {details.From} is kept in "
-              + $"{bundle}. Nothing is rolled back; kcap local logs shows why, and kcap local start tries again.",
+                $"kcap local {details.To} did not start: {ex.Message} It stays selected and stopped. {details.From} is kept in "
+              + $"{bundle}. Nothing is rolled back. Run kcap local logs for details. Run kcap local start to retry.",
                 switched: true);
         }
 
@@ -288,7 +288,7 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
     /// <summary>The journal is kept at <c>starting</c>, so the next lifecycle command starts the new version again.</summary>
     static LocalUpgradeFailure Unfinished(UpgradeDetails details, string why) =>
         new(LocalInstallFailureCode.StartFailed,
-            $"kcap local {details.To} is selected, but {why}. Nothing is rolled back; the next kcap local upgrade, start or setup --local finishes the upgrade.",
+            $"kcap local {details.To} is selected, but {why}. Nothing is rolled back. Run kcap local upgrade to finish.",
             switched: true);
 
     /// <summary>Whether the old version is back as it was, and a sentence saying so; never throws.</summary>
@@ -308,7 +308,7 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
                 outcome = (true, $"kcap local {details.From} stays selected and stopped, as it was.");
             }
         } catch (Exception ex) {
-            outcome = (false, $"kcap local {details.From} stays selected but did not start again ({ex.Message}); kcap local start tries again.");
+            outcome = (false, $"kcap local {details.From} stays selected but did not start again ({ex.Message}). Run kcap local start to retry.");
         }
 
         lease.Complete();

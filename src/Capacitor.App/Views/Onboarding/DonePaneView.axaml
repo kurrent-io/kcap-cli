@@ -60,7 +60,7 @@
                         <DataTemplate x:DataType="vm:CaptureItem">
                             <Border Classes="onboardingRowRule" Padding="0,8">
                                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                                    <TextBlock Text="{Binding Label}" FontSize="13" Foreground="{StaticResource OnboardingTextBrush}" VerticalAlignment="Center" />
+                                    <TextBlock Text="{Binding Label}" FontSize="13" LineHeight="20" Foreground="{StaticResource OnboardingTextBrush}" VerticalAlignment="Center" />
                                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                                         <Ellipse Width="6" Height="6" VerticalAlignment="Center" Classes.needsYou="{Binding NeedsYou}">
                                             <Ellipse.Styles>
@@ -68,7 +68,7 @@
                                                 <Style Selector="Ellipse.needsYou"><Setter Property="Fill" Value="{StaticResource OnboardingAtmosphereBrush}" /></Style>
                                             </Ellipse.Styles>
                                         </Ellipse>
-                                        <TextBlock Text="{Binding State}" Classes="onboardingSignal" VerticalAlignment="Center"
+                                        <TextBlock Text="{Binding State}" Classes="onboardingSignal" LineHeight="20" VerticalAlignment="Center"
                                                    Classes.needsYou="{Binding NeedsYou}">
                                             <TextBlock.Styles>
                                                 <Style Selector="TextBlock"><Setter Property="Foreground" Value="{StaticResource KcapSuccessBrush}" /></Style>
@@ -82,11 +82,11 @@
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
                 <TextBlock Classes="onboardingBody" IsVisible="{Binding NoAgentsVisible}"
-                           Text="No agents were connected in this setup" />
+                           Text="{Binding NoAgentsLine}" />
                 <TextBlock x:Name="FirstSessionText" Classes="onboardingBody" IsVisible="{Binding FirstSessionVisible}"
                            Text="{x:Static vm:DoneStepViewModel.FirstSessionLine}" />
                 <TextBlock Classes="onboardingNote" IsVisible="{Binding PathHazardVisible}">
-                    <Run Text="Nothing is stored until the login shell can find " /><Run Text="kcap" FontFamily="{StaticResource OnboardingMonoFont}" /><Run Text=". Go back to your agents to fix it" />
+                    <Run Text="Nothing is stored until your terminal can find " /><Run Text="kcap" FontFamily="{StaticResource OnboardingMonoFont}" /><Run Text=". Go back to your agents to fix it" />
                 </TextBlock>
                 <TextBlock Classes="onboardingNote" onboarding:OnboardingSpans.Spans="{Binding ImportHint}"
                            IsVisible="{Binding ImportHint, Converter={x:Static ObjectConverters.IsNotNull}}" />
@@ -111,7 +111,7 @@
         <Border x:Name="ServiceCard" Classes="onboardingCard">
             <StackPanel Spacing="10">
                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                    <TextBlock Classes="onboardingLabel" FontSize="15" VerticalAlignment="Center"
+                    <TextBlock Classes="onboardingLabel" FontSize="15" LineHeight="20" VerticalAlignment="Center"
                                Text="{x:Static vm:DoneStepViewModel.ServiceTitle}" />
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                         <views:AppIcon Kind="LoaderCircle" Size="12" IsVisible="{Binding ServiceInstalling}"
@@ -125,7 +125,7 @@
                                 <Style Selector="Ellipse.failed"><Setter Property="Fill" Value="{StaticResource KcapDangerBrush}" /></Style>
                             </Ellipse.Styles>
                         </Ellipse>
-                        <TextBlock x:Name="ServiceStatusText" Classes="onboardingSignal" Text="{Binding ServiceStatus}" VerticalAlignment="Center" />
+                        <TextBlock x:Name="ServiceStatusText" Classes="onboardingSignal" LineHeight="20" Text="{Binding ServiceStatus}" VerticalAlignment="Center" />
                     </StackPanel>
                 </Grid>
                 <TextBlock x:Name="ServiceBodyText" Classes="onboardingBody" FontSize="13" Text="{Binding ServiceBody}" />

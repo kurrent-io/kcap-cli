@@ -58,6 +58,8 @@ static partial class NextWorkEmitter {
     internal const string Guidance =
         "Finish a listed item before starting new work. When you decide to defer something in this " +
         "session, declare it at that moment with declare_loose_end (one call per item, never \"none\"). " +
+        "A flaky test you hit and do not fix here, one that failed and then passed on a rerun, is a loose " +
+        "end too: declare it the same way. " +
         CompletionInstruction;
 
     /// <summary>Appended to <see cref="Guidance"/> only when the ack's <c>agent_start</c> says this server

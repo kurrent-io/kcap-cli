@@ -351,8 +351,11 @@ public sealed partial class WatcherManager(
     public void ClaimAgentProcess(string key, string vendor, string? transcriptPath = null, string? cwd = null) {
         if (AgentSessions.HostsOneSession(vendor) && SessionId.Parse(key) is { } session
          && ProcessHelpers.GetCodingAgentPid(vendor, allowFallback: false) is { } agentPid)
-            AgentSessions.OnThisMachine(config).Claim(agentPid, session, new ClaimOrigin(vendor, Url, transcriptPath, cwd));
+            AgentSessions.OnThisMachine(config).Claim(agentPid, session, OriginOf(vendor, transcriptPath, cwd, HostedAgent.FromEnvironment()));
     }
+
+    ClaimOrigin OriginOf(string vendor, string? transcriptPath, string? cwd, HostedAgent hosted) =>
+        new(vendor, Url, transcriptPath, cwd, hosted.AgentId, hosted.DaemonEpoch);
 
     public void SpawnWhatsDoneGenerator(string sessionId, string vendor = "claude", TextWriter? stderr = null) {
         try {

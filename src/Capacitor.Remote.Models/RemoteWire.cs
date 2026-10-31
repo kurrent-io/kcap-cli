@@ -59,6 +59,10 @@ public static class ApiRoutes {
         + (owner is null ? "" : $"&owner={Uri.EscapeDataString(owner)}");
     public static string SessionDetail(string sessionId) =>
         $"api/sessions/{Uri.EscapeDataString(sessionId)}/detail";
+    public static string Search(string query, string mode, int limit) =>
+        $"api/search?q={Uri.EscapeDataString(query)}&mode={mode}&limit={limit}";
+    public static string SessionSummary(string sessionId) =>
+        $"api/sessions/{Uri.EscapeDataString(sessionId)}/summary";
     public static string SubagentEvents(string sessionId, string agentId, long from) =>
         $"api/sessions/{Uri.EscapeDataString(sessionId)}/agents/{Uri.EscapeDataString(agentId)}/events?from={from}";
     public static string PermissionResponse(string sessionId, string requestId) =>

@@ -56,8 +56,10 @@ running notes file that every PR edits.
 - **Server-origin launch and stop share one serial lane**, sequenced and un-sequenced alike, so
   arrival order survives. One lock guards handler admission and the processor's single null→live
   transition: there is no second command domain, ever.
-- **Codex MCP setup owns only what it created.** Entries it added are tracked in
-  `mcp-ownership-v1.json`, and uninstall preserves anything it cannot prove it wrote.
+- **Codex MCP setup owns only what it created.** Entries it added, and the sandbox network keys it
+  set with the values they replaced, are tracked in `mcp-ownership-v1.json`; uninstall undoes only
+  what it can prove it wrote and still holds kcap's value, and says why it keeps the rest. An empty ledger
+  proves nothing, so it never justifies deleting config.
 - **Desktop-app daemon mutations go through one app-lifetime lane** with one shared evidence
   predicate: classifying a failure as success is the cardinal sin.
 - **Auth commits in one ordered boundary** — claims, then config and provider stamp, then tokens —
@@ -89,6 +91,19 @@ running notes file that every PR edits.
   `Process.Kill(bool)` is banned in the daemon assembly, and a daemon with no terminal on any
   standard stream ignores SIGHUP outright — there is nothing to hang up, and exiting 0 on it is an
   exit launchd never restarts.
+- **The Windows service never runs user-controlled code as SYSTEM.** `kcap-service.exe` is the only
+  SYSTEM code, and it runs from `%ProgramFiles%\kcap\service\`, a directory it sets administrator-only
+  rather than trusting inheritance. Everything it starts — each user's daemon from their own Velopack
+  install, the user's `kcap daemon stop --direct` — runs with that user's token, and anything it opens
+  from a profile it opens while impersonating that user. Its only elevation is the UAC prompt in front of
+  `kcap-service.exe install`; a Velopack MSI cannot stand in for it, because its install hook runs
+  without admin rights and its silent per-machine install lands in a user-writable folder.
+- **Nothing kcap runs prunes worktrees.** Unless `worktree.useRelativePaths` is set, git links a
+  worktree by absolute path, and a sandbox mounting the host's repository sees it at another path:
+  from there every host-made worktree looks dangling, and the other way round. A `git worktree prune`
+  on either side deletes metadata for worktrees that are fine. The SessionStart nudge asks the user
+  to switch the repository to relative links instead; it never converts on its own, because git
+  older than 2.48 then refuses to open the repository at all.
 - **A hosted agent's launch prompt never goes on its command line.** Any local user can read a
   command line through `ps`, and a `pkill -f` from any session matches every agent whose prompt
   contains its pattern. The PTY launch spawns the agent without its prompt and pastes it into the
@@ -302,6 +317,7 @@ Description: **before writing it, open [.github/PULL_REQUEST_TEMPLATE.md](.githu
 - **AOT warnings only show on publish** — `dotnet build` does NOT surface IL3050/IL2026 trimming warnings. Run `dotnet publish -c Release` after changes.
 - **JsonArray collection expressions** — `[item1, item2]` compiles to `Add<T>()` which requires dynamic code. Use `new JsonArray(item1, item2)` constructor instead.
 - **TUnit test filtering** — Use `--treenode-filter` with glob syntax, NOT `--filter`.
+- **Docs figures** — `KCAP_SHOTS_OUT=<absolute dir> dotnet run --project test/Capacitor.App.Tests.Unit/Capacitor.App.Tests.Unit.csproj -- --treenode-filter "/*/*/DocsShots/*"` renders the desktop app's docs figures; without the variable those tests skip. kcap-web's `scripts/docs-shots/capture-desktop.sh` consumes them.
 - **macOS AOT binary code signing** — After copying an AOT binary, run `codesign --force --sign -` to re-sign.
 - **Never read an agent-owned file with a write-denying open** — `File.ReadAllText`/`ReadAllTextAsync` open `FileShare.Read`, which *denies Write to every other handle* for the duration. On Windows that sharing is mandatory, so it stops the agent writing to its own transcript/sidecar — worst on the shutdown final drain, when it is flushing its last records. Read via `WatchCommand.ReadAllTextShared`/`ReadAllTextSharedAsync` (or your own `FileStream(..., FileShare.ReadWrite)`) for anything the agent writes: transcripts and their `{id}.json` sidecars. Config/settings files we own are fine. **This is invisible on macOS/Linux** — Unix has no mandatory sharing, so a violation passes locally and only reddens the Windows CI leg (AI-1629 was exactly this, on the one read that missed the rule while seven siblings had it).
 - **README sync on CLI changes** — Any change to user-facing CLI surface (new command, new/renamed/removed flag, changed default behavior, new prerequisite) must update `README.md` in the *same* PR. Check both the quick-start (`## Getting started`) and the per-command section under `## CLI commands`. Updating only `src/Capacitor.Cli.Core/Resources/help-*.txt` is not enough — the README is the public-facing docs. This has been missed repeatedly and has required follow-up doc-only PRs (#60, #61).

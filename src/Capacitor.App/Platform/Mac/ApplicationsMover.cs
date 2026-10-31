@@ -1,8 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
-using System.Xml;
-using System.Xml.Linq;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
 
@@ -10,30 +8,39 @@ namespace Capacitor.App.Platform.Mac;
 
 public sealed record MoveOutcome(bool Moved, string? InstalledPath, string? Error, bool PermissionDenied = false);
 
+/// <summary>
+/// Installs the running copy as <c>kcap.app</c> in an Applications folder, replacing an older installed copy and
+/// superseding the other kcap bundles there (the running one, a pre-rebrand "Kurrent Capacitor.app"). Copying, the
+/// swap and reference repair roll back together. The running bundle itself is never moved: a single-file app loads
+/// assemblies from its executable on first use, so its removal goes to <paramref name="retirement"/> instead.
+/// </summary>
 public sealed partial class ApplicationsMover(
         IProcessRunner runner, Func<string, string, bool> promote, string applicationsDir = "/Applications",
         Func<string, string, bool>? swap = null, Func<string, bool>? isRunning = null,
         Func<string, CancellationToken, Task<bool>>? quitRunning = null,
         Func<IApplicationReferences>? migrateReferences = null,
-        Func<string, CancellationToken, Task<bool>>? activate = null, string? userApplicationsDir = null) {
-    const string BundleName = "kcap.app";
+        Func<string, CancellationToken, Task<bool>>? activate = null, string? userApplicationsDir = null,
+        IBundleRetirement? retirement = null, string? systemApplicationsDir = null) {
+    const string BundleName = KcapBundle.BundleName;
     static readonly TimeSpan CopyTimeout = TimeSpan.FromMinutes(2);
 
     public static IReadOnlyList<string> ApplicationDirectories(string bundleRoot, string userApplicationsDir,
             string systemApplicationsDir = "/Applications") {
         var source = Path.GetFullPath(bundleRoot.TrimEnd('/'));
-        bool Existing(string directory) => ReadVersion(Path.Combine(directory, BundleName)) is not null;
+        bool Existing(string directory) => KcapBundle.Read(Path.Combine(directory, BundleName)) is not null;
         var directories = new[] { systemApplicationsDir, userApplicationsDir };
         var existing = directories.Where(Existing).ToArray();
         bool Conflicts(string directory) {
             var target = Path.Combine(directory, BundleName);
-            return Path.GetFullPath(target) != source && Exists(target) && ReadVersion(target) is null;
+            return Path.GetFullPath(target) != source && Exists(target) && KcapBundle.Read(target) is null;
         }
         if (Conflicts(systemApplicationsDir) || existing.Any(Conflicts))
             return directories;
+        // The running copy's folder owns the install only while it is the one installed: with a copy in the other
+        // folder too, the daemon and terminal command follow only one of them, so the user picks which to keep.
         var home = Path.GetDirectoryName(source);
         if (Path.GetFileName(source) == BundleName && home is not null
-                && existing.Contains(home) && ReadVersion(source) is not null)
+                && existing.SequenceEqual([home]) && KcapBundle.Read(source) is { Legacy: false })
             return [home];
         if (existing.Length > 0) return existing;
         return [Path.GetDirectoryName(source) == userApplicationsDir ? userApplicationsDir : systemApplicationsDir];
@@ -41,20 +48,43 @@ public sealed partial class ApplicationsMover(
 
     public ApplicationsInstallPlan Inspect(string bundleRoot) {
         var target = Path.Combine(applicationsDir, BundleName);
-        var source = ReadVersion(bundleRoot);
-        if (source is null)
+        if (KcapBundle.Read(bundleRoot) is not { Legacy: false } source)
             return new(ApplicationsInstallAction.Blocked, target, Error: "This copy of kcap is incomplete or cannot be verified. Download it again.");
-        if (Exists(target) && ReadVersion(target) is null)
-            return new(ApplicationsInstallAction.Blocked, target, source, Error: $"{target} already exists, but is not a verified kcap bundle. Choose another Applications folder or move it aside in Finder.");
-        var installed = ReadVersion(target);
-        var existing = installed is null ? null : target;
-        var payload = installed is not null && !PrereleaseSemver.IsNewer(source, installed) ? target : bundleRoot;
-        var payloadVersion = ReadVersion(payload)!;
+        var installed = KcapBundle.Read(target);
+        if (Exists(target) && installed is null)
+            return new(ApplicationsInstallAction.Blocked, target, source.Version, Error: $"There is already a kcap.app in {Path.GetDirectoryName(target)}, but it looks damaged or is not kcap, so it is left alone. Move it to the Trash, then come back to install.");
+        var newer = installed is null || installed.Legacy || PrereleaseSemver.IsNewer(source.Version, installed.Version);
         var action = installed is null ? ApplicationsInstallAction.Install
-            : PrereleaseSemver.IsNewer(source, installed)
-                ? ApplicationsInstallAction.Update : ApplicationsInstallAction.OpenInstalled;
-        return new(action, target, payloadVersion, installed, ExistingPath: existing, PayloadPath: payload);
+            : newer ? ApplicationsInstallAction.Update : ApplicationsInstallAction.OpenInstalled;
+        var installing = newer ? source.Version : installed!.Version;
+        return new(action, target, installing, installed?.Version,
+            ExistingPath: installed is null ? null : target, PayloadPath: newer ? bundleRoot : target,
+            Replaces: Predecessors(bundleRoot, target, installing));
     }
+
+    /// Every folder holds a verified kcap.app: the choice is which installed copy to keep, not where to install.
+    public static bool InstalledInEach(IEnumerable<string> directories) =>
+        directories.All(directory => KcapBundle.Read(Path.Combine(directory, BundleName)) is not null);
+
+    string[] ApplicationFolders =>
+        new[] { systemApplicationsDir, userApplicationsDir, applicationsDir }.OfType<string>().Select(Full).Distinct().ToArray();
+
+    /// The running bundle when it sits in an Applications folder under another name or in the other folder, a
+    /// kcap.app in the other folder, and a pre-rebrand bundle in either folder; never the target, never anything that
+    /// is not a verified kcap bundle, and never one newer than what is being installed: a pre-rebrand path keeps
+    /// receiving in-place updates.
+    IReadOnlyList<string> Predecessors(string bundleRoot, string target, string installing) {
+        var source = Full(bundleRoot);
+        var folders = ApplicationFolders;
+        var candidates = folders.Select(folder => Path.Combine(folder, KcapBundle.LegacyBundleName))
+            .Concat(folders.Select(folder => Path.Combine(folder, BundleName))).ToList();
+        if (Path.GetDirectoryName(source) is { } parent && folders.Contains(parent)) candidates.Insert(0, source);
+        return candidates.Distinct()
+            .Where(root => root != Full(target) && KcapBundle.Read(root) is { } bundle && !PrereleaseSemver.IsNewer(bundle.Version, installing))
+            .ToArray();
+    }
+
+    static string Full(string path) => Path.GetFullPath(path.TrimEnd('/'));
 
     static bool Exists(string path) => Directory.Exists(path) || File.Exists(path) || new FileInfo(path).LinkTarget is not null;
 
@@ -62,18 +92,25 @@ public sealed partial class ApplicationsMover(
         ct.ThrowIfCancellationRequested();
         var plan = Inspect(bundleRoot);
         if (plan.Action == ApplicationsInstallAction.Blocked) return new(false, plan.Target, plan.Error);
-        if (plan.Action == ApplicationsInstallAction.OpenInstalled) return new(true, plan.Target, null);
-        var roots = new[] { plan.ExistingPath, plan.Target }.OfType<string>().Distinct().Where(Directory.Exists).ToArray();
+        var copies = plan.Action != ApplicationsInstallAction.OpenInstalled;
+        if (!copies && plan.Replaces.Count == 0) return new(true, plan.Target, null);
+        var source = Full(bundleRoot);
+        var deferred = plan.Replaces.Contains(source) ? KcapBundle.Read(source) : null;
+        var retiring = plan.Replaces.Where(root => root != source).ToArray();
+        var roots = new[] { plan.ExistingPath, plan.Target }.Concat(retiring).OfType<string>().Distinct().Where(Directory.Exists).ToArray();
         foreach (var root in roots) {
             if (isRunning?.Invoke(root) != true) continue;
             if (quitRunning is null || !await quitRunning(root, ct))
-                return new(false, plan.Target, "Could not quit the installed copy of kcap. Quit it and try again.");
+                return new(false, plan.Target, Path.GetFileName(root) == KcapBundle.LegacyBundleName
+                    ? "Could not quit Kurrent Capacitor. Quit it and try again."
+                    : "Could not quit the installed copy of kcap. Quit it and try again.");
         }
         var staging = Path.Combine(applicationsDir, $"kcap.app.staging-{Guid.NewGuid():N}");
         var displaced = new List<(string Original, string Backup)>();
         IApplicationReferences? references = null;
         var promoted = false;
         var swapped = false;
+        var scheduled = false;
         var destinationPermissionDenied = false;
         void WriteDestination(Action write) {
             try { write(); }
@@ -82,43 +119,54 @@ public sealed partial class ApplicationsMover(
                 throw;
             }
         }
+        void CancelRetirement() {
+            if (!scheduled) return;
+            scheduled = false;
+            retirement?.Cancel(source);
+        }
         try {
-            WriteDestination(() => {
-                Directory.CreateDirectory(applicationsDir);
-                Directory.CreateDirectory(staging);
-            });
-            var copy = await runner.RunAsync("ditto", [plan.PayloadPath!, staging], new RunOptions(Timeout: CopyTimeout), ct).ConfigureAwait(false);
-            ct.ThrowIfCancellationRequested();
-            if (copy.TimedOut) return Fail(staging, "Copying took too long. Try again.");
-            if (copy.ExitCode != 0) return Fail(staging, $"Copying failed: {copy.Stderr.Trim()}");
-            if (ReadVersion(staging) != plan.SourceVersion) return Fail(staging, "The copy is incomplete.");
-            if (Inspect(bundleRoot) != plan) return Fail(staging, "The installed copy changed while copying. Try again.");
+            if (copies) {
+                WriteDestination(() => {
+                    Directory.CreateDirectory(applicationsDir);
+                    Directory.CreateDirectory(staging);
+                });
+                var copy = await runner.RunAsync("ditto", [plan.PayloadPath!, staging], new RunOptions(Timeout: CopyTimeout), ct).ConfigureAwait(false);
+                ct.ThrowIfCancellationRequested();
+                if (copy.TimedOut) return Fail(staging, "Copying took too long. Try again.");
+                if (copy.ExitCode != 0) return Fail(staging, $"Copying failed: {copy.Stderr.Trim()}");
+                if (KcapBundle.Read(staging)?.Version != plan.SourceVersion) return Fail(staging, "The copy is incomplete.");
+                if (Inspect(bundleRoot) != plan) return Fail(staging, "The installed copy changed while copying. Try again.");
+            }
             if (roots.Any(root => isRunning?.Invoke(root) == true)) return Fail(staging, "An installed copy opened while copying. Quit it and try again.");
 
             references = migrateReferences?.Invoke();
-            var retiredRoots = new[] { plan.ExistingPath, bundleRoot }
-                .OfType<string>().Where(root => root != plan.Target && ReadVersion(root) is not null
-                    && (root == plan.ExistingPath || Path.GetDirectoryName(root) is "/Applications" || Path.GetDirectoryName(root) == userApplicationsDir))
-                .Distinct().ToArray();
-            if (references is not null) await references.PrepareAsync([.. retiredRoots.Concat(roots).Distinct()], plan.Target, ct).ConfigureAwait(false);
-            WriteDestination(() => {
-                if (Exists(plan.Target)) {
-                    if (swap?.Invoke(staging, plan.Target) != true) throw new IOException("The update could not be installed. The existing copy has not been changed.");
-                    swapped = true;
-                } else {
-                    if (!promote(staging, plan.Target)) throw new IOException("kcap.app appeared while copying. Open that copy instead.");
-                    promoted = true;
-                }
-            });
+            if (references is not null) await references.PrepareAsync([.. plan.Replaces.Concat(roots).Distinct()], plan.Target, ct).ConfigureAwait(false);
+            if (copies) {
+                WriteDestination(() => {
+                    if (Exists(plan.Target)) {
+                        if (swap?.Invoke(staging, plan.Target) != true) throw new IOException("The update could not be installed. The existing copy has not been changed.");
+                        swapped = true;
+                    } else {
+                        if (!promote(staging, plan.Target)) throw new IOException("kcap.app appeared while copying. Open that copy instead.");
+                        promoted = true;
+                    }
+                });
+            }
             if (references is not null) await references.ApplyAsync(ct).ConfigureAwait(false);
-            foreach (var root in retiredRoots) {
+            foreach (var root in retiring) {
                 var backup = root + ".migrating-" + Guid.NewGuid().ToString("N");
                 Directory.Move(root, backup);
                 displaced.Add((root, backup));
             }
+            if (deferred is not null && retirement is not null) {
+                retirement.Schedule(deferred);
+                scheduled = true;
+            }
             if (activate is not null && !await activate(plan.Target, ct)) {
-                if (isRunning?.Invoke(plan.Target) == true && (quitRunning is null || !await quitRunning(plan.Target, CancellationToken.None)))
+                if (isRunning?.Invoke(plan.Target) == true && (quitRunning is null || !await quitRunning(plan.Target, CancellationToken.None))) {
+                    CancelRetirement();
                     return new(false, plan.Target, "The replacement app could not be closed. The new installation and recovery backups have been retained; open the installed kcap app before retrying.");
+                }
                 throw new IOException("Could not confirm kcap opened. The installation will be restored; try again.");
             }
             foreach (var (_, backup) in displaced) RemoveStaging(backup);
@@ -132,6 +180,7 @@ public sealed partial class ApplicationsMover(
                     throw new IOException($"Could not restore {plan.Target}; its backup is {staging}.");
                 if (promoted) Directory.Move(plan.Target, staging);
             }
+            try { CancelRetirement(); } catch (Exception cancel) { errors.Add(cancel.Message); }
             try {
                 if (references is not null) await references.RollbackAsync(RestoreBundles).ConfigureAwait(false);
                 else RestoreBundles();
@@ -142,27 +191,6 @@ public sealed partial class ApplicationsMover(
                 PermissionDenied: destinationPermissionDenied && errors.Count == 1);
         } finally {
             if (references is not null) await references.DisposeAsync().ConfigureAwait(false);
-        }
-    }
-
-    static string? ReadVersion(string root) {
-        try {
-            if (!Directory.Exists(root) || new DirectoryInfo(root).LinkTarget is not null ||
-                !File.Exists(Path.Combine(root, "Contents", "MacOS", "kcap-desktop"))) return null;
-            using var reader = XmlReader.Create(Path.Combine(root, "Contents", "Info.plist"),
-                new XmlReaderSettings { DtdProcessing = DtdProcessing.Ignore, XmlResolver = null });
-            var entries = XDocument.Load(reader).Root?.Element("dict")?.Elements().ToArray();
-            if (entries is null) return null;
-            string? Value(string key) {
-                for (var i = 0; i + 1 < entries.Length; i += 2)
-                    if (entries[i].Name == "key" && entries[i].Value == key && entries[i + 1].Name == "string")
-                        return entries[i + 1].Value;
-                return null;
-            }
-            return Value("CFBundleIdentifier") == "io.kurrent.kcap"
-                ? Value("CFBundleVersion") ?? Value("CFBundleShortVersionString") : null;
-        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or XmlException) {
-            return null;
         }
     }
 

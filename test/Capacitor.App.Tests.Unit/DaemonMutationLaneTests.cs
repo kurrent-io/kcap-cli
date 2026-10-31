@@ -194,6 +194,29 @@ public class DaemonMutationLaneTests {
         await Assert.That(cli.StartVerifiedCallCount).IsEqualTo(0);
     }
 
+    /// A probe that throws is an unknown version, so the replace prompt still shows and claims no version change.
+    [Test]
+    public async Task A_throwing_version_probe_reads_as_unknown_and_the_prompt_still_shows() {
+        var cli = new FakeKcapCli { VersionBehavior = _ => Task.FromException<string?>(new IOException("kcap vanished")) };
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli });
+
+        var version = await lane.CliVersionAsync(Req(MutationVerb.Replace), CancellationToken.None);
+
+        await Assert.That(version).IsNull();
+        var prompt = new LifecyclePrompt(LifecyclePrompt.KindTakeover, null, null, false, DaemonLifecycleController.TakeoverDisclosure);
+        await Assert.That(DaemonLifecycleController.WithVersionChange(prompt, "1.4.1", version)).IsSameReferenceAs(prompt);
+    }
+
+    [Test]
+    public async Task A_cancelled_version_probe_still_throws() {
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        var cli = new FakeKcapCli { VersionBehavior = Task.FromCanceled<string?> };
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli });
+
+        await Assert.That(async () => await lane.CliVersionAsync(Req(MutationVerb.Replace), cts.Token)).Throws<OperationCanceledException>();
+    }
+
     [Test]
     public async Task Identical_concurrent_requests_coalesce_into_one_probe_and_one_mutation() {
         var request = Req();
@@ -549,6 +572,20 @@ public class DaemonMutationLaneTests {
         var outcome = await lane.RunAsync(request, CancellationToken.None);
         await Assert.That(cli.LastRetireServiceId).IsEqualTo("old-name");
         await Assert.That(outcome).IsEqualTo(new MutationOutcome.Failed(30, "foreign_profile", RecoverySurface.Attention));
+    }
+
+    [Test]
+    public async Task InstallWindowsService_dispatches_the_elevated_install_and_reads_a_declined_prompt_as_a_refusal() {
+        var cli = new FakeKcapCli {
+            InstallWindowsServiceBehavior = _ => Task.FromResult(new ProcessResult(VerifyExitCodes.ElevationDeclined, "", "declined", false)),
+        };
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli });
+
+        var outcome = await lane.RunAsync(Req(MutationVerb.InstallWindowsService), CancellationToken.None);
+
+        await Assert.That(cli.InstallWindowsServiceCallCount).IsEqualTo(1);
+        await Assert.That(cli.InstallVerifiedCallCount).IsEqualTo(0);
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.Refused("elevation_declined", RecoverySurface.Attention));
     }
 
     [Test]
@@ -1835,6 +1872,18 @@ public class DaemonMutationLaneTests {
         await Assert.That(outcome).IsEqualTo(
             new MutationOutcome.Failed(0, "network: could not allow the server's domain", RecoverySurface.Attention));
         await Assert.That(probes).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task A_refresh_with_a_failed_step_is_a_failure() {
+        var request = MutationRequestFactory.ForAccount(MutationVerb.AccountRefresh, new AccountArgs(null, null, "abcd1234", null), "daemon-a", "default");
+        var cli = AccountCli(0, ResultLine([Step("limits", succeeded: false, detail: "no reading")], revision: 9));
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli });
+        lane.AccountsRevisionReached = (_, _) => Task.FromResult(true);
+
+        var outcome = await lane.RunAsync(request, CancellationToken.None).WaitAsync(Bounded);
+
+        await Assert.That(outcome).IsTypeOf<MutationOutcome.Failed>();
     }
 
     [Test]

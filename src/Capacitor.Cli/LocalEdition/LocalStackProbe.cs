@@ -14,7 +14,7 @@ namespace Capacitor.Cli.LocalEdition;
 /// </summary>
 static class LocalStackProbe {
     public const string ServerLockName     = "server.lock";
-    public const string PostgresSocketName = ".s.PGSQL.5432";
+    public const string PostgresSocketName = LocalSockets.PostgresName;
 
     static readonly TimeSpan PollGap = TimeSpan.FromMilliseconds(250);
 
@@ -29,7 +29,7 @@ static class LocalStackProbe {
 
     /// <summary>Unlike <see cref="FindLive"/> this takes nothing, so it is safe while the server may be starting.</summary>
     public static string? FindLivePostgres(LocalRoot root) {
-        if (Accepting(Path.Combine(root.Directory, "run", PostgresSocketName))) return "Postgres still accepts connections on its socket";
+        if (Accepting(LocalSockets.Postgres(root))) return "Postgres still accepts connections on its socket";
         if (PostmasterRunning(PostmasterPidPath(root)) is { } pid) return $"the Postgres postmaster (pid {pid}) is still running";
 
         return null;

@@ -37,6 +37,9 @@ public sealed class LateBoundLocalControlOps(Func<ILocalControlOps> bind) : ILoc
 
     public Task<DaemonSettingsAckDto> PutDaemonSettingsAsync(DaemonSettingsPutDto put, CancellationToken ct) =>
         bind().PutDaemonSettingsAsync(put, ct);
+
+    public Task<SessionRenameAckDto> RenameSessionAsync(SessionRenameDto rename, CancellationToken ct) =>
+        bind().RenameSessionAsync(rename, ct);
 }
 
 /// <summary>
@@ -61,6 +64,8 @@ public sealed class LateBoundKcapCli(Func<IKcapCli> bind, string? cliPath) : IKc
 
     public Task<ProcessResult> ServiceReloadAsync(CancellationToken ct) => bind().ServiceReloadAsync(ct);
 
+    public Task<ProcessResult> ServiceInstallWindowsServiceAsync(CancellationToken ct) => bind().ServiceInstallWindowsServiceAsync(ct);
+
     public Task<ProcessResult> ServiceInstallVerifiedAsync(bool replace, CancellationToken ct, string? retireServiceId = null) =>
         bind().ServiceInstallVerifiedAsync(replace, ct, retireServiceId);
 
@@ -72,6 +77,8 @@ public sealed class LateBoundKcapCli(Func<IKcapCli> bind, string? cliPath) : IKc
 
     public Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct, IReadOnlyList<string>? options = null) =>
         bind().PluginInstallAsync(vendorFlag, ct, options);
+
+    public Task<ProcessResult> PluginRemoveAsync(string? vendorFlag, CancellationToken ct) => bind().PluginRemoveAsync(vendorFlag, ct);
 
     public Task<ProcessResult> AccountsAsync(MutationVerb verb, AccountArgs args, CancellationToken ct) =>
         bind().AccountsAsync(verb, args, ct);

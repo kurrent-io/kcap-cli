@@ -11,20 +11,21 @@ using ReactiveUI.Reactive;
 namespace Capacitor.App.ViewModels;
 
 /// <summary>
-/// How the local server searches: a word beside its version in the rail, which opens the Settings tab that
-/// changes it by running setup again. An upgrade and a search change cannot run together, so each holds the other off.
+/// How the local server searches, managed in Settings by running setup again.
+/// An upgrade and a search change cannot run together, so each holds the other off.
 /// </summary>
 public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     public const string BusyText = "Another local setup, upgrade or uninstall is running on this Mac. Try again once it has finished.";
 
     static readonly string[] Derived = [
         nameof(Running), nameof(StateText), nameof(CurrentText), nameof(CanApply), nameof(ApplyLabel), nameof(Embeddings),
-        nameof(FailureText), nameof(ShowsSettingsLink), nameof(ShowsInlineSettings),
+        nameof(FailureText), nameof(ShowsSettingsLink), nameof(ShowsInlineSettings), nameof(SettingApplied),
     ];
 
     readonly LocalSearchController _search;
     readonly LocalUpgradeController _upgrade;
     readonly Func<LocalEmbeddingSetting?> _readSetting;
+    readonly Func<bool>? _builtinModelReady;
     readonly Func<CancellationToken, Task<LocalEmbeddingModelManifest?>> _builtinOffer;
     readonly Func<Task> _reconnect;
     readonly CancellationToken _shutdown;
@@ -35,20 +36,23 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     LocalEmbeddingSetting? _current;
     bool _canOpenSettings;
     bool _loaded;
+    bool _builtinNeedsRetry;
 
     /// <param name="readSetting">The installation's recorded embedding setting; a disk read, run on
     /// <paramref name="readScheduler"/> (the task pool by default), never on the UI thread.</param>
     /// <param name="builtinOffer">The built-in model set the installed stack offers, or null; asked again on every reconnect,
     /// which follows an upgrade.</param>
     /// <param name="openSettings">What opens Settings on its Search tab, null while no Settings window can open.</param>
+    /// <param name="builtinModelReady">Validates installed model files off the UI thread. Pending or failed setup still needs a retry.</param>
     public LocalSearchViewModel(
             Func<LocalEmbeddingSetting?> readSetting, Func<CancellationToken, Task<LocalEmbeddingModelManifest?>> builtinOffer,
             IObservable<ServerLaneStatus> status, LocalSearchController search,
             LocalUpgradeController upgrade, Func<Task> reconnect, CancellationToken shutdown, IScheduler? readScheduler = null,
-            IObservable<Action?>? openSettings = null) {
+            IObservable<Action?>? openSettings = null, Func<bool>? builtinModelReady = null) {
         _search        = search;
         _upgrade       = upgrade;
         _readSetting   = readSetting;
+        _builtinModelReady = builtinModelReady;
         _builtinOffer  = builtinOffer;
         _reconnect     = reconnect;
         _shutdown      = shutdown;
@@ -70,6 +74,8 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
 
         search.Settled += OnSettled;
         Disposable.Create(() => search.Settled -= OnSettled).DisposeWith(_disposables);
+        upgrade.Settled += OnUpgradeSettled;
+        Disposable.Create(() => upgrade.Settled -= OnUpgradeSettled).DisposeWith(_disposables);
 
         // A setup run from a terminal restarts the server when it changes the model, so a reconnect rereads the setting.
         status
@@ -101,30 +107,30 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
 
     public LocalEmbeddingProgress Embeddings => _search.Progress.Embeddings;
 
-    /// The rail's word for it; null until the setting has been read.
+    /// The current search mode; null until the setting has been read.
     public string? StateText =>
         Running ? "setting up search"
         : !_loaded ? null
-        : CurrentByMeaning ? "search by meaning" : "keyword search";
+        : _current is { Pending: true } ? "search setup pending"
+        : CurrentByMeaning && !BuiltinNeedsRetry ? "search by meaning" : "keyword search";
 
     public string? CurrentText => !_loaded ? null
-        : (_current switch {
+        : _current is { Pending: true } ? "Search changes have not been applied yet."
+        : BuiltinNeedsRetry ? "Search works by keyword until the built-in model is ready."
+        : _current switch {
             { Model: { } model }                         => $"Searches by meaning with {model}.",
             { Provider: LocalEmbeddingProvider.Builtin } => "Searches by meaning with the built-in model.",
-            _                                            => "Searches by keyword, unless an embedding provider is set in the server's own settings.",
-        })
-        + (_current is { Pending: true } ? " The change is not applied yet." : "");
+            _                                            => "Searches by keyword unless the server's own settings choose a model.",
+        };
 
     public bool CanApply =>
         _loaded && !Running && !_upgrade.Running && Choice.Valid && !Choice.AwaitingOffer
-     && (Differs(Choice.Choice) || _current is null or { Pending: true });
+     && (Differs(Choice.Choice) || _current is null or { Pending: true } || BuiltinNeedsRetry && Choice.UseBuiltin);
 
-    public string ApplyLabel => Choice.Choice switch {
-        { ByMeaning: false }                         => "Use keyword search",
-        _ when !CurrentByMeaning                     => "Turn on search by meaning",
-        { Provider: LocalEmbeddingProvider.Builtin } => "Use the built-in model",
-        _                                            => "Use this model",
-    };
+    public string ApplyLabel => BuiltinNeedsRetry && Choice.UseBuiltin ? "Try again" : "Save";
+
+    internal bool SettingApplied => _loaded && !Running && !_upgrade.Running && !BuiltinNeedsRetry
+        && _current is { Pending: false, Provider: LocalEmbeddingProvider.None or LocalEmbeddingProvider.Ollama or LocalEmbeddingProvider.Builtin };
 
     public string? FailureText => !Running && _search.Outcome is LocalInstallOutcome.Failed failed
         ? failed.Affordance == LocalInstallAffordance.Busy ? BusyText : TerminalAdvice.Strip(failed.Message) ?? "Setup did not finish."
@@ -134,13 +140,15 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
 
     public ReactiveCommand<Unit, Unit> OpenSettingsCommand { get; }
 
-    /// The rail word opens the Settings tab when there is one to open.
+    /// Whether the Search tab can be opened in Settings.
     public bool ShowsSettingsLink => StateText is not null && _canOpenSettings;
 
-    /// Without a Settings window, the rail word opens the same controls in place.
+    /// Without a profile, the support menu offers the search controls directly.
     public bool ShowsInlineSettings => StateText is not null && !_canOpenSettings;
 
     bool CurrentByMeaning => _current is { Model: not null } or { Provider: LocalEmbeddingProvider.Builtin };
+
+    bool BuiltinNeedsRetry => _current is { Provider: LocalEmbeddingProvider.Builtin } && (_builtinNeedsRetry || _current.Pending);
 
     bool Differs(LocalEmbeddingChoice choice) => choice.Provider switch {
         LocalEmbeddingProvider.Builtin => _current?.Provider != LocalEmbeddingProvider.Builtin,
@@ -151,21 +159,44 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     Task ApplyAsync() => CanApply ? _search.StartAsync(Choice.Choice, _shutdown) : Task.CompletedTask;
 
     void OnSettled(LocalInstallOutcome outcome) {
-        if (outcome is LocalInstallOutcome.Installed) _ = ReconnectAsync();
+        if (outcome is LocalInstallOutcome.Installed) {
+            if (_search.Progress.Embeddings is { Configured: true } or { SkipCode: "declined" }) _builtinNeedsRetry = false;
+            _ = ReconnectAsync();
+        }
+        ReadSetting(checkBuiltinModelReady: outcome is LocalInstallOutcome.Installed);
+        Refresh();
+    }
+
+    void OnUpgradeSettled(LocalUpgradeOutcome outcome) {
+        if (outcome is not (LocalUpgradeOutcome.Upgraded or LocalUpgradeOutcome.Failed { Switched: true })) return;
+        _builtinNeedsRetry = _upgrade.Progress.Embeddings.Skipped;
         ReadSetting();
         Refresh();
     }
 
-    void ReadSetting() =>
-        _read.Disposable = Observable.Start(_readSetting, _readScheduler)
+    void ReadSetting(bool checkBuiltinModelReady = true) {
+        _read.Disposable = Observable.Start(() => {
+                var setting = _readSetting();
+                bool? builtinNeedsRetry = setting switch {
+                    { Provider: LocalEmbeddingProvider.Builtin, Pending: true } => true,
+                    { Provider: LocalEmbeddingProvider.Builtin } when checkBuiltinModelReady => !_builtinModelReady?.Invoke(),
+                    { Provider: LocalEmbeddingProvider.Builtin } => null,
+                    _ => false,
+                };
+                return (setting, builtinNeedsRetry);
+            }, _readScheduler)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(setting => {
-                // An unchanged setting leaves a choice the user is still making alone.
-                if (!_loaded || setting != _current) Choice.Prefill(setting);
+            .Subscribe(snapshot => {
+                var (setting, builtinNeedsRetry) = snapshot;
+                var prefill = !_loaded || setting != _current;
+                if (builtinNeedsRetry is { } needsRetry) _builtinNeedsRetry = needsRetry;
                 _current = setting;
                 _loaded  = true;
+                // An unchanged setting leaves a choice the user is still making alone.
+                if (prefill) Choice.Prefill(setting);
                 Refresh();
             }, ex => Console.Error.WriteLine($"kcap app: reading the local search setting failed: {ex.Message}"));
+    }
 
     void LookUpOffer() =>
         _offer.Disposable = Observable.FromAsync(_builtinOffer)

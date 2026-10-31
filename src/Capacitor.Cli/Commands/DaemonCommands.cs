@@ -370,9 +370,11 @@ public sealed class DaemonCommands(
         }
 
         var yes     = args.Contains("--yes") || args.Contains("-y");
+        // Only kcap-service needs it; under launchd or systemd a stop that skips the manager is restarted
+        var direct  = OperatingSystem.IsWindows() && args.Contains("--direct");
         var request = new ShutdownRequestDto(args.Contains("--keep-agents") ? "keep" : "end", "final");
 
-        if (name is not null) return await StopByNameAsync(name, request);
+        if (name is not null) return await StopByNameAsync(name, request, direct);
 
         // No --name: enumerate all running daemons.
         var candidates = EnumerateRunningNames();
@@ -412,15 +414,27 @@ public sealed class DaemonCommands(
         return failed == 0 ? 0 : 1;
     }
 
-    async Task<int> StopByNameAsync(string name, ShutdownRequestDto request) {
-        var manager = TryServiceManager();
-        if (manager is not null && manager.Status(DaemonStore.Sanitize(name)).State != ServiceState.NotInstalled) {
-            console.Out.WriteLine(
-                $"Daemon '{name}' is managed by {manager.Describe()}; a raw stop would be auto-restarted.");
-            console.Out.WriteLine($"Use: kcap daemon service stop --name {name}  (or uninstall to remove it)");
+    /// <summary>The exit for a stop of a daemon a service manager supervises, or null when none does. The
+    /// refusal is a failure: the daemon keeps running, and a script reading 0 would take it as stopped.</summary>
+    internal static int? RefuseSupervisedStop(
+            IServiceManager? manager, string name, ShutdownRequestDto request, TextWriter error) {
+        if (manager is null) return null;
 
-            return 0;
-        }
+        var id = DaemonStore.Sanitize(name);
+        if (ManagedState(manager, id) == ServiceState.NotInstalled) return null;
+
+        var keep = request.Agents == "keep" ? " --keep-agents" : "";
+        error.WriteLine($"Daemon '{name}' is managed by {manager.Describe()}; a raw stop would be auto-restarted.");
+        error.WriteLine($"Use: kcap daemon service stop --name {id}{keep}  (or uninstall to remove it)");
+
+        return 1;
+    }
+
+    /// <param name="direct">Asks the daemon itself even when a service manages it: the Windows service's own
+    /// graceful stop, which would otherwise be refused here and sent back to the service</param>
+    async Task<int> StopByNameAsync(string name, ShutdownRequestDto request, bool direct = false) {
+        if (RefuseSupervisedStop(direct ? null : TryServiceManager(), name, request, console.Error) is { } refused)
+            return refused;
 
         if (DaemonPidProbe.ReadPidFile(store, name) is not { } entry) {
             // ReadPidFile returns null for BOTH an absent file and a present-but-
@@ -1039,6 +1053,14 @@ public sealed class DaemonCommands(
     IServiceManager? TryServiceManager() {
         try { return ServiceManagerFactory.ForCurrentOs(config, home, time); }
         catch (PlatformNotSupportedException) { return null; }
+    }
+
+    /// <summary>A Windows service that does not answer counts as managing the name: a raw stop under it would
+    /// be relaunched. Every other manager reports as it always has</summary>
+    static ServiceState ManagedState(IServiceManager manager, string id) {
+        if (manager is not WindowsServiceManager) return manager.Status(id).State;
+        try { return manager.Status(id).State; }
+        catch (InvalidOperationException) { return ServiceState.Installed; }
     }
 
     /// <summary>

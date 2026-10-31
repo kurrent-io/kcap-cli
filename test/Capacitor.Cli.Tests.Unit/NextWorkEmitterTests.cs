@@ -52,6 +52,7 @@ public class NextWorkEmitterTests {
     public async Task The_guidance_names_deferral_and_completion() {
         await Assert.That(NextWorkEmitter.Guidance).Contains("Finish a listed item before starting new work.");
         await Assert.That(NextWorkEmitter.Guidance).Contains("declare it at that moment with declare_loose_end (one call per item, never \"none\")");
+        await Assert.That(NextWorkEmitter.Guidance).Contains("A flaky test you hit and do not fix here, one that failed and then passed on a rerun, is a loose end too");
         await Assert.That(NextWorkEmitter.Guidance).EndsWith(NextWorkEmitter.CompletionInstruction);
     }
 

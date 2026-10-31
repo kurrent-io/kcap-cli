@@ -50,6 +50,13 @@ public sealed class HistoryRepoRow : ReactiveObject {
         }
     }
 
+    /// Carries the choice made on the row this one replaces, skipped or not, with the audience it would
+    /// import at.
+    internal void Adopt(HistoryRepoRow previous) {
+        _imported = previous._imported;
+        Level     = previous.Level;
+    }
+
     /// Checking a repository again brings back the audience it had before it was skipped.
     public bool Included {
         get => Level != ImportLevel.Skip;

@@ -3,7 +3,10 @@ kcap local — Run the local installation that `kcap setup --local` made
 Usage: kcap local <subcommand> [options]
 
 Subcommands:
-  status                    Explain the installation's state: version, port, service, search, each store, what to do
+  status                    Explain the installation's state: version, port, service, search, each store, what to do.
+                            Names a stopped, changing, uninstalled, purged or port-blocked server apart
+                            (a port another program answers on is blocked, even when the OS cannot name it)
+                            and suggests start only when a start can bring it up
   start                     Start the server and wait until it is ready
   stop                      Stop the server and wait until nothing of it is left; it stays stopped until start
   restart                   Stop, then start
@@ -35,4 +38,6 @@ upgrade exits 0 when it upgraded, 1 when it failed before the switch, 2 when it 
 when there was nothing to do, and 4 when no bundle is published for this version yet.
 
 The installation lives in ~/.config/kcap/local, or in KCAP_LOCAL_ROOT when it is set; its logs are
-in the logs directory under it.
+in the logs directory under it. The root must leave room for the stack's sockets: the longest,
+data/kurrentdb/kurrent.sock under it, must fit in 103 bytes on macOS (107 on Linux), so setup refuses
+a longer root before it installs anything.

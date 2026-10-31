@@ -3,21 +3,22 @@ using Velopack.Sources;
 
 namespace Capacitor.App.Services.Update;
 
-/// IAppUpdater over Velopack's UpdateManager. The prerelease rule reads the installed version at
-/// feed time, so a beta install follows betas and a stable install does not.
+/// IAppUpdater over Velopack's UpdateManager. Prereleases are offered when the user opted in, or,
+/// with no choice made, when the installed version is itself a prerelease.
 public sealed class VelopackAppUpdater : IAppUpdater {
     readonly UpdateManager _manager;
+    readonly Func<bool?> _betaChoice;
     UpdateInfo? _lastCheck;
 
-    public VelopackAppUpdater(Func<string, string?> getEnv) {
-        var source = new PrereleaseFilteringSource(
-            new SimpleWebSource(UpdateFeed.Resolve(getEnv)),
-            () => _manager?.CurrentVersion?.IsPrerelease == true);
+    public VelopackAppUpdater(Func<string, string?> getEnv, Func<bool?> betaChoice) {
+        _betaChoice = betaChoice;
+        var source = new PrereleaseFilteringSource(new SimpleWebSource(UpdateFeed.Resolve(getEnv)), () => AllowsPrerelease);
         _manager = new UpdateManager(source);
     }
 
     public bool IsAvailable => _manager.IsInstalled;
     public string? InstalledVersion => _manager.CurrentVersion?.ToString();
+    public bool AllowsPrerelease => _betaChoice() ?? _manager.CurrentVersion?.IsPrerelease == true;
 
     public UpdateCandidate? PendingRestart =>
         _manager.UpdatePendingRestart is { } asset ? new UpdateCandidate(asset.Version.ToString(), asset.Version.IsPrerelease) : null;
@@ -30,11 +31,11 @@ public sealed class VelopackAppUpdater : IAppUpdater {
         return new UpdateCandidate(target.ToString(), target.IsPrerelease);
     }
 
-    public Task DownloadAsync(UpdateCandidate candidate, CancellationToken ct) {
+    public Task DownloadAsync(UpdateCandidate candidate, CancellationToken ct, Action<int>? progress = null) {
         var info = _lastCheck;
         if (info is null || info.TargetFullRelease.Version.ToString() != candidate.Version)
-            throw new InvalidOperationException($"No check offered {candidate.Version}; check before downloading.");
-        return _manager.DownloadUpdatesAsync(info, null, ct);
+            throw new InvalidOperationException($"No check offered {candidate.Version}. Check before downloading.");
+        return _manager.DownloadUpdatesAsync(info, progress, ct);
     }
 
     public void ApplyOnExit(UpdateCandidate candidate) =>

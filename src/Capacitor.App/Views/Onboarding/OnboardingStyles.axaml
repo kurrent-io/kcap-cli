@@ -296,6 +296,11 @@
         <Setter Property="BorderBrush" Value="{StaticResource OnboardingDimBrush}" />
         <Setter Property="Background" Value="Transparent" />
     </Style>
+    <!-- Center the visible square inside the table checkbox's 24px hit area. -->
+    <Style Selector="CheckBox.onboardingTableCheck /template/ Grid#RootGrid">
+        <Setter Property="Width" Value="20" />
+        <Setter Property="HorizontalAlignment" Value="Center" />
+    </Style>
     <Style Selector="CheckBox.onboardingCheck:pointerover /template/ Border#NormalRectangle">
         <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentBrush}" />
         <Setter Property="Background" Value="Transparent" />
@@ -312,11 +317,16 @@
         <Setter Property="VerticalAlignment" Value="Top" />
         <Setter Property="HorizontalAlignment" Value="Left" />
     </Style>
+    <Style Selector="CheckBox.onboardingTableCheck /template/ Border#NormalRectangle,
+                     CheckBox.onboardingTableCheck /template/ Viewbox">
+        <Setter Property="HorizontalAlignment" Value="Center" />
+    </Style>
     <Style Selector="CheckBox.onboardingCheck:checked /template/ Path#CheckGlyph,
                      CheckBox.onboardingCheck:checked:pointerover /template/ Path#CheckGlyph,
                      CheckBox.onboardingCheck:checked:pressed /template/ Path#CheckGlyph">
         <Setter Property="Fill" Value="{StaticResource OnboardingAccentOnBrush}" />
         <Setter Property="Width" Value="10" />
+        <Setter Property="HorizontalAlignment" Value="Center" />
         <Setter Property="Opacity" Value="1" />
     </Style>
     <!-- Mixed: an owner whose repositories disagree. Filled like checked, with the theme's dash. -->

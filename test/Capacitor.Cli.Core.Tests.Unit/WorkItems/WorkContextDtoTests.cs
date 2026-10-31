@@ -48,6 +48,24 @@ public class WorkContextDtoTests {
     }
 
     [Test]
+    public async Task Summary_reads_usage_and_sharing() {
+        const string body = """{"session_id":"s1","visibility":null,"default_visibility":"org","detail_level":"activity","agent_visibility":"scoped","stats":{"token_usage_by_model":[{"model":"opus","input_tokens":10,"output_tokens":20,"cache_read_tokens":30,"cache_write_tokens":40}],"peak_context_tokens":142000,"peak_context_window":0,"context_usage_percent":null,"context_window":200000,"estimated_cost_usd":1.25,"total_tool_calls":4}}""";
+
+        var summary = JsonSerializer.Deserialize(body, CapacitorJsonContext.Default.SessionSummaryDto)!;
+
+        await Assert.That(summary.DefaultVisibility).IsEqualTo("org");
+        await Assert.That(summary.DetailLevel).IsEqualTo("activity");
+        await Assert.That(summary.AgentVisibility).IsEqualTo("scoped");
+        await Assert.That(summary.Stats!.TokenUsageByModel[0].InputTokens).IsEqualTo(10L);
+        await Assert.That(summary.Stats.TokenUsageByModel[0].OutputTokens).IsEqualTo(20L);
+        await Assert.That(summary.Stats.TokenUsageByModel[0].CacheReadTokens).IsEqualTo(30L);
+        await Assert.That(summary.Stats.TokenUsageByModel[0].CacheWriteTokens).IsEqualTo(40L);
+        await Assert.That(summary.Stats.PeakContextTokens).IsEqualTo(142_000L);
+        await Assert.That(summary.Stats.ContextWindow).IsEqualTo(200_000L);
+        await Assert.That(summary.Stats.EstimatedCostUsd).IsEqualTo(1.25);
+    }
+
+    [Test]
     public async Task A_null_list_member_deserializes_to_empty_rather_than_null() {
         const string topologyBody = """{"parts":null,"part_of":null,"blocks":null,"blocked_by":null,"cycle":"none","item":null}""";
         const string summaryBody = """{"session_id":"s1","repositories":null,"pull_requests":null}""";

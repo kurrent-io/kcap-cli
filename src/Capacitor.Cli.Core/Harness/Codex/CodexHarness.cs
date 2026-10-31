@@ -19,10 +19,13 @@ public sealed class CodexHarness : IHarness<CodexHarness> {
     /// override a second time.</summary>
     public CodexPaths Paths { get; }
 
-    // PATH-only, for the same reason as Claude: ~/.codex is created by things other than a
-    // Codex run.
+    // ChatGPT's desktop app bundles Codex inside itself, never on PATH.
     public HarnessSignals Signals => new() {
         LaunchSignal   = probe => probe.Finds(CliBinary),
+        UserDataSignal = Paths.HasUserData,
+        AppSignal      = apps => apps.Finds(
+            "Codex.app", Path.Combine("ChatGPT.app", "Contents", "Resources", "codex-cli"), "Codex", "com.openai.codex"),
+        BundledCli     = CodexDesktopCli.Find,
         Wired          = () => CodexHooksInstaller.ReferencesKcapHook(Paths.UserHooksJson),
     };
 }

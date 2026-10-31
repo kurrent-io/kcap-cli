@@ -36,16 +36,26 @@ Options for stop:
   --yes, -y               Unattended mode: stop all running daemons without
                           prompting. Useful in cleanup scripts.
   --keep-agents           Keep the hosted agents for the next start to resume.
+  --direct                Windows only: ask the daemon itself even when a service
+                          manages it. The Windows service uses it for its own
+                          graceful stop; to stop a supervised daemon, use
+                          `daemon service stop`.
+
+A daemon that a service supervises (launchd, systemd, or on Windows kcap-service
+or a Scheduled Task) is not stopped, since the service would restart it: stop
+exits 1 and prints the `kcap daemon service stop --name N` command to use.
 
 Options for restart:
-  (none)                  Restart now. Interactive agents are stopped and resumed
-                          on the new daemon. Refused while an eval, a launch or a
-                          flow participant's round is in progress.
+  (none)                  Restart now. Interactive agents and Claude flow
+                          reviewers are stopped and resumed on the new daemon.
+                          Refused while an eval, a launch or a flow
+                          participant's round is in progress.
   --when-idle             Queue the restart; it applies once the daemon hosts no
                           agents at all and no eval or launch is in progress.
                           Returns immediately.
   --force                 Restart without waiting for a flow round: a flow
-                          participant mid-round is parked or ended. An eval or a
+                          participant mid-round is resumed with its round (a
+                          Claude reviewer), parked (Codex) or ended. An eval or a
                           launch in progress still holds the restart.
 
 Updating: after `kcap update`, a running daemon on macOS/Linux detects the new
@@ -93,7 +103,18 @@ Subcommands for service (per-user; auto-restarts on crash/SIGKILL, starts at log
                           contended, never taken over.
                           --no-start cannot be combined with --verify (verify
                           proves the STARTED daemon is ready).
+                          Refused, changing nothing, from inside an agent that
+                          the daemon it would stop or retire hosts: stopping
+                          that daemon would end the command partway. Run it
+                          from a terminal the daemon does not host.
+  install --system [...]  Windows: first install or update the machine's
+                          kcap-service (one administrator prompt), then hand
+                          this daemon to it. Needs the desktop app's install,
+                          which carries kcap-service.exe. A declined prompt
+                          exits 1223 and changes nothing.
   uninstall [--name N]    Stop and remove the service unit.
+  uninstall --system      Windows: hand this daemon back, then remove the
+                          machine's kcap-service (one administrator prompt).
   uninstall --under DIR   Stop and remove every unit whose daemon binary is
                           inside DIR, and no other. The desktop app's
                           uninstaller runs this for its own folder.
@@ -108,6 +129,8 @@ Subcommands for service (per-user; auto-restarts on crash/SIGKILL, starts at log
                           the OS supervisor; stays installed — returns at next
                           login or `service start`). Ends its hosted agents;
                           --keep-agents keeps them for the next start to resume.
+                          While the desktop app runs, it starts its stopped
+                          daemon service again; quit the app to keep it stopped.
   ensure [--name N] [--profile P] [--json]
                           Flow-driven ladder: from a fresh status read, install
                           when there is no unit (baking the born-prompt consent
@@ -145,10 +168,10 @@ Subcommands for shim (the command-line tool — kcap on your terminal PATH):
   ensure [--json]         Probe a new terminal's PATH. If kcap already
                           resolves, report already_on_path and exit 0. If it
                           is absent, link kcap to this CLI in the first PATH
-                          folder you can write to, else in /usr/local/bin
-                          (macOS; that prompts once for your admin password)
-                          or ~/.local/bin (Linux), or add its folder to your
-                          user PATH (Windows), then
+                          folder you can write to, else in ~/.local/bin
+                          (macOS also adds that folder to PATH in your shell
+                          profile), or add its folder to your user PATH
+                          (Windows). No admin password is ever asked for. Then
                           re-probe so success is never reported on the change
                           alone. Every ambiguous row fails closed with a coded
                           reason: an unknown probe (probe_unknown), a

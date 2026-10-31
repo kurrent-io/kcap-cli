@@ -33,10 +33,13 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
     public bool   SupportsPrReview   => launcher.SupportsPrReview;
     public bool   SupportsBorrowedReviewFlow => launcher.SupportsBorrowedReviewFlow;
     public bool   SupportsRestartResume(string? runtimeTransport) => launcher.SupportsResume;
+    public bool   SupportsReviewerRestartResume(string? runtimeTransport, Core.LocalIpc.WorkLocation work) =>
+        work == Core.LocalIpc.WorkLocation.OwnedWorktree && launcher.SupportsReviewerResume;
 
     /// <summary>The launcher passes no prompt argument for an empty prompt and nothing is pasted, so the agent
     /// reopens its session and waits.</summary>
     public bool ResumesIdleWithoutPrompt(string? runtimeTransport) => SupportsRestartResume(runtimeTransport);
+
     public string? BorrowedReviewContainment => launcher.BorrowedReviewContainment;
 
     /// <summary>PTY factories delegate reviewer-model resolution to their launcher-owned policy — the
@@ -154,7 +157,8 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
         var disablesApprovalPrompts = launcher.DisablesApprovalPrompts(launcherCtx);
 
         var pty     = ptyFactory.Spawn(launcher.CliPath, args, ctx.Worktree.Path, env, ctx.Cols, ctx.Rows, removeEnv);
-        var runtime = new PtyHostedAgentRuntime(ctx.Vendor, pty, time, disablesApprovalPrompts, logger);
+        var runtime = new PtyHostedAgentRuntime(ctx.Vendor, pty, time, disablesApprovalPrompts, logger,
+            readyOnBracketedPaste: OperatingSystem.IsWindows());
 
         if (launchPrompt is not null) {
             runtime.DeliverLaunchPrompt(launchPrompt);
@@ -195,7 +199,7 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
     [LoggerMessage(Level = LogLevel.Debug, Message = "Agent {AgentId} received its launch prompt")]
     partial void LogLaunchPromptDelivered(string agentId);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId}'s startup output never settled; its launch prompt was pasted after {Seconds}s")]
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId} never settled ready for input; its launch prompt was pasted after {Seconds}s")]
     partial void LogLaunchPromptPastedBlind(string agentId, double seconds);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId} exited before it received its launch prompt")]

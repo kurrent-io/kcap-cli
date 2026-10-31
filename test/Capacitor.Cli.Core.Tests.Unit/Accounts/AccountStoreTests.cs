@@ -217,6 +217,112 @@ public class AccountStoreTests {
     }
 
     [Test]
+    public async Task Registry_entry_without_new_fields_loads_with_generation_zero() {
+        Tmp.CreateFile("accounts/accounts.json", """
+            { "version": 1, "revision": 2, "accounts": [
+                { "id": "ok", "vendor": "Codex", "directory": "/h/.codex-work", "label": "work",
+                  "added_at": "2026-01-01T00:00:00Z", "wired_at": "2026-01-02T00:00:00Z", "wiring_failure": null }
+            ] }
+            """);
+
+        var account = Store().Load().Accounts.Single();
+
+        await Assert.That(account.Generation).IsEqualTo(0L);
+        await Assert.That(account.GenerationStartedAt).IsNull();
+        await Assert.That(account.StatusLine).IsNull();
+        await Assert.That(account.LabelSetByUser).IsNull();
+        await Assert.That(account.ProbeSeq).IsEqualTo(0L);
+    }
+
+    [Test]
+    public async Task A_registry_without_trust_fields_loads_them_null() {
+        Tmp.CreateFile("accounts/accounts.json", """
+            { "version": 1, "revision": 2, "accounts": [
+                { "id": "ok", "vendor": "Codex", "directory": "/h/.codex-work", "label": "work", "added_at": "2026-01-01T00:00:00Z" }
+            ] }
+            """);
+
+        var account = Store().Load().Accounts.Single();
+
+        await Assert.That(account.HookTrust).IsNull();
+        await Assert.That(account.HookTrustFingerprint).IsNull();
+    }
+
+    [Test]
+    public async Task New_fields_round_trip_with_snake_case_names() {
+        var store = Store();
+        var added = Claude("/h/.claude") with {
+            Generation = 3, GenerationStartedAt = DateTimeOffset.UnixEpoch, StatusLine = new StatusLineBackup(null), LabelSetByUser = false,
+        };
+        store.Mutate(r => (r with { Accounts = [added] }, 0));
+
+        var json   = await File.ReadAllTextAsync(store.RegistryPath);
+        var loaded = store.Load().Accounts.Single();
+
+        await Assert.That(json).Contains("\"generation_started_at\"");
+        await Assert.That(json).Contains("\"status_line\"");
+        await Assert.That(loaded.Generation).IsEqualTo(3L);
+        await Assert.That(loaded.GenerationStartedAt).IsEqualTo(DateTimeOffset.UnixEpoch);
+        await Assert.That(loaded.StatusLine).IsEqualTo(new StatusLineBackup(null));
+    }
+
+    [Test]
+    public async Task Registry_with_retired_sessions_still_loads() {
+        Tmp.CreateFile("accounts/accounts.json", """
+            { "version": 1, "revision": 2, "accounts": [
+                { "id": "ok", "vendor": "Codex", "directory": "/h/.codex-work", "label": "work",
+                  "added_at": "2026-01-01T00:00:00Z", "generation": 1, "retired_sessions": ["a"] }
+            ] }
+            """);
+
+        var account = Store().Load().Accounts.Single();
+
+        await Assert.That(account.Id).IsEqualTo("ok");
+        await Assert.That(account.Generation).IsEqualTo(1L);
+    }
+
+    [Test]
+    public async Task ObservationsFrom_is_the_generation_start_or_the_latest_recorded_instant_for_a_switch_without_one() {
+        var added     = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var refreshed = added.AddDays(30);
+        var started   = refreshed.AddDays(1);
+        var account   = new VendorAccount("a", HarnessId.Codex, "/h/.codex-a", "a", added);
+
+        await Assert.That(account.ObservationsFrom).IsNull();
+        await Assert.That((account with { GenerationStartedAt = started }).ObservationsFrom).IsEqualTo(started);
+        await Assert.That((account with { Generation = 1 }).ObservationsFrom).IsEqualTo(added);
+        await Assert.That((account with { Generation = 1, RefreshedAt = refreshed }).ObservationsFrom).IsEqualTo(refreshed);
+        await Assert.That((account with { Generation = 1, RefreshedAt = refreshed, GenerationStartedAt = started }).ObservationsFrom).IsEqualTo(started);
+    }
+
+    [Test]
+    public async Task HasSwitched_holds_for_a_legacy_nonzero_generation_without_timestamp() {
+        Tmp.CreateFile("accounts/accounts.json", """
+            { "version": 1, "revision": 2, "accounts": [
+                { "id": "ok", "vendor": "Codex", "directory": "/h/.codex-work", "label": "work",
+                  "added_at": "2026-01-01T00:00:00Z", "generation": 1 }
+            ] }
+            """);
+
+        var legacy = Store().Load().Accounts.Single();
+
+        await Assert.That(legacy.GenerationStartedAt).IsNull();
+        await Assert.That(legacy.HasSwitched).IsTrue();
+        await Assert.That((legacy with { Generation = 0 }).HasSwitched).IsFalse();
+        await Assert.That((legacy with { Generation = 0, GenerationStartedAt = DateTimeOffset.UnixEpoch }).HasSwitched).IsTrue();
+    }
+
+    [Test]
+    public async Task Legacy_label_counts_as_user_set_unless_it_is_the_directory_name() {
+        var legacy = Claude("/h/.claude-work");
+
+        await Assert.That(legacy.LabelIsUserSet).IsFalse();
+        await Assert.That((legacy with { Label = "work" }).LabelIsUserSet).IsTrue();
+        await Assert.That((legacy with { LabelSetByUser = true }).LabelIsUserSet).IsTrue();
+        await Assert.That((legacy with { Label = "a@b.c", LabelSetByUser = false }).LabelIsUserSet).IsFalse();
+    }
+
+    [Test]
     public async Task The_test_none_store_loads_empty_and_refuses_every_write() {
         await Assert.That(TestAccounts.None.Load().Accounts.Count).IsEqualTo(0);
 

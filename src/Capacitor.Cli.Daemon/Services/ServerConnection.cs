@@ -7,6 +7,7 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Eval.Contracts;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.LocalIpc;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -68,6 +69,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     // Events for incoming commands from server
     public event Func<LaunchAgentCommand, Task>?    OnLaunchAgent;
+
+    /// Sees every credential this connection's lanes resolve. Invoked on the token path, so it must
+    /// stay a cheap synchronous write.
+    public Action<CredentialState>? OnCredentialResolved { get; set; }
     public event Func<string, Task>?                OnStopAgent; // agentId
     public event Func<SendInputCommand, Task>?      OnSendInput;
     public event Func<string, string, Task>?        OnSendSpecialKey; // agentId, key
@@ -130,6 +135,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     /// <summary>The agents this daemon is about to resume, claimed on <c>DaemonConnect</c>.</summary>
     public Func<ResumingAgentClaim[]>? GetResumingAgents { get; set; }
+
+    /// <summary>Live agents, claims and startup completeness in one read; when wired it supplies all
+    /// four on a connect.</summary>
+    internal Func<RecoverySnapshot>? GetRecoverySnapshot { get; set; }
 
     /// <summary>The host's accounts snapshot, carried on <c>DaemonConnect</c>; between connects a change
     /// goes out through <see cref="AccountsChangedAsync"/>.</summary>
@@ -255,7 +264,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         _config          = config;
         _logger          = logger;
         _statusNotifier  = statusNotifier ?? new();
-        Credentials      = credentials;
+        Credentials      = credentials = new ObservedCredentialSource(credentials, state => OnCredentialResolved?.Invoke(state));
 
         // A refused bearer is logged with its expiry and the server's error code on both lanes that
         // carry it, so a 401 can be told apart from a lapsed token without the server's log.
@@ -500,26 +509,25 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     long _connectedTimestamp;
 
     /// <summary>
-    /// Sentinel prefix the server (<c>DaemonRegistry.NameInUseErrorCode</c>)
-    /// embeds in the <see cref="Microsoft.AspNetCore.SignalR.HubException"/>
-    /// message when <c>DaemonConnect</c> is rejected because another live
-    /// daemon already holds the <c>(owner, name)</c> slot. The daemon parses
-    /// this prefix and exits with code 3 instead of force-reconnecting in a
-    /// loop with the incumbent — see <see cref="OnNameInUse"/>.
+    /// Sentinel the server (<c>DaemonRegistry.NameInUseErrorCode</c>) puts in the
+    /// <see cref="Microsoft.AspNetCore.SignalR.HubException"/> message when <c>DaemonConnect</c> is
+    /// rejected because another live daemon holds the <c>(owner, name)</c> slot. SignalR's dispatcher
+    /// wraps that message, so the sentinel arrives mid-string, never as a prefix. The daemon exits
+    /// with code 3 on it instead of reconnecting against the incumbent — see <see cref="OnNameInUse"/>.
     /// </summary>
     public const string NameInUseErrorCode = "DAEMON_NAME_IN_USE";
 
     /// <summary>
     /// Fires when the server rejected <c>DaemonConnect</c> with the
-    /// <see cref="NameInUseErrorCode"/> prefix. <c>DaemonRunner</c>
+    /// <see cref="NameInUseErrorCode"/> sentinel. <c>DaemonRunner</c>
     /// subscribes and signals host shutdown so the binary exits with
     /// code 3 rather than oscillating with the incumbent daemon.
     /// </summary>
     public event Action<string>? OnNameInUse;
 
-    static bool IsNameInUse(Exception ex) =>
+    internal static bool IsNameInUse(Exception ex) =>
         ex is Microsoft.AspNetCore.SignalR.HubException he
-        && he.Message.StartsWith(NameInUseErrorCode, StringComparison.Ordinal);
+        && he.Message.Contains(NameInUseErrorCode, StringComparison.Ordinal);
 
     public async Task ConnectAsync(CancellationToken ct) {
         _ct                 = ct;
@@ -737,8 +745,11 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     }
 
     internal DaemonConnect BuildDaemonConnect(
-            string platform, string[] repoPaths, string[] liveIds, LiveAgentInfo[]? liveAgents, UnattendedAdvertisement advertised) {
+            string platform, string[] repoPaths, string[] liveIds, LiveAgentInfo[]? liveAgents, UnattendedAdvertisement advertised,
+            RecoverySnapshot? recovery = null) {
         var activeCount = GetActiveCount?.Invoke();
+
+        if (recovery is not null) (liveIds, liveAgents) = (recovery.LiveIds, recovery.LiveAgents);
 
         return new(
             _config.Name, platform, repoPaths, _config.MaxConcurrentAgents, liveIds,
@@ -747,7 +758,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             // Re-reported on every connect until the server prunes it via AckResolvedCandidates.
             RecordlessSurvivorsImpossible: _config.RecordlessSurvivorsImpossible,
             ResolvedStartupCandidates: GetResolvedStartupCandidates?.Invoke(),
-            StartupReapComplete: GetStartupReapComplete?.Invoke(),
+            StartupReapComplete: recovery?.StartupReapComplete ?? GetStartupReapComplete?.Invoke(),
             UnresolvedStartupCandidates: GetUnresolvedStartupCandidates?.Invoke(),
             StartupDiscovery: GetStartupDiscovery?.Invoke(),
             Quarantined: GetQuarantined?.Invoke(),
@@ -771,23 +782,26 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             VendorModelsByAccount: _config.VendorModelsByAccount,
             SupportsRawInput: AdvertisesRawInput,
             SupportsBranchBaseRef: true,
-            ResumingAgents: GetResumingAgents?.Invoke(),
+            SupportsAbbreviatedShaBaseRef: true,
+            ResumingAgents: recovery?.Claims ?? GetResumingAgents?.Invoke(),
             ActiveCount: activeCount?.Count,
             ActiveCountVersion: activeCount?.Version,
             SupportsAccountLaunches: true,
-            Accounts: GetAccountsSnapshot?.Invoke());
+            Accounts: GetAccountsSnapshot?.Invoke(),
+            SupportsScratchWorkspace: true);
     }
 
     async Task DaemonConnectCoreAsync(RegistrationAttempt attempt) {
         var platform  = $"{RuntimeInformation.OSDescription} {RuntimeInformation.OSArchitecture}";
         var repoStore = FingerprintRepoStore();
         var repoPaths = await MergeRepoPathsAsync();
-        var liveIds   = GetLiveAgentIds?.Invoke() ?? [];
-        var liveAgents = GetLiveAgents?.Invoke();
+        var recovery   = GetRecoverySnapshot?.Invoke();
+        var liveIds    = recovery?.LiveIds ?? GetLiveAgentIds?.Invoke() ?? [];
+        var liveAgents = recovery?.LiveAgents ?? GetLiveAgents?.Invoke();
         // Read once, under the register lock: the payload and the acknowledgement are this one value, and
         // a later send never carries an older advertisement than an earlier one.
         var advertised = _config.Advertisement;
-        var connect    = BuildDaemonConnect(platform, repoPaths, liveIds, liveAgents, advertised);
+        var connect    = BuildDaemonConnect(platform, repoPaths, liveIds, liveAgents, advertised, recovery);
         // Only a built payload carries the advertisement; a build that throws leaves the starting snapshot.
         attempt.Sending(advertised);
 
@@ -843,7 +857,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         if (GetAccountsSnapshot?.Invoke() is not { } current) return Task.CompletedTask;
 
         var sent = _connectAccounts;
-        return sent is not null && sent.HostId == current.HostId && sent.Revision == current.Revision
+        return sent is not null && AccountSnapshotBuilder.Equivalent(sent, current)
             ? Task.CompletedTask
             : AccountsChangedAsync(current);
     }
@@ -1102,6 +1116,19 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             await _hub.SendAsync("ReportAgentCommands", new ReportAgentCommandsArgs(agentId, commands), cancellationToken: _ct);
         } catch (Exception ex) {
             LogReportCommandsFailed(ex, agentId);
+        }
+    }
+
+    /// <summary>
+    /// Best-effort: the dialog a hosted agent's terminal shows, or null once it closed, so a remote
+    /// chat can send its viewer to the terminal. The server keeps it in memory only. Swallowed like
+    /// <see cref="ReportAgentCommandsAsync"/> when the server predates it.
+    /// </summary>
+    public virtual async Task ReportAgentTerminalDialogAsync(string agentId, TerminalDialogDto? dialog) {
+        try {
+            await _hub.SendAsync("ReportAgentTerminalDialog", new ReportAgentTerminalDialogArgs(agentId, dialog), cancellationToken: _ct);
+        } catch (Exception ex) {
+            LogReportTerminalDialogFailed(ex, agentId);
         }
     }
 
@@ -1918,6 +1945,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to report slash commands for agent {AgentId} (server may not support it)")]
     partial void LogReportCommandsFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to report the terminal dialog for agent {AgentId} (server may not support it)")]
+    partial void LogReportTerminalDialogFailed(Exception ex, string agentId);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to send ACP auto-approval audit for agent {AgentId} (server may not support it)")]
     partial void LogNotifyAcpAutoApprovalFailed(Exception ex, string agentId);

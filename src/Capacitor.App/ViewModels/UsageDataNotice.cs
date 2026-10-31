@@ -10,11 +10,11 @@ namespace Capacitor.App.ViewModels;
 /// command has already shown it on this device. One instance serves every window that shows it.
 public sealed class UsageDataNotice : ReactiveObject {
     public const string Text =
-        "kcap collects pseudonymous usage data: which screens and features you use and how setup goes, never "
-      + "file paths, prompts or transcript content. It can be associated with your workspace and its creator.";
+        "kcap collects pseudonymous usage data, such as which screens and features you use and how setup goes. "
+      + "It never includes file paths, prompts or transcript content. It can be linked to your workspace and its creator.";
 
     public const string NotSaved =
-        "Usage data is off in this app until it quits, but the choice couldn't be saved, so kcap commands still send it and the app starts again the next time it opens.";
+        "Usage data is off until the app quits. The choice could not be saved, so kcap commands still send it. The app sends it again the next time it opens.";
 
     readonly CliTelemetry _telemetry;
     readonly ConfigRoot   _config;
@@ -43,6 +43,9 @@ public sealed class UsageDataNotice : ReactiveObject {
 
     public bool CanTurnOff { get; }
 
+    /// Nobody has chosen yet, and the local edition sends nothing until someone does.
+    public bool ChoicePending => _telemetry.AwaitingChoice;
+
     public ReactiveCommand<Unit, Unit> AcknowledgeCommand { get; }
     public ReactiveCommand<Unit, Unit> TurnOffCommand { get; }
 
@@ -58,6 +61,23 @@ public sealed class UsageDataNotice : ReactiveObject {
 
     /// <returns>Whether the opt-out was saved.</returns>
     public bool TurnOff() => TurnOff(_telemetry, _config, this);
+
+    /// Saves the opt-in every kcap process reads, then lets this process send what it held.
+    /// <returns>Whether it was saved; an unsaved one sends nothing.</returns>
+    public bool TurnOn() {
+        if (!TelemetryState.SetEnabled(true, _config)) return false;
+
+        _telemetry.OptedIn(_config);
+        Acknowledge();
+
+        return true;
+    }
+
+    /// Shows the disclosure once the cloud edition is chosen, which is when it becomes due on a machine that had no
+    /// edition yet.
+    public void Restate() {
+        if (!Visible && _telemetry.NoticeDue(_config)) Visible = true;
+    }
 
     /// Stops this process first, whose queue the saved flag alone would not stop, then saves the opt-out
     /// every kcap process reads. An unsaved one keeps the notice up, saying so.

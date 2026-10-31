@@ -528,6 +528,21 @@ public class KcapCliTests {
         await Assert.That(runner.SeenOptions!.EnvOverlay!.ContainsKey(KcapCli.ExpectServerUrlVar)).IsFalse();
     }
 
+    [Test]
+    [Arguments(null)]
+    [Arguments("--codex")]
+    [Arguments("--opencode")]
+    public async Task Plugin_remove_targets_the_harness_and_keeps_the_profile_and_terminal_environment(string? flag) {
+        var runner = new FakeProcessRunner();
+        await MakeCli(runner, terminalPath: "/opt/homebrew/bin:/usr/bin:/bin").PluginRemoveAsync(flag, CancellationToken.None);
+        string[] expected = flag is null ? ["plugin", "remove"] : ["plugin", "remove", flag];
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(expected, CollectionOrdering.Matching);
+        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(60));
+        await Assert.That(runner.SeenOptions.EnvOverlay!["KCAP_PROFILE"]).IsEqualTo("work");
+        await Assert.That(runner.SeenOptions.EnvOverlay[KcapCli.SpawnNoTelemetryVar]).IsEqualTo("1");
+        await Assert.That(runner.SeenOptions.EnvOverlay["PATH"]).IsEqualTo("/opt/homebrew/bin:/usr/bin:/bin");
+    }
+
     public static IEnumerable<Func<(MutationVerb Verb, AccountArgs Args, string[] Expected)>> AccountVerbArgv() {
         yield return () => (MutationVerb.AccountAdd, new AccountArgs("codex", "/Users/me/.codex-work", null, null),
             ["accounts", "add", "codex", "/Users/me/.codex-work", "--json"]);
@@ -536,6 +551,7 @@ public class KcapCliTests {
             ["accounts", "rename", "abcd1234", "Work account", "--json"]);
         yield return () => (MutationVerb.AccountRewire, new AccountArgs(null, null, "abcd1234", null), ["accounts", "rewire", "abcd1234", "--json"]);
         yield return () => (MutationVerb.AccountRewire, new AccountArgs(null, null, null, null), ["accounts", "rewire", "--json"]);
+        yield return () => (MutationVerb.AccountRefresh, new AccountArgs(null, null, "abcd1234", null), ["accounts", "refresh", "abcd1234", "--json"]);
     }
 
     [Test]
@@ -607,6 +623,23 @@ public class KcapCliTests {
 
         await Assert.That(runner.SeenArgs).IsEquivalentTo(
             ["import", "--repo", "my-org/my-repo", "--yes"], CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task ImportAsync_names_each_repository_and_folder_in_one_selection() {
+        var runner      = new FakeProcessRunner();
+        var cli         = MakeCli(runner);
+        var withRepos   = new ImportRequest(ImportScopeChoice.Repo, null, [], ["a/one", "b/two"], Folders: ["/w/scratch"]);
+        var foldersOnly = new ImportRequest(ImportScopeChoice.Repo, null, [], [], Folders: ["/w/scratch"]);
+
+        await cli.ImportAsync(withRepos, _ => { }, CancellationToken.None);
+        var both = runner.SeenArgs;
+        await cli.ImportAsync(foldersOnly, _ => { }, CancellationToken.None);
+
+        await Assert.That(both).IsEquivalentTo(
+            ["import", "--repo", "a/one", "--repo", "b/two", "--folder", "/w/scratch", "--yes"], CollectionOrdering.Matching);
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(
+            ["import", "--folder", "/w/scratch", "--yes"], CollectionOrdering.Matching);
     }
 
     [Test]

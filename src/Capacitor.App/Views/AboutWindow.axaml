@@ -7,9 +7,13 @@
         x:DataType="vm:MainWindowViewModel"
         Title="About kcap"
         Icon="avares://kcap-desktop/Assets/kcap-icon.png"
-        Width="360" Height="300" CanResize="False" WindowStartupLocation="CenterOwner"
-        Background="{StaticResource KcapCanvasBrush}">
-    <StackPanel Margin="24" Spacing="10" HorizontalAlignment="Center" VerticalAlignment="Center">
+        Width="360" Height="300" CanResize="False" CanMinimize="False" CanMaximize="False" WindowStartupLocation="CenterOwner"
+        Background="{StaticResource KcapCanvasBrush}"
+        ExtendClientAreaToDecorationsHint="True">
+    <Panel>
+    <Border x:Name="AboutChromeStrip" Height="32" VerticalAlignment="Top" Background="Transparent"
+            PointerPressed="OnChromePointerPressed" />
+    <StackPanel Margin="24,32,24,24" Spacing="10" HorizontalAlignment="Center" VerticalAlignment="Center">
         <views:ProductWordmark Width="201.4" Height="60" HorizontalAlignment="Center" Margin="0,0,0,6" />
         <TextBlock x:Name="AboutVersionText"
                    Text="{Binding Source={x:Static svc:AppVersion.Display}, StringFormat='Version {0}'}"
@@ -21,4 +25,5 @@
             <Button x:Name="AboutChangelogButton" Classes="kcapChip" Content="Changelog" Command="{Binding OpenChangelogCommand}" />
         </StackPanel>
     </StackPanel>
+    </Panel>
 </Window>

@@ -13,6 +13,8 @@ public class LocalUpgradeCommandTests {
     [TempDir] public required TempDir Tmp { get; init; }
 
     sealed class StackFactory(Func<LocalStack> create, Func<LocalBundleStager>? stager = null) : ILocalStackFactory {
+        public Core.LocalEdition.LocalRoot Root => throw new InvalidOperationException("The command read the root without a platform refusal.");
+
         public LocalStack Create() => create();
 
         public LocalBundleStager Stager() => stager?.Invoke() ?? throw new InvalidOperationException("The command reached the bundles.");

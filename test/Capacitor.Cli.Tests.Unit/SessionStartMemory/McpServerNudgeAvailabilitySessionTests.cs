@@ -64,7 +64,7 @@ public class McpServerNudgeAvailabilitySessionTests {
         var codexConfig = Tmp.CreateFile("config.toml", string.Concat(new[] { "workitems", "plans", "flows" }.Select(s =>
             $"[mcp_servers.kcap-{s}]\ncommand = \"kcap\"\nargs = [\"mcp\", \"{s}\"]\n\n")));
 
-        await Assert.That(SessionNudges.Resolve(HarnessId.Codex, "s1", null, Harnesses, PlanEntitlements.Unknown, Hosted, codexConfig)).IsNotNull();
-        await Assert.That(SessionNudges.Resolve(HarnessId.Codex, "s1", null, Harnesses, PlanEntitlements.Unknown, Participant, codexConfig)).IsNull();
+        await Assert.That(SessionNudges.Resolve(HarnessId.Codex, "s1", null, Harnesses, PlanEntitlements.Unknown, Hosted, cwd: null, Home, codexConfig)).IsNotNull();
+        await Assert.That(SessionNudges.Resolve(HarnessId.Codex, "s1", null, Harnesses, PlanEntitlements.Unknown, Participant, cwd: null, Home, codexConfig)).IsNull();
     }
 }

@@ -16,10 +16,15 @@ record ClaudeCliResult(
         int     NumTurns
     );
 
-/// <summary>Outcome of <see cref="ClaudeCliRunner.RunDetailedAsync"/>: exactly one of
-/// <see cref="Result"/> and <see cref="Failure"/> is set. <see cref="Subtype"/> is the result
-/// envelope's <c>subtype</c> when the run failed with one.</summary>
-readonly record struct ClaudeCliOutcome(ClaudeCliResult? Result, ClaudeCliFailure? Failure, string? Subtype = null);
+/// <summary>Outcome of a headless runner: exactly one of <see cref="Result"/> and <see cref="Failure"/>
+/// is set. <see cref="Usage"/> is what a failed run reported before it stopped, null when it reported
+/// nothing. <see cref="Subtype"/> is the result envelope's <c>subtype</c> when the run failed with one.</summary>
+readonly record struct ClaudeCliOutcome(
+        ClaudeCliResult?  Result,
+        ClaudeCliFailure? Failure,
+        ClaudeCliUsage?   Usage   = null,
+        string?           Subtype = null
+    );
 
 enum ClaudeCliFailure {
     /// <summary>The internal per-call timeout elapsed; the subprocess was killed.</summary>
@@ -29,8 +34,11 @@ enum ClaudeCliFailure {
     ProcessFailure,
     /// <summary>The process exited zero but produced no parseable result.</summary>
     OutputUnparseable,
-    /// <summary>The run stopped at <c>--max-budget-usd</c> (an <c>error_max_budget_usd</c> envelope).</summary>
-    SpendBudget
+    /// <summary>The run stopped at a spend cap: <c>--max-budget-usd</c> (an <c>error_max_budget_usd</c>
+    /// envelope), or the account's usage limit or quota.</summary>
+    SpendBudget,
+    /// <summary>The vendor rejected the run's credentials, or found none.</summary>
+    NotSignedIn
 }
 
 static class ClaudeCliRunner {
@@ -176,19 +184,11 @@ static class ClaudeCliRunner {
             );
         }
 
-        // Fresh empty working dir per invocation: keeps Claude's CLAUDE.md
-        // auto-discovery from picking anything up, and isolates every run
-        // from user project state. Deleted in the `finally` so we don't
-        // leak one directory per eval question under the OS tmp root.
-        //
-        // A previous implementation reused a single stable dir under
-        // ~/.config/kcap/claude-cwd. That kept all transcripts under
-        // one ~/.claude/projects/ slug but still allowed ambient context
-        // (hooks, plugin sync, auto-memory) to accumulate — and when an
-        // ancestor directory happened to contain a CLAUDE.md, it would
-        // load into the judge's prompt and push it over the 200K token
-        // auto-compact threshold (DEV-1463 eval failures).
-        var workingDir = Path.Combine(Path.GetTempPath(), $"kcap-claude-{Guid.NewGuid():N}");
+        // A fresh empty working dir per run keeps CLAUDE.md discovery and project state out of the
+        // prompt; a stable directory accumulates them. Its name and the session id are the marks that
+        // keep the transcript Claude persists out of discovery, import and capture (ClaudeHelperRun).
+        var sessionId  = ClaudeHelperRun.NewSessionId();
+        var workingDir = Path.Combine(Path.GetTempPath(), ClaudeHelperRun.WorkingDirName(sessionId));
         var createdWorkingDir = false;
 
         try {
@@ -200,7 +200,7 @@ static class ClaudeCliRunner {
         }
 
         try {
-            return await RunCoreAsync(prompt, timeout, time, log, profile, harnesses, workingDir, model, maxTurns, promptViaStdin, jsonSchema, mcpConfigJson, allowedTools, maxBudgetUsd, systemPrompt, ct);
+            return await RunCoreAsync(prompt, timeout, time, log, profile, harnesses, workingDir, sessionId, model, maxTurns, promptViaStdin, jsonSchema, mcpConfigJson, allowedTools, maxBudgetUsd, systemPrompt, ct);
         } finally {
             if (createdWorkingDir) {
                 try {
@@ -221,6 +221,7 @@ static class ClaudeCliRunner {
             Profile?          profile,
             HarnessRegistry   harnesses,
             string            workingDir,
+            string            sessionId,
             string            model,
             int               maxTurns,
             bool              promptViaStdin,
@@ -233,10 +234,10 @@ static class ClaudeCliRunner {
         ) {
         // Resolve rather than pass "claude" verbatim: CreateProcess appends only .exe, so the
         // npm-installed claude.cmd shim on Windows would never be found.
-        var exePath = harnesses.ResolveExecutable(HarnessId.Claude);
+        var exePath = harnesses.ResolveLaunchable(HarnessId.Claude);
 
         if (exePath is null) {
-            log("claude not found on PATH");
+            log("claude not found on PATH or in the desktop app");
 
             return new(null, ClaudeCliFailure.ProcessFailure);
         }
@@ -264,7 +265,7 @@ static class ClaudeCliRunner {
             psi.Environment.Remove("ANTHROPIC_API_KEY");
         }
 
-        foreach (var arg in BuildClaudeArgs(prompt, promptViaStdin, model, maxTurns, jsonSchema, mcpConfigJson, allowedTools, maxBudgetUsd, systemPrompt)) {
+        foreach (var arg in BuildClaudeArgs(prompt, promptViaStdin, model, maxTurns, jsonSchema, mcpConfigJson, allowedTools, maxBudgetUsd, systemPrompt, sessionId)) {
             psi.ArgumentList.Add(arg);
         }
 
@@ -408,8 +409,8 @@ static class ClaudeCliRunner {
             subtype = doc.RootElement.Str("subtype");
         } catch (JsonException) { }
 
-        if (subtype == "error_max_budget_usd") return new(null, ClaudeCliFailure.SpendBudget, subtype);
-        return new(null, nonZeroExit ? ClaudeCliFailure.ProcessFailure : ClaudeCliFailure.OutputUnparseable, subtype);
+        if (subtype == "error_max_budget_usd") return new(null, ClaudeCliFailure.SpendBudget, Subtype: subtype);
+        return new(null, nonZeroExit ? ClaudeCliFailure.ProcessFailure : ClaudeCliFailure.OutputUnparseable, Subtype: subtype);
     }
 
     /// <summary>
@@ -427,7 +428,8 @@ static class ClaudeCliRunner {
             string?   mcpConfigJson,
             string[]? allowedTools,
             double?   maxBudgetUsd,
-            string?   systemPrompt = null
+            string?   systemPrompt = null,
+            string?   sessionId    = null
         ) {
         var args = new List<string> { "-p" };
 
@@ -435,6 +437,11 @@ static class ClaudeCliRunner {
             // When piping stdin, `claude -p` reads the prompt from stdin; don't
             // also pass it as a positional arg.
             args.Add(prompt);
+        }
+
+        if (sessionId is not null) {
+            args.Add("--session-id");
+            args.Add(sessionId);
         }
 
         args.Add("--output-format");

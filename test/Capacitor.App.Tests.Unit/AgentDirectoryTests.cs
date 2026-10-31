@@ -397,6 +397,38 @@ public class AgentDirectoryTests {
         await Assert.That(dir.Rows.Lookup("local:a1").Value.LastActivityAt).IsEqualTo(new DateTime(2026, 10, 24, 9, 30, 0, DateTimeKind.Utc));
     }
 
+    /// The tone cache marks a hosted row from its listing, so the daemon row carries the listing's PR links.
+    [Test]
+    public async Task A_hosted_row_takes_its_listings_pull_requests() {
+        var (local, _, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        LocalConnected(local);
+        local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "S"));
+        var prs = new RepoSessionPullRequests([new() { RepoHash = "h", Owner = "o", RepoName = "r", Number = 7, State = "open" }]);
+        var row = Listed("S", "active") with { PullRequests = prs };
+        sessions.LiveCache.AddOrUpdate(row);
+        sessions.MineLiveCache.AddOrUpdate(row);
+
+        await Assert.That(dir.Rows.Lookup("local:a1").Value.ListedPullRequests).IsEqualTo(prs);
+    }
+
+    /// A hosted row from another machine has no worktree here, so the listing's branch is all its
+    /// PR readers have to find a PR opened since the listing.
+    [Test]
+    public async Task A_hosted_row_takes_its_listings_branch() {
+        var (local, _, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        LocalConnected(local);
+        local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "S"));
+        var row = Listed("S", "active") with { Branch = "feature/x" };
+        sessions.LiveCache.AddOrUpdate(row);
+        sessions.MineLiveCache.AddOrUpdate(row);
+
+        await Assert.That(dir.Rows.Lookup("local:a1").Value.Branch).IsEqualTo("feature/x");
+    }
+
     /// A session the server lists with no daemon behind it has no agent here to answer for it: its
     /// permission requests get no card and no pip.
     [Test]
@@ -468,6 +500,123 @@ public class AgentDirectoryTests {
 
         await Assert.That(dir.Rows.Lookup("server:S").HasValue).IsTrue();
         await Assert.That(dir.Rows.Lookup("local:a1").HasValue).IsFalse();
+    }
+
+    /// The server lists a stopped session live until it folds the end, and the daemon unpublishes
+    /// the finished agent long before that. The row standing for the session reads ended like the
+    /// workspace header, not Running, so the open workspace can hand over to it at once.
+    [Test]
+    public async Task A_finished_local_agents_session_reads_ended_while_the_listing_still_says_live() {
+        var (local, _, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        LocalConnected(local);
+        local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "0D1E2F30-4455-6677-8899-AABBCCDDEEFF"));
+        MineLive(sessions, "0d1e2f30445566778899aabbccddeeff");
+
+        local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "0D1E2F30-4455-6677-8899-AABBCCDDEEFF", status: "Completed"));
+        await Assert.That(dir.Rows.Lookup("server:0d1e2f30445566778899aabbccddeeff").Value.IsEndedSession).IsTrue();
+
+        local.Agents.RemoveKey("a1");
+        var server = dir.Rows.Lookup("server:0d1e2f30445566778899aabbccddeeff").Value;
+        await Assert.That(server.IsEndedSession).IsTrue();
+        await Assert.That(Capacitor.App.ViewModels.SessionStatusDots.Label(server)).IsEqualTo("Done");
+    }
+
+    /// A session the agent resumes is live again, whatever the app saw of its earlier end.
+    [Test]
+    public async Task A_resumed_session_reads_live_again() {
+        var (local, _, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        LocalConnected(local);
+        MineLive(sessions, "S");
+        dir.NoteFinished("S");
+        await Assert.That(dir.Rows.Lookup("server:S").Value.IsEndedSession).IsTrue();
+
+        local.Agents.AddOrUpdate(LocalAgent("a2", sessionId: "S"));
+        local.Agents.RemoveKey("a2");
+
+        await Assert.That(dir.Rows.Lookup("server:S").Value.IsEndedSession).IsFalse();
+    }
+
+    /// A registry row only disappears; the accepted stop the app reports is what ends the session.
+    [Test]
+    public async Task A_noted_remote_stop_reads_ended_and_a_bare_registry_removal_does_not() {
+        var (_, remote, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        remote.Cache.AddOrUpdate(Remote("r1", daemon: "work-mac", owner: "me", sessionId: "S"));
+        MineLive(sessions, "S");
+
+        remote.Cache.RemoveKey("r1");
+        await Assert.That(dir.Rows.Lookup("server:S").Value.IsEndedSession).IsFalse();
+
+        dir.NoteFinished("S");
+        await Assert.That(dir.Rows.Lookup("server:S").Value.IsEndedSession).IsTrue();
+    }
+
+    /// The listing names the repository but no checkout, and often no cwd: the server row that
+    /// replaces a finished daemon row keeps what that row reported.
+    [Test]
+    public async Task The_server_row_keeps_the_checkout_its_daemon_row_reported() {
+        var (local, _, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        LocalConnected(local);
+        var running = LocalAgent("a1", sessionId: "S") with {
+            RepoPath = "/dev/shop-api", WorktreePath = "/dev/shop-api/wt/agent-1", WorkLocation = "owned", Branch = "kcap/agent-1" };
+        local.Agents.AddOrUpdate(running);
+        MineLive(sessions, "S");
+
+        local.Agents.AddOrUpdate(running with { Status = "Completed" });
+        sessions.LiveCache.RemoveKey("S");
+        sessions.MineLiveCache.RemoveKey("S");
+        sessions.EndedCache.AddOrUpdate(Listed("S"));
+        local.Agents.RemoveKey("a1");
+
+        var server = dir.Rows.Lookup("server:S").Value;
+        await Assert.That(server.RepoPath).IsEqualTo("/dev/shop-api");
+        await Assert.That(server.WorktreePath).IsEqualTo("/dev/shop-api/wt/agent-1");
+        await Assert.That(server.Branch).IsEqualTo("kcap/agent-1");
+    }
+
+    [Test]
+    public async Task The_server_row_keeps_the_repository_a_registry_row_reported() {
+        var (_, remote, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        remote.Cache.AddOrUpdate(Remote("r1", daemon: "work-mac", owner: "me", sessionId: "S") with { RepoPath = "/Users/me/shop-api" });
+        MineLive(sessions, "S");
+        await Assert.That(dir.Rows.Lookup("remote:r1").HasValue).IsTrue();
+
+        remote.Cache.RemoveKey("r1");
+        sessions.LiveCache.RemoveKey("S");
+        sessions.MineLiveCache.RemoveKey("S");
+        sessions.EndedCache.AddOrUpdate(Listed("S"));
+
+        await Assert.That(dir.Rows.Lookup("server:S").Value.RepoPath).IsEqualTo("/Users/me/shop-api");
+    }
+
+    /// The daemon's paths are protected session content like the listing's own branch: a viewer the
+    /// server now lists below full access gets none of them.
+    [Test]
+    public async Task The_kept_checkout_is_withheld_below_full_access() {
+        var (local, _, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        LocalConnected(local);
+        local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "S") with { WorktreePath = "/r/wt/agent-1", Branch = "kcap/agent-1" });
+        MineLive(sessions, "S");
+
+        local.Agents.RemoveKey("a1");
+        sessions.LiveCache.RemoveKey("S");
+        sessions.MineLiveCache.RemoveKey("S");
+        sessions.EndedCache.AddOrUpdate(Listed("S") with { AccessLevel = "overview" });
+
+        var server = dir.Rows.Lookup("server:S").Value;
+        await Assert.That(server.WorktreePath).IsNull();
+        await Assert.That(server.Branch).IsNull();
     }
 
     [Test]

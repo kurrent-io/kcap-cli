@@ -133,26 +133,24 @@ sealed class SpectreFirstRunFlowProgress(TimeProvider time, IKeyWatcher? keys = 
     public void PerformingAction(string capability) {
         // The service ladder writes its own coded lines, so the spinner comes down first for exactly
         // the reason the import takes it down: two live renderables cannot share a console. The shim
-        // prompts through osascript and writes nothing, so it keeps the spinner.
+        // writes nothing to the console, so it keeps the spinner.
         if (capability == FirstRunMachineCapabilities.DaemonService) _wait.Stop();
 
         Say(SetupAuthProgress.Indent(capability switch {
-            FirstRunMachineCapabilities.PathShim => PathShimNotice(OperatingSystem.IsMacOS(),
-                new ShellProfile(UserHome.FromEnvironment(), Environment.GetEnvironmentVariable("SHELL")).Disclosure),
+            FirstRunMachineCapabilities.PathShim => PathShimNotice(OperatingSystem.IsMacOS()
+                ? new ShellProfile(UserHome.FromEnvironment(), Environment.GetEnvironmentVariable("SHELL")).Disclosure
+                : null),
             FirstRunMachineCapabilities.DaemonService =>
                 "The browser asked to run the agent daemon as a service, so this machine stays reachable.",
             _ => "The browser asked this machine to do something this version of kcap does not know."
         }));
     }
 
-    /// <summary>The password prompt comes from macOS's own dialog; elsewhere the link needs none. A
-    /// user without admin rights gets <paramref name="profileLine"/> instead, so it is named before
-    /// it is written.</summary>
-    internal static string PathShimNotice(bool macOS, string? profileLine = null) =>
+    /// <summary>Names <paramref name="profileLine"/> before it is written, for when no folder already on
+    /// PATH is writable.</summary>
+    internal static string PathShimNotice(string? profileLine) =>
         "The browser asked to put kcap on your terminal PATH."
-      + (!macOS ? ""
-        : profileLine is null ? " [dim]Your Mac will ask for your admin password.[/]"
-        : $" [dim]Your Mac will ask for your admin password; without admin rights, kcap adds {Markup.Escape(profileLine)} instead.[/]");
+      + (profileLine is null ? "" : $" [dim]If no folder on it is writable, kcap adds {Markup.Escape(profileLine)}.[/]");
 
     public void ActionEnded() => Refresh();
 
@@ -288,7 +286,7 @@ sealed class SetupImportLane(
         ImportCommand.ImportDiscoveryResult? found = null;
 
         // Quiet, because the caller owns the terminal for the duration and the figures go to a screen.
-        var exit = await new ImportCommand(config, profiles, home, harnesses, http, router, time, accounts).HandleImport(
+        var exit = await new ImportCommand(config, profiles, home, harnesses, http, router, time, ImportConsole.FromProcess(), accounts).HandleImport(
             filterCwd:    null,
             sources:      SetupCommand.BuildImportSources(config, harnesses, router, time, vendors, accounts?.TryLoad(), home),
             discoverOnly: true,
@@ -360,7 +358,8 @@ sealed class SetupImportLane(
         ImportCommand.ImportRunOutcome? outcome   = null;
 
         try {
-            var exit = await new ImportCommand(config, profiles, home, harnesses, http, router, time, accounts).HandleImport(
+            // The console as it stands when the pass runs: setup's reported run swaps it for its own writers.
+            var exit = await new ImportCommand(config, profiles, home, harnesses, http, router, time, ImportConsole.FromProcess(), accounts).HandleImport(
                 filterCwd:          null,
                 sources:            SetupCommand.BuildImportSources(config, harnesses, router, time, pass.Vendors, accounts?.TryLoad(), home),
                 since:              pass.Since,
@@ -681,6 +680,7 @@ sealed class SetupCommand(
         var skipMuseFlag     = args.Contains("--skip-muse-hooks");
         var skipMuseMcpFlag  = args.Contains("--skip-muse-mcp");
         var skipImport       = args.Contains("--skip-import") || museAssistant;
+        var importSkip       = ImportSkipArgs(args).Skip ?? ImportSkip.None;
         var skipHarnesses    = args.Contains("--skip-harnesses");
         var legacyPluginScope = GetArg(args, "--plugin-scope"); // "user" | "project" | "skip" | null
         var skipClaude       = skipClaudeFlag || legacyPluginScope == "skip";
@@ -817,6 +817,12 @@ sealed class SetupCommand(
                     break;
             }
         }
+
+        // Usage data held so far goes out on the cloud edition; the local edition asks first, and a run that cannot
+        // ask leaves it unsent.
+        if (local is null) telemetry.SettleEdition(local: false);
+        else if (!noPrompt && !local.NoPrompt && AnsiConsole.Profile.Capabilities.Interactive && LocalUsageDataQuestion.Due(config))
+            AnsiConsole.MarkupLine($"  {Markup.Escape(LocalUsageDataQuestion.Record(LocalUsageDataQuestion.Ask(), telemetry, config))}");
 
         if (serverUrlArg is not null) {
             var resolved = await ResolveServerAndProviderAsync(serverUrlArg);
@@ -1157,7 +1163,9 @@ sealed class SetupCommand(
             InstallGrokHooks:         GrokHooksInstaller.Install,
             // Muse's hooks and MCP servers share one JSON settings.json; an unparseable file is a failure, not a success.
             InstallMuseHooks:         p => InstallMuseHooks(p, home, muse, WriteLine),
-            RegisterMuseMcp:          () => MuseSettingsJson.RegisterKcapMcpServers(muse.SettingsJson, home));
+            RegisterMuseMcp:          () => MuseSettingsJson.RegisterKcapMcpServers(muse.SettingsJson, home),
+            ReadAgentSkillsConsumers:  dir => SharedSkillsConsumers.Read(dir, () => SharedSkillsConsumerProbe.Configured(harnesses, home)),
+            WriteAgentSkillsConsumers: (dir, consumers) => SharedSkillsConsumers.Write(dir, consumers));
 
         void WriteLine(string line) => AnsiConsole.MarkupLine(line);
 
@@ -1380,6 +1388,7 @@ sealed class SetupCommand(
             SkipImport:          skipImport,
             NoPrompt:            noPrompt,
             PromptYesNo:         () => AnsiConsole.Prompt(new ConfirmationPrompt(ImportPrompt) { DefaultValue = true }),
+            PromptNameSessions:  () => AnsiConsole.Prompt(new ConfirmationPrompt(NameSessionsPrompt) { DefaultValue = false }),
             Profiles:            saved,
             ProfileName:         activeName,
             ServerUrl:           serverUrl,
@@ -1391,7 +1400,10 @@ sealed class SetupCommand(
             BrowserImportFailed: browserAnswers.ImportFailed,
             BrowserFinished:     browserAnswers.FlowStillLive,
             BrowserHandoffPrompt: browserAnswers.HandoffPrompt,
-            BrowserBackground:   browserAnswers.Background));
+            BrowserBackground:   browserAnswers.Background,
+            Skip:                importSkip,
+            // A run that cannot ask imports what the flags chose; it never opens a prompt to find out.
+            ChooseProjects:      AnsiConsole.Profile.Capabilities.Interactive ? ChooseProjectsPrompt : null));
 
         _json?.Completed(outcome: importResult.Ran ? "ran" : "skipped");
 
@@ -1581,6 +1593,37 @@ sealed class SetupCommand(
     /// <summary>Verbatim, pinned by <c>SetupCommandTests</c>.</summary>
     internal const string ImportPrompt = "Import past sessions from this machine?";
 
+    internal const string ChooseProjectsTitle =
+        "Which projects should this import include? Unticking one leaves it out of this import only.";
+
+    /// <summary>Said whenever a project is left out, so it is not read as a setting that stops recording it.</summary>
+    internal const string LeftOutNote =
+        "Recording from now on is unchanged. To stop recording a project, run kcap ignore in it or add it to excluded_repos.";
+
+    static IReadOnlyList<SetupImportChoice> ChooseProjectsPrompt(IReadOnlyList<SetupImportChoice> choices) {
+        var prompt = new MultiSelectionPrompt<SetupImportChoice>()
+            .Title(Markup.Escape(ChooseProjectsTitle))
+            .NotRequired()
+            .PageSize(15)
+            .MoreChoicesText("[grey](move up and down to see more)[/]")
+            .InstructionsText("[grey](space toggles a project, enter confirms)[/]")
+            .UseConverter(c => Markup.Escape(c.Label))
+            .AddChoices(choices);
+
+        foreach (var choice in choices.Where(c => c.Included)) prompt.Select(choice);
+
+        return AnsiConsole.Prompt(prompt);
+    }
+
+    /// <summary>Said before <see cref="NameSessionsPrompt"/>, so consent to naming is given knowing where
+    /// the excerpts go. Verbatim, pinned by <c>SetupCommandTests</c>.</summary>
+    internal const string NameSessionsDisclosure =
+        "Naming runs your own claude or codex on each imported Claude Code or Codex session's first message "
+      + "and reply, so those excerpts go to the model provider that agent uses, on your quota. "
+      + "Unnamed sessions are just as searchable.";
+
+    internal const string NameSessionsPrompt = "Name imported sessions with your coding agent?";
+
     internal const string EvalWatchQuestion = "Want to watch your import and its evals from your agent?";
 
     /// <summary>The one place this skill's name is spelled — <see cref="HandoffVendorEligibility.SkillName"/>
@@ -1653,7 +1696,10 @@ sealed class SetupCommand(
         bool                          BrowserImportFailed,
         bool                          BrowserFinished = false,
         string?                       BrowserHandoffPrompt = null,
-        BackgroundImportLaunch?       BrowserBackground = null);
+        BackgroundImportLaunch?       BrowserBackground = null,
+        Func<bool>?                   PromptNameSessions = null,
+        ImportSkip?                   Skip = null,
+        Func<IReadOnlyList<SetupImportChoice>, IReadOnlyList<SetupImportChoice>>? ChooseProjects = null);
 
     /// <summary><see cref="RunId"/> and <see cref="Handoff"/> are null whenever the foreground pass
     /// never ran (browser-answered, skipped, declined or <c>--no-prompt</c>). <see cref="PasteBlock"/>
@@ -1700,7 +1746,8 @@ sealed class SetupCommand(
             return new ImportStepResult(false, null, null, null);
         }
 
-        var unattributedOnDisk = 0;
+        var                     unattributedOnDisk = 0;
+        ImportDiscoverySummary? found              = null;
 
         // Discovery only earns its scan when the decision below would otherwise prompt: a skip or an
         // unattended --no-prompt run has no use for figures nobody sees.
@@ -1717,6 +1764,7 @@ sealed class SetupCommand(
 
             var summary    = discovery.Result!.Summary;
             var repos      = summary.Repos.Count;
+            found          = summary;
             var attributed = summary.Repos.Sum(r => r.SessionCount);
             unattributedOnDisk = summary.UnmatchedCount;
 
@@ -1740,6 +1788,32 @@ sealed class SetupCommand(
             return new ImportStepResult(false, null, null, null);
         }
 
+        var skip = inputs.Skip ?? ImportSkip.None;
+
+        if (!inputs.NoPrompt && found is not null && inputs.ChooseProjects is { } choose) {
+            var choices = SetupImportChoice.From(found, skip);
+
+            // One project is what the yes just answered for; a list is a question only with two.
+            if (choices.Count > 1) {
+                var kept = choose(choices);
+
+                if (kept.Count == 0) {
+                    AnsiConsole.MarkupLine("  [dim]Nothing chosen to import. Run [cyan]kcap import[/] any time.[/]");
+
+                    return new ImportStepResult(false, null, null, null);
+                }
+
+                skip = SetupImportChoice.SkipFor(choices, kept, skip);
+            }
+        }
+
+        if (!skip.IsEmpty) {
+            AnsiConsole.MarkupLine($"  Leaving out of this import only: {Markup.Escape(string.Join(", ", skip.Labels))}.");
+            AnsiConsole.MarkupLine($"  [dim]{Markup.Escape(LeftOutNote)}[/]");
+        }
+
+        // Naming sends excerpts to a model provider, so it runs only on a yes given after the disclosure:
+        // an unattended run, or a run that cannot ask, imports without it.
         if (inputs.NoPrompt) {
             var run = await imports.RunAsync(new ImportInvocation(
                 Scope:              new ImportScope.All(),
@@ -1748,8 +1822,9 @@ sealed class SetupCommand(
                 DefaultVisibility:  inputs.DefaultVisibility,
                 AutoSkipExclusions: true,
                 ForcePrivate:       false,
-                SkipTitle:          false,
-                Profiles:           inputs.Profiles));
+                SkipTitle:          true,
+                Profiles:           inputs.Profiles,
+                Skip:               skip));
 
             if (run.Fault is { } ex) {
                 AnsiConsole.MarkupLine(
@@ -1762,6 +1837,13 @@ sealed class SetupCommand(
             return new ImportStepResult(true, null, null, null);
         }
 
+        var nameSessions = false;
+
+        if (inputs.PromptNameSessions is { } promptNameSessions) {
+            AnsiConsole.MarkupLine($"  [dim]{Markup.Escape(NameSessionsDisclosure)}[/]");
+            nameSessions = promptNameSessions();
+        }
+
         var runId = Guid.NewGuid().ToString("N");
 
         var foreground = await imports.RunAsync(new ImportInvocation(
@@ -1771,8 +1853,9 @@ sealed class SetupCommand(
             DefaultVisibility:  inputs.DefaultVisibility,
             AutoSkipExclusions: true,
             ForcePrivate:       false,
-            SkipTitle:          false,
-            Profiles:           inputs.Profiles));
+            SkipTitle:          !nameSessions,
+            Profiles:           inputs.Profiles,
+            Skip:               skip));
 
         var outcome = ForegroundImportOutcome.From(foreground);
 
@@ -1782,10 +1865,13 @@ sealed class SetupCommand(
         }
 
         var launch = outcome.RemainderExists || outcome.Failed > 0 || outcome.Certainty == ForegroundCertainty.Incomplete
-            ? spawner.Spawn(new BackgroundImportRequest(runId, inputs.ProfileName, inputs.DefaultVisibility, inputs.WorkingDirectory))
+            ? spawner.Spawn(new BackgroundImportRequest(runId, inputs.ProfileName, inputs.DefaultVisibility, inputs.WorkingDirectory) {
+                NameSessions = nameSessions,
+                Skip         = skip,
+            })
             : BackgroundImportLaunch.NotNeeded;
 
-        PrintBackground(launch);
+        PrintBackground(launch, skip: skip, nameSessions: nameSessions);
 
         var eligible        = HandoffVendorEligibility.Eligible(harnesses, inputs.Paths);
         var detectedVendors = HandoffVendorEligibility.Detected(harnesses);
@@ -1822,8 +1908,13 @@ sealed class SetupCommand(
 
     /// <param name="browser">The browser flow's import is per repository and per level, which plain
     /// <c>kcap import</c> cannot reproduce, so its retry names setup instead.</param>
-    internal static void PrintBackground(BackgroundImportLaunch launch, bool browser = false) {
-        var log = Markup.Escape(launch.LogPath ?? "");
+    /// <param name="skip">What the retry must leave out again.</param>
+    /// <param name="nameSessions">Whether the user agreed to naming; without that yes the retry must not name.</param>
+    internal static void PrintBackground(
+            BackgroundImportLaunch launch, bool browser = false, ImportSkip? skip = null, bool nameSessions = false) {
+        var log   = Markup.Escape(launch.LogPath ?? "");
+        var retry = string.Join(" ", (skip ?? ImportSkip.None).ImportArgs.Select(Quoted)
+            .Prepend(nameSessions ? "kcap import --all --yes" : "kcap import --all --yes --skip-title"));
 
         switch (launch.Status) {
             case BackgroundImportStatus.Running:
@@ -1838,12 +1929,14 @@ sealed class SetupCommand(
                     $"  [yellow]![/] Background import did not start{code}: {Markup.Escape(launch.Error ?? "unknown error")}. "
                   + (browser
                         ? "Run [cyan]kcap setup[/] again and choose the same repositories and levels to import the rest."
-                        : "Run [cyan]kcap import --all --yes[/] to import the rest."));
+                        : $"Run [cyan]{Markup.Escape(retry)}[/] to import the rest."));
                 break;
             case BackgroundImportStatus.NotNeeded:
             default:
                 break;
         }
+
+        static string Quoted(string arg) => arg.Contains(' ') ? $"\"{arg}\"" : arg;
     }
 
     /// <summary>A suppression tied to the import's own outcome (nothing new, nothing landed, or it
@@ -2181,6 +2274,7 @@ sealed class SetupCommand(
             .AddChoices(offered)
             .UseConverter(SetupEdition.Label));
 
+        telemetry.SettleEdition(choice == SetupEdition.Choice.Local);
         telemetry.Funnel.EditionChosen(SetupEdition.Wire(choice));
 
         return choice;
@@ -3172,8 +3266,14 @@ sealed class SetupCommand(
         if (GetArg(args, "--use-provider-api-key") is { } key && ProviderApiKeyPolicy.TryParseBool(key) is null)
             return $"Invalid value for --use-provider-api-key: '{key}'. Must be true/1/yes/on or false/0/no/off.";
 
-        return null;
+        return ImportSkipArgs(args).Error;
     }
+
+    /// <summary>The projects <c>--skip-import-repo</c> and <c>--skip-import-folder</c> leave out of setup's import.</summary>
+    internal static (ImportSkip? Skip, string? Error) ImportSkipArgs(string[] args) =>
+        ImportScopeArgs.ParseSkip(
+            ImportScopeArgs.Values(args, "--skip-import-repo"), ImportScopeArgs.Values(args, "--skip-import-folder"),
+            "--skip-import-repo", "--skip-import-folder");
 
     /// <summary>Refuses a <c>--daemon-name</c> with no usable value before anything is written: the
     /// next token would otherwise be saved as the name, a following flag included.</summary>

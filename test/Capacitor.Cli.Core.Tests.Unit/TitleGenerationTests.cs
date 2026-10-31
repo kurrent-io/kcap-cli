@@ -88,4 +88,19 @@ public class TitleGenerationTests {
 
         await Assert.That(result.Length).IsEqualTo(64);
     }
+
+    /// <summary>A session whose first message is kcap's own title prompt is a title run; titling it
+    /// would start one more. The guard must hold before any agent is looked for.</summary>
+    [Test]
+    public async Task GenerateAsync_never_titles_a_kcap_title_run() {
+        using var home = new TempHome();
+        var log = new List<string>();
+
+        var result = await TitleGeneration.GenerateAsync(
+            TitleGeneration.TitlePromptPrefix + "Produce a short title", null, TimeProvider.System, log.Add, null,
+            TestHarnesses.Under(home));
+
+        await Assert.That(result).IsNull();
+        await Assert.That(log).IsEquivalentTo(["Skipping title generation: the session is kcap's own title run"]);
+    }
 }

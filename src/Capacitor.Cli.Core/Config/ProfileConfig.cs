@@ -107,6 +107,12 @@ public record Profile {
     [JsonPropertyName("disable_plans_nudge")]
     public bool? DisablePlansNudge { get; init; }
 
+    /// <summary>when true, kcap skips the SessionStart nudge to switch a repository opened from a
+    /// sandbox to relative worktree links. Independent of the other SessionStart opt-outs; a single
+    /// repository opts out with <c>git config kcap.relativeWorktrees declined</c>.</summary>
+    [JsonPropertyName("disable_relative_worktrees_nudge")]
+    public bool? DisableRelativeWorktreesNudge { get; init; }
+
     /// <summary>
     /// when true, kcap does not advertise the coordination-notices capability at SessionStart, so the
     /// server injects no coordination notices (heads-up about others' in-flight work that may overlap

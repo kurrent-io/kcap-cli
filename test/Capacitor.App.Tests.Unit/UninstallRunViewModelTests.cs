@@ -9,6 +9,7 @@ public class UninstallRunViewModelTests {
     sealed class FakeRemoval(List<string> calls) : IAppRemoval {
         public IReadOnlyList<string> LeftLinks = [];
         public bool Trashed = true;
+        public bool SupportRemoved = true;
         public Exception? SupportFailure;
 
         public Task<IReadOnlyList<string>> RemoveLinksAsync(CancellationToken ct) {
@@ -16,9 +17,10 @@ public class UninstallRunViewModelTests {
             return Task.FromResult(LeftLinks);
         }
 
-        public void DeleteSupportFiles() {
+        public bool DeleteSupportFiles() {
             calls.Add("support");
             if (SupportFailure is not null) throw SupportFailure;
+            return SupportRemoved;
         }
 
         public Task<bool> TrashBundleAsync(CancellationToken ct) {
@@ -161,6 +163,15 @@ public class UninstallRunViewModelTests {
         await Assert.That(vm.State).IsEqualTo(UninstallRunState.Finished);
         await Assert.That(string.Join(",", calls)).IsEqualTo("links,support,trash");
         await Assert.That(vm.IsFinished).IsTrue();
+        await Assert.That(vm.Receipt.Select(i => i.Text)).IsEquivalentTo([
+            "Removed kcap from your coding agents’ user settings",
+            "Removed kcap’s background services",
+            "Removed your kcap settings and sign-in",
+            "Removed the kcap command the app installed",
+            "Moved the kcap app to the Trash",
+        ], TUnit.Assertions.Enums.CollectionOrdering.Matching);
+        await Assert.That(vm.Receipt.All(i => i.Done)).IsTrue();
+        await Assert.That(vm.DetailsLabel).IsEqualTo("Show what was removed");
         await Assert.That(await vm.RetryCommand.CanExecute.FirstAsync()).IsFalse();
         await Assert.That(await vm.CloseCommand.CanExecute.FirstAsync()).IsTrue();
 
@@ -198,6 +209,45 @@ public class UninstallRunViewModelTests {
 
         await Assert.That(vm.State).IsEqualTo(UninstallRunState.Finished);
         await Assert.That(string.Join(",", calls)).IsEqualTo("links,support,trash");
+        await Assert.That(vm.Receipt[^1].Done).IsFalse();
+    }
+
+    [Test]
+    public async Task Support_files_reported_as_left_add_a_note_to_the_receipt() {
+        var (vm, _, removal, _) = Build();
+        removal.SupportRemoved = false;
+
+        await vm.RunAsync();
+
+        await Assert.That(vm.State).IsEqualTo(UninstallRunState.Finished);
+        await Assert.That(vm.Receipt[^1].Done).IsFalse();
+    }
+
+    [Test]
+    public async Task Receipt_names_the_deleted_local_server_only_when_the_cli_purged_one() {
+        var (nothingFound, _, _, _) = Build(purgeLocal: true);
+        var (purged, cli, _, _) = Build(purgeLocal: true);
+        cli.UninstallBehavior = onLine => {
+            onLine(new StreamedLine(ProcessStreamKind.Stdout, "Purged the local server in /home/me/.local/share/kcap/local."));
+            return Task.FromResult(Exit(0));
+        };
+
+        await nothingFound.RunAsync();
+        await purged.RunAsync();
+
+        await Assert.That(nothingFound.Receipt.Any(i => i.Text.Contains("local server"))).IsFalse();
+        await Assert.That(purged.Receipt.Any(i => i.Text.Contains("local server"))).IsTrue();
+    }
+
+    [Test]
+    public async Task Failure_leaves_the_receipt_empty() {
+        var (vm, cli, _, _) = Build();
+        cli.UninstallBehavior = _ => Task.FromResult(Exit(1));
+
+        await vm.RunAsync();
+
+        await Assert.That(vm.Receipt).IsEmpty();
+        await Assert.That(vm.DetailsLabel).IsEqualTo("Hide details");
     }
 
     [Test]

@@ -1,57 +1,94 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+             xmlns:views="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.Views.ProfilesSettingsView"
              x:DataType="vm:ProfilesSettingsViewModel">
-    <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,18,0,0">
-        <StackPanel Spacing="16">
-            <StackPanel Spacing="10">
-                <TextBlock x:Name="ProfilesTitleText" Classes="kcapTitle" Text="Profiles" LineHeight="22" />
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <views:SettingsPage Classes="settingsPage">
+            <StackPanel Classes="settingsHeader">
+                <TextBlock x:Name="ProfilesTitleText" Classes="kcapTitle" Text="Profiles" />
                 <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
-                           Text="Each profile is a server and a sign-in. This app runs against one profile until it is relaunched." />
+                           Text="Each profile names a server and how this computer signs in to it, if that server needs a sign-in at all. Relaunch kcap to use a different profile." />
             </StackPanel>
 
-            <ItemsControl x:Name="ProfileRows" ItemsSource="{Binding Rows}">
-                <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <StackPanel Spacing="12" />
-                    </ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate x:DataType="vm:ProfileRow">
-                        <Border Classes="profileRow" Background="{StaticResource KcapSurfaceBrush}"
-                                BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1" CornerRadius="12" Padding="20">
-                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="18">
-                                <StackPanel Spacing="6">
-                                    <StackPanel Orientation="Horizontal" Spacing="8">
-                                        <TextBlock Classes="kcapLabel" Text="{Binding Name}" VerticalAlignment="Center" />
-                                        <TextBlock Classes="profileMark" Text="Active" IsVisible="{Binding IsActive}"
-                                                   Foreground="{StaticResource KcapPurpleBrush}" FontSize="11" FontWeight="SemiBold"
-                                                   VerticalAlignment="Center" />
-                                        <TextBlock Classes="profileMark" Text="This app" IsVisible="{Binding IsBound}"
-                                                   Foreground="{StaticResource KcapPurpleBrush}" FontSize="11" FontWeight="SemiBold"
-                                                   VerticalAlignment="Center" />
-                                    </StackPanel>
-                                    <TextBlock Classes="kcapHint" Text="{Binding ServerLabel}" TextWrapping="Wrap" />
-                                    <TextBlock Classes="kcapHint profileStatus" Text="{Binding StatusLabel}"
-                                               Foreground="{StaticResource KcapTextBrush}" />
-                                </StackPanel>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Top">
-                                    <Button Classes="kcapChip profileSignIn" Content="{Binding SignInLabel}" IsVisible="{Binding CanSignIn}"
-                                            Command="{Binding $parent[ItemsControl].((vm:ProfilesSettingsViewModel)DataContext).SignInCommand}"
-                                            CommandParameter="{Binding}" />
-                                    <Button Classes="kcapChip profileRemove" Content="Remove" IsVisible="{Binding CanRemove}"
-                                            Command="{Binding $parent[ItemsControl].((vm:ProfilesSettingsViewModel)DataContext).RemoveCommand}"
-                                            CommandParameter="{Binding}" />
-                                </StackPanel>
-                            </Grid>
-                        </Border>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
+            <StackPanel Classes="settingsGroup">
+                <Border Classes="settingsCard">
+                    <ItemsControl x:Name="ProfileRows" ItemsSource="{Binding ListedRows}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:ProfileRow">
+                                <Border Classes="profileRow settingsListRow">
+                                    <Grid Classes="settingsRow" ColumnDefinitions="*,Auto">
+                                        <StackPanel Classes="settingsRowText">
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <TextBlock Classes="kcapLabel" Text="{Binding Name}" VerticalAlignment="Center" />
+                                                <Border Classes="settingsPill" ToolTip.Tip="{Binding UsageTip}"
+                                                        IsVisible="{Binding UsageLabel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                                    <TextBlock Classes="profileMark" Text="{Binding UsageLabel}" />
+                                                </Border>
+                                            </StackPanel>
+                                            <SelectableTextBlock Text="{Binding ServerUrl}" TextWrapping="Wrap" FontSize="12.5" LineHeight="19"
+                                                                 Foreground="{StaticResource KcapMutedBrush}"
+                                                                 IsVisible="{Binding HasServer}" />
+                                            <WrapPanel IsVisible="{Binding !HasServer}">
+                                                <TextBlock Classes="kcapHint" Text="No server. Create a profile with one:" VerticalAlignment="Center"
+                                                           Margin="0,0,6,0" />
+                                                <views:CommandChip Text="kcap profile add &lt;new-name&gt; --server-url &lt;url&gt;" Margin="0,2" />
+                                            </WrapPanel>
+                                            <TextBlock Classes="kcapHint profileStatus" Classes.attention="{Binding StatusNeedsAttention}"
+                                                       Text="{Binding StatusLabel}" IsVisible="{Binding ShowsStatus}" />
+                                            <TextBlock Classes="kcapHint profileConnection" Classes.attention="{Binding ConnectionNeedsAttention}"
+                                                       Text="{Binding Connection}" TextWrapping="Wrap"
+                                                       IsVisible="{Binding Connection, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Top" Margin="0,-5,0,0">
+                                            <Button Classes="kcapChip settingsCompact profileSignIn" Content="{Binding SignInLabel}"
+                                                    IsVisible="{Binding NeedsSignIn}"
+                                                    Command="{Binding $parent[ItemsControl].((vm:ProfilesSettingsViewModel)DataContext).SignInCommand}"
+                                                    CommandParameter="{Binding}" />
+                                            <Button Classes="kcapGhost kcapIcon profileMenu" IsVisible="{Binding HasMenu}"
+                                                    AutomationProperties.Name="{Binding Name, StringFormat='Actions for {0}'}"
+                                                    ToolTip.Tip="More actions">
+                                                <views:AppIcon Kind="Ellipsis" Size="16" />
+                                                <Button.Flyout>
+                                                    <Flyout Placement="BottomEdgeAlignedRight" VerticalOffset="6"
+                                                            FlyoutPresenterClasses="kcapPanel" Opened="OnMenuOpened">
+                                                        <StackPanel Spacing="2" Margin="6" MinWidth="200">
+                                                            <Button Classes="kcapGhost profileSignInAgain" Click="OnMenuItemClick"
+                                                                    IsVisible="{Binding CanSignInAgain}" CommandParameter="{Binding}"
+                                                                    Command="{Binding $parent[views:ProfilesSettingsView].((vm:ProfilesSettingsViewModel)DataContext).SignInCommand}"
+                                                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="10,8">
+                                                                <StackPanel Spacing="2">
+                                                                    <TextBlock Text="Sign in again" FontSize="13.5" />
+                                                                    <TextBlock Text="Replace this profile's saved sign-in" FontSize="11.5"
+                                                                               Foreground="{StaticResource KcapMutedBrush}" />
+                                                                </StackPanel>
+                                                            </Button>
+                                                            <Button Classes="kcapGhost profileRemove" Content="Remove profile" Click="OnMenuItemClick"
+                                                                    IsVisible="{Binding CanRemove}" CommandParameter="{Binding}"
+                                                                    Command="{Binding $parent[views:ProfilesSettingsView].((vm:ProfilesSettingsViewModel)DataContext).RemoveCommand}"
+                                                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                                    Padding="10,8" FontSize="13.5" />
+                                                        </StackPanel>
+                                                    </Flyout>
+                                                </Button.Flyout>
+                                            </Button>
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </Border>
+                <WrapPanel>
+                    <TextBlock Classes="settingsFootnote" Text="Add a profile from a terminal with" VerticalAlignment="Center"
+                               Margin="0,0,6,0" />
+                    <views:CommandChip Text="kcap profile add &lt;name&gt; --server-url &lt;url&gt;" Margin="0,2" />
+                </WrapPanel>
+            </StackPanel>
 
             <TextBlock x:Name="ProfilesMessageText" Classes="kcapHint" Text="{Binding Message}" TextWrapping="Wrap"
                        IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-        </StackPanel>
+        </views:SettingsPage>
     </ScrollViewer>
 </UserControl>

@@ -35,6 +35,8 @@ public static class JsonSettingsFile {
             AtomicFile.Replace(path, root.ToJsonString(WriteOpts));
 
             return SettingsEdit.Changed;
+        } catch (RefusedContent) {
+            return SettingsEdit.Malformed;
         } catch (IOException) {
             return SettingsEdit.Failed;
         } catch (UnauthorizedAccessException) {
@@ -45,4 +47,10 @@ public static class JsonSettingsFile {
             return SettingsEdit.Failed;
         }
     }
+
+    /// <summary>For an edit callback to throw when a key it owns has a shape it cannot read: the file is left
+    /// as it was and the edit reports <see cref="SettingsEdit.Malformed"/>.</summary>
+    public static Exception Refuse() => new RefusedContent();
+
+    sealed class RefusedContent : Exception;
 }

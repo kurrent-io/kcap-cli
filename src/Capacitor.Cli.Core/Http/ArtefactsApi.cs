@@ -41,6 +41,29 @@ internal sealed class ArtefactsApi(ICapacitorHttpClient http, CapacitorServer se
         return listed?.Artefacts ?? [];
     }
 
+    public async Task<ArtefactReadResult> ReadAsync(string artefactId, int? version, CancellationToken ct = default) {
+        using var record = await CapacitorApiRequests.SendAsync(
+            http, server, (c, token) => c.GetWithRetryAsync($"{server.Url}/api/artefacts/{Escape(artefactId)}", time, ct: token), ct);
+
+        if (record.StatusCode == HttpStatusCode.NotFound) return new ArtefactReadResult.NotFound();
+        if (record.StatusCode != HttpStatusCode.OK) throw await CapacitorApiRequests.FailureAsync(record);
+
+        var detail = await record.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.ArtefactDetailDto, ct)
+                  ?? throw new CapacitorApiException(200, "The server's answer could not be read.");
+
+        // Pinned to the version the record names, so a version published between the two reads
+        // cannot be served under the older number.
+        var read = version ?? detail.Artefact.LatestVersion;
+
+        using var content = await CapacitorApiRequests.SendAsync(
+            http, server, (c, token) => c.GetWithRetryAsync($"{server.Url}/artefacts/{Escape(artefactId)}/content?v={read}", time, ct: token), ct);
+
+        if (content.StatusCode == HttpStatusCode.NotFound) return new ArtefactReadResult.NotFound();
+        if (content.StatusCode != HttpStatusCode.OK) throw await CapacitorApiRequests.FailureAsync(content);
+
+        return new ArtefactReadResult.Read(detail.Artefact, read, await content.Content.ReadAsStringAsync(ct));
+    }
+
     /// <summary>
     /// The statuses every artefact write shares, read once.
     ///

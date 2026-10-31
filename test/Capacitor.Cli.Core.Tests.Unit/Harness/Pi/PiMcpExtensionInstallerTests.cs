@@ -33,7 +33,7 @@ public class PiMcpExtensionInstallerTests {
 
         // Async factory (pi awaits it before session_start → tools ready turn 1).
         await Assert.That(content).Contains("export default async function");
-        await Assert.That(content).Contains("[\"review\", \"sessions\", \"flows\", \"memory\", \"analytics\", \"workitems\", \"plans\", \"pages\", \"knowledge\"]");
+        await Assert.That(content).Contains("const KCAP_MCP_SERVERS = [\"review\", \"sessions\", \"flows\", \"memory\", \"workitems\", \"plans\", \"handoff\", \"pages\", \"analytics\", \"knowledge\"];");
         // MCP handshake incl. the mandatory notifications/initialized.
         await Assert.That(content).Contains("initialize");
         await Assert.That(content).Contains("notifications/initialized");
@@ -45,8 +45,9 @@ public class PiMcpExtensionInstallerTests {
         // Session-scoped lifecycle: register-once guard + holder + respawn on session_start.
         await Assert.That(content).Contains("function startBridge");
         await Assert.That(content).Contains("function stopBridge");
-        await Assert.That(content).Contains("session_start");
         await Assert.That(content).Contains("session_shutdown");
+        // A hosted Pi launch waits on session_start, so the retry there must not hold it.
+        await Assert.That(content).Contains("pi.on(\"session_start\", () => { void startBridge(); });");
         // Parallel, bounded startup (four hung servers ⇒ ~one timeout, not 4×).
         await Assert.That(content).Contains("Promise.all");
         // Teardown ladder EOF → SIGTERM → SIGKILL, plus a globalThis-guarded sync exit backstop.

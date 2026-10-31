@@ -3,7 +3,10 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Accounts.Readings;
 using Capacitor.Cli.Core.Acp;
+using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
@@ -152,14 +155,21 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
     // The launch's approval policy, ahead of the card; null for a reviewer or an ungoverned launch.
     readonly CodexHostedPolicySeam? _policy;
 
+    // The launch's resolved account, at its launch generation; its limit updates attribute to it.
+    readonly ResolvedAccount?                              _account;
+    readonly Action<ResolvedAccount?, ReadingObservation>? _postReading;
+
     public CodexAppServerHostedAgentRuntime(
             CodexAppServerSpawn spawn, CodexAppServerLaunch launch, AgentActivityClock? clock,
             ILogger logger, TimeProvider timeProvider, TimeSpan? forwardStallTimeout = null,
             bool emitEnvelopeTranscript = false, bool deferFirstTurn = false,
             string? agentId = null,
             Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>>? requestInteraction = null,
-            TimeSpan? approvalTimeout = null, TranscriptJournal? journal = null, CodexHostedPolicySeam? policy = null) {
-        _policy  = policy;
+            TimeSpan? approvalTimeout = null, TranscriptJournal? journal = null, CodexHostedPolicySeam? policy = null,
+            ResolvedAccount? account = null, Action<ResolvedAccount?, ReadingObservation>? postReading = null) {
+        _policy      = policy;
+        _account     = account;
+        _postReading = postReading;
         _spawn   = spawn;
         _launch  = launch;
         _clock   = clock;
@@ -382,22 +392,7 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
         var listParams = new JsonObject { ["cwds"] = new JsonArray((JsonNode?) _launch.Cwd) };
         var result     = await RequestAsync("hooks/list", listParams, ct).ConfigureAwait(false);
 
-        var entries = new List<CodexHookEntry>();
-        if (result.Arr("data") is { } data) {
-            foreach (var group in data.EnumerateArray()) {
-                if (group.Arr("hooks") is not { } hooks) continue;
-
-                foreach (var h in hooks.EnumerateArray()) {
-                    entries.Add(new CodexHookEntry(
-                        Key:         h.Str("key") ?? "",
-                        EventName:   h.Str("eventName") ?? "",
-                        Command:     h.Str("command") ?? "",
-                        CurrentHash: h.Str("currentHash"),
-                        TrustStatus: h.Str("trustStatus") ?? ""));
-                }
-            }
-        }
-        return entries;
+        return CodexHookTrust.ParseHooksList(result);
     }
 
     // Best-effort: surface Codex's skills as the composer's `/` picker entries. skills/list is not
@@ -449,7 +444,9 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
         var result = await RequestAsync(method, startParams, ct).ConfigureAwait(false);
 
         _threadId      = result.Obj("thread")?.Str("id"); // same read for both start and resume
-        _resolvedModel = result.Str("model");
+        // Codex can answer with an empty model; usage attributed to "" can never be priced.
+        _resolvedModel = result.Str("model") is { Length: > 0 } model ? model
+                       : CodexLauncher.IsConcreteModel(_launch.Model) ? _launch.Model : null;
         _clock?.SetLaunchStage(isResume ? "thread_resumed" : "thread_started");
 
         // A started thread has every approval it will raise pass through this runtime; a resumed one may not.
@@ -554,10 +551,17 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
                 _usage = ParseUsage(n.Params);
                 _clock?.Advance();
                 break;
+            case "account/rateLimits/updated":
+                // Posting only queues: this is the read loop.
+                if (_postReading is { } post && n.Params?.Obj("rateLimits") is { } snapshot
+                 && CodexRateLimits.FromAppServer(snapshot, _time.GetUtcNow()) is { } observation)
+                    post(_account, observation);
+                _clock?.Advance();
+                break;
             case "model/rerouted":
                 // The resolved model changed mid-thread; the mapper attributes each subsequent token
                 // delta to the model-at-instant, so per-interval attribution across a reroute is correct.
-                if (n.Params?.Str("toModel") is { } rerouted) _resolvedModel = rerouted;
+                if (n.Params?.Str("toModel") is { } rerouted) _resolvedModel = rerouted.Length > 0 ? rerouted : null;
                 _clock?.Advance();
                 break;
             default:

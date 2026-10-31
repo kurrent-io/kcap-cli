@@ -46,8 +46,11 @@ public sealed class TrayIconManager : IDisposable {
 
         _subscription = vm.WhenAnyValue(x => x.MenuModel).Subscribe(model => {
             _trayIcon.Icon = TrayIconRenderer.Get(model.State, model.RunningCount);
-            if (rebuildEagerly) _builder.Rebuild(_menu, model);
-            else _sync.OnModelChanged(model);
+            if (rebuildEagerly) {
+                // Windows reads the tooltip as the icon's accessible name.
+                _trayIcon.ToolTipText = model.ToolTip;
+                _builder.Rebuild(_menu, model);
+            } else _sync.OnModelChanged(model);
         });
     }
 

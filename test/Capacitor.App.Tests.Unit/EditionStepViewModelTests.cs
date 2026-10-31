@@ -77,7 +77,8 @@ public class EditionStepViewModelTests {
             return (edition.LocalUnavailableReason, await edition.ChooseLocalCommand.CanExecute.FirstAsync());
         });
 
-        await Assert.That(reason).IsEqualTo("The local edition isn't available on this platform yet.");
+        await Assert.That(reason).IsEqualTo(
+            "The local edition runs only on Apple silicon Macs for now, so it isn't available on this machine.");
         await Assert.That(canChoose).IsFalse();
     }
 
@@ -192,7 +193,7 @@ public class EditionStepViewModelTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task An_unavailable_local_card_says_why_in_its_own_footer() {
-        var (inCard, footerShown, enabled, help, footerOpacity, headOpacity) = await AvaloniaSession.DispatchAsync(async () => {
+        var (inCard, footerShown, enabled, help, tip, footerOpacity, headOpacity) = await AvaloniaSession.DispatchAsync(async () => {
             var edition = new EditionStepViewModel(
                 CliTelemetry.Disabled(TimeProvider.System).Funnel, () => EditionStepViewModel.UnsupportedPlatform);
             var vm = new OnboardingViewModel([edition, new FakeWizardStep(WizardStepId.SignIn)]);
@@ -206,7 +207,8 @@ public class EditionStepViewModelTests {
             var reason = window.GetVisualDescendants().OfType<TextBlock>().First(c => c.Name == "LocalUnavailableText");
             var head = local.GetVisualDescendants().OfType<Grid>().First(g => g.Classes.Contains("onboardingEditionHead"));
             var result = (reason.GetVisualAncestors().Contains(local), reason.IsEffectivelyVisible, local.IsEffectivelyEnabled,
-                Avalonia.Automation.AutomationProperties.GetHelpText(local), EffectiveOpacity(reason), EffectiveOpacity(head));
+                Avalonia.Automation.AutomationProperties.GetHelpText(local),
+                ToolTip.GetShowOnDisabled(local) ? ToolTip.GetTip(local) : null, EffectiveOpacity(reason), EffectiveOpacity(head));
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
@@ -218,6 +220,7 @@ public class EditionStepViewModelTests {
         await Assert.That(footerShown).IsTrue();
         await Assert.That(enabled).IsFalse();
         await Assert.That(help).IsEqualTo(EditionStepViewModel.UnsupportedPlatform);
+        await Assert.That(tip).IsEqualTo(EditionStepViewModel.UnsupportedPlatform);
         await Assert.That(footerOpacity).IsEqualTo(1.0);
         await Assert.That(headOpacity).IsEqualTo(0.5);
 

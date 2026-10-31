@@ -53,6 +53,14 @@ public class ClaudeLauncherResumeTests {
         await Assert.That(args).DoesNotContain("--session-id");
     }
 
+    /// The resume ledger can hold the dashless id transcript discovery records; Claude resumes only a dashed UUID.
+    [Test]
+    public async Task Resume_restores_the_dashes_of_a_dashless_session_id() {
+        var args = NewLauncher().BuildArgs(NewCtx(null, Resume.Replace("-", ""))).Args;
+
+        await Assert.That(args[Array.IndexOf(args, "--resume") + 1]).IsEqualTo(Resume);
+    }
+
     [Test]
     public async Task Resume_keeps_the_other_flags_in_order() {
         var args = NewLauncher().BuildArgs(NewCtx(null, Resume)).Args;

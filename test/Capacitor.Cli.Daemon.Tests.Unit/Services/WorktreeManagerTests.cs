@@ -111,8 +111,12 @@ public class WorktreeManagerTests {
         }
     }
 
+    /// <summary>A commit is named whole when kcap's git hook recorded it, and by the abbreviation git printed when
+    /// the server read it off a shell <c>git commit</c>.</summary>
     [Test]
-    public async Task CreateAsync_with_a_local_only_sha_checks_it_out_without_a_remote() {
+    [Arguments(40)]
+    [Arguments(7)]
+    public async Task CreateAsync_with_a_local_only_sha_checks_it_out_without_a_remote(int shaLength) {
         using var repo = GitRepo.Create("local-only");
 
         repo.CreateFile("a.txt", "a");
@@ -122,11 +126,35 @@ public class WorktreeManagerTests {
         repo.CommitAll("second");
 
         var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
-        var worktree = await manager.CreateAsync(repo, name: "local-sha", baseRef: first);
+        var worktree = await manager.CreateAsync(repo, name: "local-sha", baseRef: first[..shaLength]);
 
         try {
             await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(first);
             await Assert.That(worktree.FetchedRef).IsNull();
+        } finally {
+            await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+        }
+    }
+
+    /// <summary>A branch whose name is all hex starts from that branch, not from a same-named tag that rev-parse
+    /// would resolve first when the name is read as a sha.</summary>
+    [Test]
+    public async Task CreateAsync_with_a_hex_named_branch_starts_from_the_branch_not_a_same_named_tag() {
+        using var repo = GitRepo.Create("hex-branch");
+
+        repo.CreateFile("a.txt", "a");
+        repo.CommitAll("first");
+        var first = repo.Head;
+        repo.Do("branch", "cafe1234");
+        repo.CreateFile("b.txt", "b");
+        repo.CommitAll("second");
+        repo.Do("tag", "cafe1234");
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(repo, name: "hex-branch", baseRef: "cafe1234");
+
+        try {
+            await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(first);
         } finally {
             await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
         }
@@ -148,6 +176,28 @@ public class WorktreeManagerTests {
         try {
             await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(lateSha);
             await Assert.That(worktree.FetchedRef).IsEqualTo("refs/kcap/review/remote-sha");
+        } finally {
+            await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+        }
+    }
+
+    /// <summary>An abbreviation made on another machine and pushed is found among origin's branches, which a fetch
+    /// of the abbreviation itself cannot do.</summary>
+    [Test]
+    public async Task CreateAsync_with_an_abbreviation_pushed_to_origin_starts_from_that_commit() {
+        using var repo = MakeUpstreamWithSideRef("refs/pull/11/head", out _);
+
+        // Committed after the clone, so the clone's object store cannot have it.
+        repo.Upstream.CreateFile("pushed.txt", "pushed");
+        repo.Upstream.CommitAll("pushed commit");
+        var pushed = repo.Upstream.Head;
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(repo.Clone, name: "pushed-short-sha", baseRef: pushed[..7]);
+
+        try {
+            await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(pushed);
+            await Assert.That(worktree.FetchedRef).IsNull();
         } finally {
             await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
         }
@@ -326,6 +376,51 @@ public class WorktreeManagerTests {
             source.Try("worktree", "remove", "--force", worktree.Path);
             source.Try("branch", "-D", worktree.Branch);
         }
+    }
+
+    /// <summary>A commit on a branch the worktree does not own survives on that branch, so it is not work
+    /// the removal would lose.</summary>
+    [Test]
+    public async Task RemoveAsync_keeps_a_branch_the_worktree_does_not_own() {
+        using var repo = GitRepo.Create("not-owned");
+        repo.CreateFile("a.txt", "a");
+        repo.CommitAll("first");
+        var main = repo.CurrentBranch;
+        repo.Checkout("feature", create: true);
+        repo.Checkout(main);
+
+        var path = Path.Combine(repo.Path, ".capacitor", "worktrees", "handoff");
+        repo.Do("worktree", "add", path, "feature");
+        var tree = GitRepo.At(path);
+        tree.CreateFile("b.txt", "b");
+        tree.CommitAll("agent work");
+        var agentCommit = tree.Head;
+
+        var removal = await WorktreeManager.RemoveAsync(
+            new WorktreeInfo(path, "feature", repo.Path) { OwnsBranch = false }, TimeProvider.System);
+
+        await Assert.That(removal).IsEqualTo(WorktreeRemoval.Removed);
+        await Assert.That(Directory.Exists(path)).IsFalse();
+        await Assert.That(repo.Do("rev-parse", "refs/heads/feature").Text).IsEqualTo(agentCommit);
+    }
+
+    [Test]
+    public async Task RemoveAsync_keeps_a_detached_worktree_holding_a_new_commit() {
+        using var repo = GitRepo.Create("detached");
+        repo.CreateFile("a.txt", "a");
+        repo.CommitAll("first");
+
+        var path = Path.Combine(repo.Path, ".capacitor", "worktrees", "detached");
+        repo.Do("worktree", "add", "--detach", path, "HEAD");
+        var tree = GitRepo.At(path);
+        tree.CreateFile("b.txt", "b");
+        tree.CommitAll("agent work");
+
+        var removal = await WorktreeManager.RemoveAsync(
+            new WorktreeInfo(path, "", repo.Path) { OwnsBranch = false }, TimeProvider.System);
+
+        await Assert.That(removal.KeptBecause).IsNotNull();
+        await Assert.That(Directory.Exists(path)).IsTrue();
     }
 
     /// <summary>The startup sweep of left-behind worktrees keeps one holding work, as teardown does, and
@@ -802,6 +897,42 @@ public class WorktreeManagerTests {
         } finally {
             if (snapshot is not null) await WorktreeManager.RemoveAsync(snapshot, TimeProvider.System);
         }
+    }
+
+    /// <summary>A scratch workspace holds nothing but an empty repository — Codex refuses to run outside
+    /// one — and is the daemon's own, so removal deletes it outright.</summary>
+    [Test]
+    public async Task CreateScratchAsync_makes_an_empty_repository_that_removal_deletes() {
+        using var tmp = new TempDir();
+        var manager = new WorktreeManager(
+            new DaemonConfig { WorktreeRoot = tmp.PathTo("root") }, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+
+        var scratch = await manager.CreateScratchAsync("scratch-agent", CancellationToken.None);
+
+        await Assert.That(scratch.Path).IsEqualTo(Path.Combine(tmp.PathTo("root"), WorktreeManager.ScratchDirectoryName, "scratch-agent"));
+        await Assert.That(scratch.IsStandalone).IsTrue();
+        await Assert.That(Directory.Exists(Path.Combine(scratch.Path, ".git"))).IsTrue();
+        await Assert.That(Directory.EnumerateFileSystemEntries(scratch.Path).Select(e => Path.GetFileName(e)!)).IsEquivalentTo([".git"]);
+
+        await WorktreeManager.RemoveAsync(scratch, TimeProvider.System);
+
+        await Assert.That(Directory.Exists(scratch.Path)).IsFalse();
+    }
+
+    [Test]
+    public async Task CleanupOrphaned_removes_orphan_scratch_workspaces_and_keeps_active_ones() {
+        using var tmp = new TempDir();
+        var root = tmp.PathTo("root");
+        var manager = new WorktreeManager(
+            new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var active = await manager.CreateScratchAsync("active", CancellationToken.None);
+        var orphan = await manager.CreateScratchAsync("orphan", CancellationToken.None);
+        File.WriteAllText(Path.Combine(orphan.Path, "notes.md"), "left behind");
+
+        await manager.CleanupOrphanedAsync([active.Path]);
+
+        await Assert.That(Directory.Exists(active.Path)).IsTrue();
+        await Assert.That(Directory.Exists(orphan.Path)).IsFalse();
     }
 
     [Test]

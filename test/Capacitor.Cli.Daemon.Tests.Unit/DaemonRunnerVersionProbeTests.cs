@@ -155,7 +155,7 @@ public class DaemonRunnerVersionProbeTests {
         if (!(await CommandLineAsync(pid)).Contains(marker, StringComparison.Ordinal)) return;
         if (Capacitor.Tests.Helpers.PidIdentity.IsGone(pid, identity)) return;
 
-        Capacitor.Cli.Daemon.Services.ProcessTree.Kill(pid, identity);
+        Capacitor.Cli.Core.ProcessTree.Kill(pid, identity);
         await Capacitor.Tests.Helpers.PidIdentity.WaitUntilGoneAsync(pid, identity, TimeSpan.FromSeconds(5));
     }
 

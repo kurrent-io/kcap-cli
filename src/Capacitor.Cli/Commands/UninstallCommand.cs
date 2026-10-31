@@ -13,6 +13,7 @@ using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.MistralVibe;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
+using Capacitor.Cli.Core.Install;
 using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.LocalEdition;
@@ -67,12 +68,15 @@ sealed class UninstallCommand(
         LocalStack?     local       = null;
         LocalStackState localState  = LocalStackState.NotInstalled.Instance;
         var             localFailed = false;
+        // A server this build cannot manage (another build installed it, or it was started by hand)
+        // is never removed here, and its root stays out of the config-directory delete.
+        string?         keptLocal   = null;
 
         try {
             local      = stacks.Create();
             localState = local.Read();
         } catch (LocalInstallFailure ex) when (ex.Code == LocalInstallFailureCode.UnsupportedPlatform) {
-            // No local edition runs on this platform, so there is none to remove.
+            if (HoldsLocalServer(stacks.Root)) keptLocal = stacks.Root.Directory;
         } catch (LocalInstallFailure ex) {
             await console.Error.WriteLineAsync($"Could not read the local server: {ex.Message}");
             localFailed = true;
@@ -123,6 +127,9 @@ sealed class UninstallCommand(
                 break;
         }
 
+        if (keptLocal is not null)
+            await console.Out.WriteLineAsync($"  • Keep the local server in {keptLocal} and every session it recorded: this kcap cannot remove a local server on this platform");
+
         await console.Out.WriteLineAsync($"  • Remove kcap entries from {harnesses.Of<ClaudeHarness>().Paths.UserSettings}");
         await console.Out.WriteLineAsync($"  • Remove kcap entries from {harnesses.Of<CodexHarness>().Paths.UserHooksJson}");
         await console.Out.WriteLineAsync($"  • Remove kcap entries from {harnesses.Of<CursorHarness>().Paths.UserHooksJson}");
@@ -155,9 +162,13 @@ sealed class UninstallCommand(
         }
 
         if (!keepConfig) {
-            await console.Out.WriteLineAsync(local is not null && Directory.Exists(local.Root.Directory)
-                ? $"  • Remove kcap configuration from {configDir} (local lifecycle safety metadata is kept)"
+            await console.Out.WriteLineAsync(
+                keptLocal is not null ? $"  • Remove kcap configuration from {configDir}, except the local server in {keptLocal}"
+                : local is not null && Directory.Exists(local.Root.Directory) ? $"  • Remove kcap configuration from {configDir} (local lifecycle safety metadata is kept)"
                 : $"  • Delete the kcap config directory ({configDir})");
+
+            if (!localFailed)
+                foreach (var line in CaptureScopeNotice.Lines(config)) await console.Out.WriteLineAsync(line);
         }
 
         // KCAP_CONFIG_DIR never moves it, so the config-directory delete does not cover it.
@@ -169,12 +180,16 @@ sealed class UninstallCommand(
         if (ownsDaemonDir)
             await console.Out.WriteLineAsync($"  • Delete the daemon state directory ({store.Directory})");
 
+        await console.Out.WriteLineAsync(KeptProgramLine(
+            InstallProvenance.Kind(), ScriptInstallLayout.OfRunningBinary()?.Root, SnapLayout.OfRunningBinary()?.Name,
+            Environment.ProcessPath));
+
         if (!skipPrompt) {
             await console.Out.WriteAsync("Proceed? [y/N] ");
             var reply = await console.In.ReadLineAsync();
 
             if (!string.Equals(reply?.Trim(), "y", StringComparison.OrdinalIgnoreCase)) {
-                await console.Out.WriteLineAsync("Cancelled.");
+                await console.Out.WriteLineAsync(CancelledLine);
 
                 return 0;
             }
@@ -184,7 +199,7 @@ sealed class UninstallCommand(
         // integrations still go: nothing about them depends on the local server.
         if (localFailed) return await CleanupAsync(local?.Root.Directory, hadFailures: true);
         // Taking the lease creates the root, so a machine where no setup has started is cleaned without it.
-        if (local is null || !Directory.Exists(local.Root.Directory)) return await CleanupAsync(null);
+        if (local is null || !Directory.Exists(local.Root.Directory)) return await CleanupAsync(keptLocal);
 
         var cleanupStarted = false;
         try {
@@ -398,7 +413,9 @@ sealed class UninstallCommand(
                     try {
                         UninstallFiles.DeleteConfig(configDir, localRoot);
                         await console.Out.WriteLineAsync($"Removed configuration from: {configDir}");
-                        if (localRoot is not null)
+                        if (keptLocal is not null)
+                            await console.Out.WriteLineAsync($"Kept the local server and its data in {keptLocal}.");
+                        else if (localRoot is not null)
                             await console.Out.WriteLineAsync($"Kept local lifecycle safety metadata in {localRoot} (no recordings).");
                     } catch (Exception ex) {
                         await console.Error.WriteLineAsync($"Could not remove config directory {configDir}: {ex.Message}");
@@ -433,6 +450,21 @@ sealed class UninstallCommand(
         }
     }
 
+    internal const string CancelledLine = "Uninstall cancelled. Nothing was removed.";
+
+    /// <summary>What the plan leaves: uninstall removes what kcap set up, never the program that runs
+    /// it, which its installer owns.</summary>
+    internal static string KeptProgramLine(InstallKind kind, string? scriptRoot, string? snapName, string? processPath) =>
+        kind switch {
+            InstallKind.Script when scriptRoot is not null =>
+                $"It keeps kcap itself, every installed version under {scriptRoot}. Remove it afterwards by deleting {ScriptInstallLayout.VersionsName}, {ScriptInstallLayout.CurrentName} and {ScriptInstallLayout.MarkerFileName} there, not the whole folder: it can hold data the installer does not own.",
+            InstallKind.Npm => "It keeps kcap itself. Remove it afterwards with: npm uninstall -g @kurrent/kcap",
+            InstallKind.App => "It keeps the kcap desktop app and its command-line tool. Uninstall the app to remove them.",
+            InstallKind.Snap when snapName is not null => $"It keeps the kcap snap. Remove it afterwards with: sudo snap remove {snapName}",
+            _ when processPath is not null => $"It keeps kcap itself ({processPath}). Remove it the way it was installed.",
+            _ => "It keeps kcap itself. Remove it the way it was installed.",
+        };
+
     static string? LocalConsentError(LocalStackState state, string root, bool skipPrompt, bool purgeLocal, bool keepConfig) {
         var interruptedPurge = state is LocalStackState.Interrupted(LocalPurgeJournal.Operation, _);
 
@@ -451,6 +483,9 @@ sealed class UninstallCommand(
         return null;
     }
 
+    static bool HoldsLocalServer(LocalRoot root) =>
+        File.Exists(root.RegistryPath) || StackDirectories.Any(name => Directory.Exists(Path.Combine(root.Directory, name)));
+
     static string ShellQuote(string value) => "'" + value.Replace("'", "'\\''") + "'";
 
     static bool PathsEqual(string a, string b) =>
@@ -459,7 +494,8 @@ sealed class UninstallCommand(
 
     /// <summary>
     /// Deletes every <c>kcap-*</c> directory directly under <paramref name="root"/>, catching skills the
-    /// installer's current name list does not know. False when any deletion or the enumeration failed.
+    /// installer's current name list does not know, except a bundled skill the user edited. False when
+    /// any deletion or the enumeration failed.
     /// </summary>
     bool SweepCapacitorPrefixedDirs(string root) {
         if (!Directory.Exists(root)) return true;
@@ -474,6 +510,8 @@ sealed class UninstallCommand(
 
         var ok = true;
         foreach (var dir in dirs) {
+            if (AgentsSkillsInstaller.IsUserEdited(root, Path.GetFileName(dir))) continue;
+
             try {
                 Directory.Delete(dir, recursive: true);
             } catch (Exception ex) {

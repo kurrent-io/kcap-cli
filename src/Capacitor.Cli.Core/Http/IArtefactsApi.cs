@@ -16,4 +16,8 @@ public interface IArtefactsApi {
     Task<ArtefactWriteResult> DeleteAsync(string artefactId, CancellationToken ct = default);
 
     Task<List<ArtefactDto>> ListAsync(CancellationToken ct = default);
+
+    /// <summary>A page's record and content, under the same audience check as opening it in a
+    /// browser. Readable by anyone the page is shared with, not only its owner.</summary>
+    Task<ArtefactReadResult> ReadAsync(string artefactId, int? version, CancellationToken ct = default);
 }

@@ -1,10 +1,13 @@
 using System.Collections.Frozen;
 using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Accounts.Readings;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
@@ -302,6 +305,210 @@ public class AccountsPublisherTests {
             var snapshot = await changed.Task.WaitAsync(Timeout);
             await Assert.That(snapshot.Revision).IsEqualTo(2L);
             await Assert.That(warnings.Captured.Warnings.Count).IsEqualTo(1);
+        } finally {
+            await publisher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    static void Record(AccountStore store, string id, double used) {
+        var written = store.Readings.TryRecord(id, (f, _) => f with {
+            Reading = f.Reading with { Windows = [new UsageWindowDto("five_hour", 300, used, null, null)] },
+        });
+        if (!written) throw new InvalidOperationException("reading not recorded");
+    }
+
+    static double? Used(AccountsSnapshotDto? snapshot) => snapshot?.Accounts.Single().Reading?.Windows.Single().UsedPercent;
+
+    [Test]
+    public async Task Reading_change_publishes_within_the_poll() {
+        var store = Store();
+        Add(store, "work");
+        var id   = store.Load().Accounts.Single().Id;
+        var time = new FakeTimeProvider();
+        using var publisher = Publisher(store, time);
+        var changed = new TaskCompletionSource<AccountsSnapshotDto>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await publisher.StartAsync(CancellationToken.None);
+        publisher.Changed += s => changed.TrySetResult(s);
+        try {
+            Record(store, id, 42);
+            time.Advance(Poll);
+
+            var snapshot = await changed.Task.WaitAsync(Timeout);
+            await Assert.That(snapshot.Revision).IsEqualTo(1L);
+            await Assert.That(Used(snapshot)).IsEqualTo(42.0);
+            await Assert.That(publisher.Current).IsSameReferenceAs(snapshot);
+        } finally {
+            await publisher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task Burst_of_reading_changes_sends_the_last_to_the_server() {
+        var store = Store();
+        Add(store, "work");
+        var id   = store.Load().Accounts.Single().Id;
+        var time = new FakeTimeProvider();
+        using var publisher = Publisher(store, time);
+        var sent = new List<double?>();
+        publisher.SendToServer = s => {
+            lock (sent) sent.Add(Used(s));
+            return Task.CompletedTask;
+        };
+
+        await publisher.RebuildAsync(CancellationToken.None);
+        Record(store, id, 10);
+        await publisher.RebuildAsync(CancellationToken.None);
+        Record(store, id, 20);
+        await publisher.RebuildAsync(CancellationToken.None);
+        Record(store, id, 30);
+        await publisher.RebuildAsync(CancellationToken.None);
+        await Assert.That(Sent()).IsEquivalentTo(new double?[] { null }, CollectionOrdering.Matching);
+
+        time.Advance(TimeSpan.FromSeconds(30));
+        await Assert.That(Sent()).IsEquivalentTo(new double?[] { null, 30.0 }, CollectionOrdering.Matching);
+
+        double?[] Sent() {
+            lock (sent) return [.. sent];
+        }
+    }
+
+    [Test]
+    public async Task An_unchanged_reading_rewrite_announces_nothing() {
+        var store = Store();
+        Add(store, "work");
+        var id = store.Load().Accounts.Single().Id;
+        Record(store, id, 10);
+        using var publisher = Publisher(store, new FakeTimeProvider());
+        await publisher.RebuildAsync(CancellationToken.None);
+        var announced = 0;
+        publisher.Changed += _ => Interlocked.Increment(ref announced);
+
+        Record(store, id, 10);
+        await publisher.RebuildAsync(CancellationToken.None);
+
+        await Assert.That(Volatile.Read(ref announced)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Unreadable_reading_keeps_the_previous_one() {
+        var store = Store();
+        Add(store, "work");
+        var id = store.Load().Accounts.Single().Id;
+        Record(store, id, 42);
+        using var publisher = Publisher(store, new FakeTimeProvider());
+        await publisher.RebuildAsync(CancellationToken.None);
+        await Assert.That(Used(publisher.Current)).IsEqualTo(42.0);
+
+        var path = Home.CreateFile(["accounts", "readings", $"{id}.json"], "{ torn");
+        await publisher.RebuildAsync(CancellationToken.None);
+        await Assert.That(Used(publisher.Current)).IsEqualTo(42.0);
+
+        File.Delete(path);
+        await publisher.RebuildAsync(CancellationToken.None);
+        await Assert.That(publisher.Current!.Accounts.Single().Reading).IsNull();
+    }
+
+    VendorAccount AddTrustedCodex(AccountStore store) {
+        var dir     = AccountDirectory.Normalize(Home.CreateDir(".codex-work"));
+        var account = new VendorAccount(Guid.NewGuid().ToString("N"), HarnessId.Codex, dir, "work", DateTimeOffset.UnixEpoch);
+        var paths   = AccountLayouts.Codex(Home, dir);
+        CodexHooksWriter.Install(paths.UserHooksJson);
+        account = account with {
+            HookTrust            = HookTrustStates.Trusted,
+            HookTrustFingerprint = CodexTrustFingerprint.Of(paths),
+        };
+        store.Mutate(r => (r with { Accounts = [.. r.Accounts, account] }, 0));
+        return account;
+    }
+
+    static string StateOf(AccountsPublisher publisher) => publisher.Current!.Accounts.Single().RecordingState;
+
+    [Test]
+    public async Task An_edit_to_config_toml_republishes_without_a_registry_change() {
+        var store   = Store();
+        var account = AddTrustedCodex(store);
+        var time    = new FakeTimeProvider();
+        using var publisher = Publisher(store, time);
+        await publisher.StartAsync(CancellationToken.None);
+        try {
+            await Assert.That(StateOf(publisher)).IsEqualTo("recording");
+            var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            publisher.Changed += _ => changed.TrySetResult();
+
+            Home.CreateFile(Path.GetRelativePath(Home.Path, AccountLayouts.Codex(Home, account.Directory).ConfigToml), "a = 1\n");
+            time.Advance(Poll);
+
+            await changed.Task.WaitAsync(Timeout);
+            await Assert.That(StateOf(publisher)).IsEqualTo("installed");
+        } finally {
+            await publisher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task An_edit_to_hooks_json_requests_a_refresh_of_that_account() {
+        var store   = Store();
+        var account = AddTrustedCodex(store);
+        var time    = new FakeTimeProvider();
+        using var publisher = Publisher(store, time);
+        var requested = new List<string>();
+        var cooled    = 0;
+        publisher.RequestWiringRefresh = id => { lock (requested) requested.Add(id); };
+        publisher.RequestRefresh       = _ => Interlocked.Increment(ref cooled);
+        await publisher.StartAsync(CancellationToken.None);
+        try {
+            var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            publisher.Changed += _ => changed.TrySetResult();
+
+            File.AppendAllText(AccountLayouts.Codex(Home, account.Directory).UserHooksJson, "\n");
+            time.Advance(Poll);
+            await changed.Task.WaitAsync(Timeout);
+
+            await WaitUntil(() => { lock (requested) return requested.Count > 0; });
+            time.Advance(Poll);
+            time.Advance(Poll);
+            string[] seen;
+            lock (requested) seen = [.. requested];
+            await Assert.That(seen).IsEquivalentTo([account.Id]);
+            await Assert.That(Volatile.Read(ref cooled)).IsEqualTo(0);
+        } finally {
+            await publisher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task The_first_poll_requests_no_refresh() {
+        var store = Store();
+        AddTrustedCodex(store);
+        var time = new FakeTimeProvider();
+        using var publisher = Publisher(store, time);
+        var requested = 0;
+        publisher.RequestWiringRefresh = _ => Interlocked.Increment(ref requested);
+        await publisher.StartAsync(CancellationToken.None);
+        try {
+            time.Advance(Poll);
+            time.Advance(Poll);
+            await Assert.That(Volatile.Read(ref requested)).IsEqualTo(0);
+        } finally {
+            await publisher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task A_claude_account_has_no_wiring_watch() {
+        var store = Store();
+        Add(store, "work");
+        var time = new FakeTimeProvider();
+        using var publisher = Publisher(store, time);
+        var requested = 0;
+        publisher.RequestWiringRefresh = _ => Interlocked.Increment(ref requested);
+        await publisher.StartAsync(CancellationToken.None);
+        try {
+            var settings = AccountLayouts.Claude(Home, publisher.Current!.Accounts.Single().Directory).UserSettings;
+            Home.CreateFile(Path.GetRelativePath(Home.Path, settings), "{}");
+            time.Advance(Poll);
+            time.Advance(Poll);
+            await Assert.That(Volatile.Read(ref requested)).IsEqualTo(0);
         } finally {
             await publisher.StopAsync(CancellationToken.None);
         }

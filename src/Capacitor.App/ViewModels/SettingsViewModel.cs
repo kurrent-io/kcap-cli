@@ -1,4 +1,5 @@
 using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
@@ -17,6 +18,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     readonly string _runningName;
     readonly Func<string, CancellationToken, Task<bool>> _targetRunning;
     readonly Func<MutationRequest, CancellationToken, Task<MutationOutcome>> _runMutation;
+    readonly Func<CancellationToken, Task<MutationOutcome?>>? _moveToWindowsService;
     readonly Func<LifecyclePrompt, CancellationToken, Task<bool>> _confirm;
     readonly Func<CancellationToken, Task<bool>> _relaunch;
     readonly bool _canRenameOnPlatform;
@@ -33,6 +35,9 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     string _name;
     decimal? _capacity;
     bool _isBusy;
+    bool _windowsServiceVisible;
+    bool _windowsServiceOffered;
+    string? _windowsServiceMessage;
     bool _needsAppRestart;
     bool _notifyOnPermissions = true;
     bool _notifyOnQuestions = true;
@@ -55,12 +60,18 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
             Task startupSettled, Func<MutationRequest, CancellationToken, Task<bool>> canRetire,
             bool nameOverridden = false, bool needsAppRestart = false, CancellationToken appLifetime = default,
             NotificationSettingsService? notificationSettings = null,
-            IDesktopNotificationAccess? notificationAccess = null, ProfilesSettingsViewModel? profiles = null) {
+            IDesktopNotificationAccess? notificationAccess = null, ProfilesSettingsViewModel? profiles = null,
+            Func<CancellationToken, Task<MutationOutcome?>>? moveToWindowsService = null,
+            Func<CancellationToken, Task<ServiceSnapshot?>>? serviceStatus = null,
+            HarnessesSettingsViewModel? harnesses = null, CaptureSettingsViewModel? capture = null) {
+        Capture = capture ?? new CaptureSettingsViewModel(settings, appLifetime);
+        Harnesses = harnesses;
         _settings = settings;
         _ops = ops;
         _runningName = service.DaemonName;
         _targetRunning = targetRunning;
         _runMutation = runMutation;
+        _moveToWindowsService = moveToWindowsService;
         _confirm = confirm;
         _relaunch = relaunch;
         _canRenameOnPlatform = canRenameOnPlatform;
@@ -84,6 +95,10 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         SaveCommand = ReactiveCommand.CreateFromTask(SaveAsync, this.WhenAnyValue(x => x.CanSave)).DisposeWith(_subscriptions);
         RenameCommand = ReactiveCommand.CreateFromTask(RenameAsync, this.WhenAnyValue(x => x.CanRename)).DisposeWith(_subscriptions);
         NotificationAccessCommand = ReactiveCommand.CreateFromTask(ResolveNotificationAccessAsync).DisposeWith(_subscriptions);
+        WindowsServiceCommand = ReactiveCommand.CreateFromTask(InstallWindowsServiceAsync,
+            this.WhenAnyValue(x => x.IsBusy, x => x.WindowsServiceOffered, (busy, offered) => !busy && offered)).DisposeWith(_subscriptions);
+        if (serviceStatus is not null && moveToWindowsService is not null && OperatingSystem.IsWindows())
+            _ = LoadWindowsServiceOfferAsync(serviceStatus);
         service.Status.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(status => {
             _status = status;
             if (status.State != AttachState.Connected) _snapshot = null;
@@ -98,6 +113,9 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
             notificationSettings.Changes.Skip(1).ObserveOn(RxSchedulers.MainThreadScheduler)
                 .Subscribe(ApplyNotificationPreferences).DisposeWith(_subscriptions);
         }
+        Capture.WhenAnyValue(x => x.Busy).Subscribe(_ => Refresh()).DisposeWith(_subscriptions);
+        if (Harnesses is not null)
+            Harnesses.WhenAnyValue(x => x.Busy).Subscribe(_ => Refresh()).DisposeWith(_subscriptions);
         RefreshNotificationAccess();
     }
 
@@ -163,6 +181,14 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     public bool CanManageNotifications => _notificationSettings is not null;
 
     public ProfilesSettingsViewModel? Profiles { get; }
+    public string ProfileName => _settings.ProfileName;
+    public string ProfileCardLabel => Profiles is null ? "Management unavailable" : "Manage profiles";
+    public string ProfileCardHint => $"Current profile: {ProfileName}\n"
+        + (Profiles is null ? "Profile management is unavailable" : "Select to manage profiles");
+    public string ServerLabel => Uri.TryCreate(_settings.ServerUrl, UriKind.Absolute, out var url) ? url.Authority : _settings.ServerUrl;
+    public CaptureSettingsViewModel Capture { get; }
+    public HarnessesSettingsViewModel? Harnesses { get; }
+    public bool HasActiveOperation => IsBusy || Capture.Busy || Harnesses?.Busy == true;
 
     public AccountsSettingsViewModel? Accounts { get; init; }
     public AppearanceSettingsViewModel? Appearance { get; init; }
@@ -170,6 +196,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     /// <summary>The local server's search, when this app runs one. The app owns it, so closing Settings leaves it running.</summary>
     public LocalSearchViewModel? Search { get; init; }
     public ExperimentalSettingsViewModel? Experimental { get; init; }
+    public AboutSettingsViewModel? About { get; init; }
 
     /// What the OS calls the app that holds its notification switches.
     internal static string SystemSettingsName { get; } = OperatingSystem.IsWindows() ? "Windows Settings" : "System Settings";
@@ -215,7 +242,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         }
     }
 
-    public bool CanEdit => !IsBusy && !_needsAppRestart;
+    public bool CanEdit => !IsBusy && !Capture.Busy && Harnesses?.Busy != true && !_needsAppRestart;
     public bool CanSave => CanEdit && CapacityError is null && Capacity != _savedCapacity;
     public bool CanRename => CanEdit && _canRenameOnPlatform && !_nameOverridden && _startupSettled.IsCompletedSuccessfully &&
         NameError is null && Name != DaemonStore.Sanitize(_runningName) && Idle;
@@ -225,7 +252,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     public string? NameError => string.IsNullOrWhiteSpace(Name) || DaemonStore.Sanitize(Name) != Name
         ? "Use lowercase letters, numbers, dots, hyphens or underscores, with no surrounding spaces or repeated hyphens." : null;
     public string? CapacityError => Capacity is not { } value || value < 0 || value > int.MaxValue || decimal.Truncate(value) != value
-        ? "Enter a whole number (0 = unlimited)." : null;
+        ? "Enter a whole number. 0 means no limit." : null;
     public string? RenameHint => !_canRenameOnPlatform ? "Renaming is available on macOS and Windows."
         : _needsAppRestart ? "Restart this app to manage the renamed daemon."
         : _nameOverridden ? "The name is set by KCAP_DAEMON_NAME. Remove that environment override and restart the app before renaming."
@@ -246,6 +273,14 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
 
     public bool StatusShowsAgents => _status.State == AttachState.Connected && _snapshot is not null;
 
+    /// Whether the daemon runs and this app is attached to it.
+    public string DaemonState => DaemonStatusText.Attach(_status, _snapshot?.Daemon);
+    public string? DaemonStateHint => DaemonStatusText.AttachHint(_status);
+
+    /// The daemon's own connection to its server, apart from whether it runs; null while it is not attached.
+    public string? ServerState => DaemonStatusText.Server(_status, _snapshot?.Daemon);
+    public string? ServerStateHint => DaemonStatusText.ServerHint(_status, _snapshot?.Daemon);
+
     public string StatusTip => _status.State switch {
         AttachState.Connected when _snapshot is { } snap =>
             snap.Daemon.MaxAgents == 0
@@ -258,6 +293,63 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     public ReactiveCommand<Unit, Unit> SaveCommand { get; }
     public ReactiveCommand<Unit, Unit> RenameCommand { get; }
     public ReactiveCommand<Unit, Unit> NotificationAccessCommand { get; }
+    public ReactiveCommand<Unit, Unit> WindowsServiceCommand { get; }
+
+    /// The card shows once the service was found installable and stays for the outcome line.
+    public bool WindowsServiceVisible {
+        get => _windowsServiceVisible;
+        private set => this.RaiseAndSetIfChanged(ref _windowsServiceVisible, value);
+    }
+
+    /// A Scheduled Task supervises the daemon and this install carries the Windows service: the way back to
+    /// the service after its one-time offer was declined.
+    public bool WindowsServiceOffered {
+        get => _windowsServiceOffered;
+        private set => this.RaiseAndSetIfChanged(ref _windowsServiceOffered, value);
+    }
+
+    public string? WindowsServiceMessage {
+        get => _windowsServiceMessage;
+        private set => this.RaiseAndSetIfChanged(ref _windowsServiceMessage, value);
+    }
+
+    async Task LoadWindowsServiceOfferAsync(Func<CancellationToken, Task<ServiceSnapshot?>> serviceStatus) {
+        ServiceSnapshot? snap;
+        try {
+            snap = await serviceStatus(_lifetime.Token);
+        } catch (Exception) {
+            return;
+        }
+        if (snap is not { Supervisor: "windows_scheduled_task", WindowsServiceInstallable: true }) return;
+        RxSchedulers.MainThreadScheduler.Schedule(() => {
+            WindowsServiceOffered = true;
+            WindowsServiceVisible = true;
+        });
+    }
+
+    async Task InstallWindowsServiceAsync() {
+        IsBusy = true;
+        WindowsServiceMessage = null;
+        try {
+            var resumes = _status.Capabilities?.Contains(DaemonLifecycleController.ResumeCapability) == true;
+            var disclosure = DaemonLifecycleController.WindowsServiceDisclosure(_snapshot?.Daemon.ActiveAgents ?? 0, resumes);
+            if (!await _confirm(new LifecyclePrompt(LifecyclePrompt.KindWindowsService, null, null, false, disclosure), _lifetime.Token)) return;
+            WindowsServiceMessage = "Waiting for administrator approval…";
+            var outcome = await _moveToWindowsService!(_lifetime.Token);
+            WindowsServiceMessage = outcome switch {
+                MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout => "The daemon now runs under the kcap Windows service.",
+                MutationOutcome.Refused { Reason: "elevation_declined" } => "The administrator prompt was declined; nothing changed.",
+                MutationOutcome.UnconfirmedNoAttach =>
+                    "The administrator prompt was not answered in time, so nothing changed. Run it again from here when you can approve it.",
+                null => "Nothing changed. Restart the app and try again.",
+                _ => "The Windows service could not take the daemon over; it keeps its Scheduled Task.",
+            };
+            if (outcome is MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout) WindowsServiceOffered = false;
+        } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) {
+        } catch (Exception ex) {
+            WindowsServiceMessage = $"Could not install the Windows service: {ex.Message}";
+        } finally { IsBusy = false; }
+    }
 
     async Task SaveAsync() {
         if (!CanSave) return;
@@ -298,7 +390,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
             }
             if (!await _confirm(new LifecyclePrompt(LifecyclePrompt.KindRename, null, null, false,
                     $"Rename {_runningName} to {name}? The daemon will restart and this app will relaunch. " +
-                    "Only the saved capacity is used; save any capacity change first."), _lifetime.Token)) return;
+                    "Only the saved capacity is used. Save any capacity change first."), _lifetime.Token)) return;
             if (!_startupSettled.IsCompletedSuccessfully || !Idle) {
                 Message = "Wait until startup has finished and the daemon is idle before renaming.";
                 return;
@@ -310,7 +402,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
                 return;
             }
             if (!await _canRetire(request!, _lifetime.Token)) {
-                Message = "Update the kcap command-line tool before renaming; it could not confirm support for retiring the old service. The saved name is unchanged.";
+                Message = "Update kcap before renaming. This version could not confirm it can retire the old service. The saved name is unchanged.";
                 return;
             }
             if (!_startupSettled.IsCompletedSuccessfully || !Idle) {
@@ -327,7 +419,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
             }
             if (outcome is MutationOutcome.Failed { Reason: "cli_unsupported" }) {
                 await _settings.RestoreNameAsync(name, previous, _lifetime.Token);
-                Message = "The CLI no longer supports renaming. Update kcap and try again; the saved name was restored unless another edit changed it.";
+                Message = "This version of kcap cannot rename the daemon. Update kcap and try again. The saved name was restored unless another edit changed it.";
                 return;
             }
             _needsAppRestart = true;
@@ -403,6 +495,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     }
 
     void Refresh() {
+        this.RaisePropertyChanged(nameof(HasActiveOperation));
         this.RaisePropertyChanged(nameof(CanEdit));
         this.RaisePropertyChanged(nameof(CanSave));
         this.RaisePropertyChanged(nameof(CanRename));
@@ -412,15 +505,23 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         this.RaisePropertyChanged(nameof(StatusLabel));
         this.RaisePropertyChanged(nameof(StatusShowsAgents));
         this.RaisePropertyChanged(nameof(StatusTip));
+        this.RaisePropertyChanged(nameof(DaemonState));
+        this.RaisePropertyChanged(nameof(DaemonStateHint));
+        this.RaisePropertyChanged(nameof(ServerState));
+        this.RaisePropertyChanged(nameof(ServerStateHint));
     }
 
     public void Dispose() {
         _lifetime.Cancel();
+        Capture.Dispose();
+        Harnesses?.Dispose();
+        Profiles?.Dispose();
         _subscriptions.Dispose();
         Accounts?.Dispose();
         Appearance?.Dispose();
         Privacy?.Dispose();
         Experimental?.Dispose();
+        About?.Dispose();
         _lifetime.Dispose();
     }
 }

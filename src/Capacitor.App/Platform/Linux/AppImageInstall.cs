@@ -26,14 +26,15 @@ public sealed record AppImageInstall(string Image) {
     /// Copies the bundle's CLI and plugin out of the mount and returns the directory to run the CLI
     /// from. Each file is replaced by rename, so a running daemon keeps its old inode and sees an
     /// update the way it does after `kcap update`. When the copy fails the CLI runs from the mount.
-    public string TakeCliOutOfMount(Func<string, string?> getEnv, UserHome home, string appDirectory) {
+    /// <param name="build">The running app's own build, which this mount carries; defaults to this assembly's.</param>
+    public string TakeCliOutOfMount(Func<string, string?> getEnv, UserHome home, string appDirectory, string? build = null) {
         var bundleCli = BundleLayout.CliDirectory(appDirectory);
         var bundlePlugin = BundleLayout.PluginDirectory(appDirectory);
         var root   = StagedRoot(getEnv, home);
         var target = StagedCliDirectory(root);
         var plugin = BundleLayout.PluginDirectory(root);
         var stamp  = Path.Combine(root, "image.stamp");
-        var identity = ImageIdentity();
+        var identity = ImageIdentity(bundleCli, build ?? CapacitorVersion.Current());
 
         try {
             if (identity is not null && Staged(stamp, identity, bundleCli, target, bundlePlugin, plugin)) return target;
@@ -49,10 +50,16 @@ public sealed record AppImageInstall(string Image) {
         return target;
     }
 
-    // The image's size and mtime stand for its contents, so a matching stamp skips hashing the bundle.
-    string? ImageIdentity() {
+    // The image's size and mtime stand for its contents, so a matching stamp skips hashing the bundle. The path can
+    // already hold a newer image than the one this process mounted, as when the updater replaces it while a copy
+    // starts, so the running build and the CLI sizes it carries are part of it: that copy must not vouch for the new
+    // image, whose CLI may match in size and whose plugin may be all that changed.
+    string? ImageIdentity(string bundleCli, string build) {
         var image = new FileInfo(Image);
-        return image.Exists ? $"{image.Length}:{image.LastWriteTimeUtc.Ticks}" : null;
+        if (!image.Exists) return null;
+        var carried = CliFiles.Select(name => new FileInfo(Path.Combine(bundleCli, name)))
+            .Select(file => file.Exists ? file.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) : "-");
+        return $"{image.Length}:{image.LastWriteTimeUtc.Ticks}:{build}:{string.Join(',', carried)}";
     }
 
     static bool Staged(string stamp, string identity, string bundleCli, string target, string bundlePlugin, string plugin) =>

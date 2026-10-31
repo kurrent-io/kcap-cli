@@ -15,7 +15,8 @@ public class AccountsCommandTests {
 
     AccountStore Store => new(Tmp.PathTo("accounts"));
 
-    AccountsCommand Sut() => new(Store, TestPluginEnvironment.For(Home, PluginDir()), TimeProvider.System);
+    AccountsCommand Sut(IAccountProbe? probe = null) =>
+        new(Store, TestPluginEnvironment.For(Home, PluginDir()), TimeProvider.System) { ProbeFor = _ => probe ?? StubAccountProbe.SignedIn };
 
     string PluginDir() {
         var dir = Directory.CreateDirectory(Home.PathTo("plugin")).FullName;
@@ -85,6 +86,32 @@ public class AccountsCommandTests {
         await Assert.That(Store.Load().Accounts.Count).IsEqualTo(0);
         await Assert.That(ClaudePluginInstaller.IsPluginEnabled(Path.Combine(dir, "settings.json"))).IsFalse();
         await Assert.That(Directory.Exists(dir)).IsTrue();
+    }
+
+    [Test]
+    public async Task Remove_deletes_the_reading() {
+        var dir = ClaudeDir();
+        using var capture = ConsoleOutput.StartCapture();
+        await Sut().HandleAsync(["accounts", "add", "claude", dir]);
+        var id = Store.Load().Accounts.Single().Id;
+        await Assert.That(Store.Readings.TryRecord(id, (f, _) => f)).IsTrue();
+
+        var exit = await Sut().HandleAsync(["accounts", "remove", dir]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(Store.Readings.LoadAll().ContainsKey(id)).IsFalse();
+        await Assert.That(File.Exists(Path.Combine(Store.Directory, "readings", $"{id}.json"))).IsFalse();
+    }
+
+    [Test]
+    public async Task Rename_marks_the_label_as_user_set() {
+        var dir = ClaudeDir();
+        using var capture = ConsoleOutput.StartCapture();
+        await Sut().HandleAsync(["accounts", "add", "claude", dir]);
+
+        await Sut().HandleAsync(["accounts", "rename", dir, ".claude-work"]);
+
+        await Assert.That(Store.Load().Accounts.Single().LabelSetByUser == true).IsTrue();
     }
 
     [Test]
@@ -243,7 +270,7 @@ public class AccountsCommandTests {
         await Assert.That(result.Succeeded).IsFalse();
         await Assert.That(result.AccountId).IsEqualTo(account.Id);
         await Assert.That(result.Revision).IsEqualTo(registry.Revision);
-        await Assert.That(result.Steps.Single(s => !s.Succeeded).Name).IsEqualTo("plugin");
+        await Assert.That(result.Steps.Where(s => !s.Succeeded).Select(s => s.Name)).IsEquivalentTo(["plugin", "statusline"]);
         await Assert.That(result.Error).Contains("plugin");
         await Assert.That(account.WiringFailure).Contains("plugin");
         await Assert.That(account.WiredAt).IsNull();
@@ -266,7 +293,7 @@ public class AccountsCommandTests {
         await Assert.That(result.Succeeded).IsTrue();
         await Assert.That(result.Error).IsNull();
         await Assert.That(result.Revision).IsEqualTo(registry.Revision);
-        await Assert.That(result.Steps.Select(s => (s.Name, s.Succeeded))).IsEquivalentTo([("plugin", true)]);
+        await Assert.That(result.Steps.Select(s => (s.Name, s.Succeeded))).IsEquivalentTo([("plugin", true), ("statusline", true), ("identity", true)]);
         await Assert.That(account.WiredAt).IsNotNull();
         await Assert.That(account.WiringFailure).IsNull();
         await Assert.That(capture.GetCapturedOutput()).Contains("\"account_id\":").And.Contains("\"revision\":");
@@ -287,7 +314,8 @@ public class AccountsCommandTests {
         await Assert.That(result.Action).IsEqualTo("remove");
         await Assert.That(result.AccountId).IsEqualTo(id);
         await Assert.That(result.Succeeded).IsTrue();
-        await Assert.That(result.Revision).IsEqualTo(revision + 1);
+        // Unwiring discards the status line backup before the removal commits.
+        await Assert.That(result.Revision).IsEqualTo(revision + 2);
         await Assert.That(Store.Load().Revision).IsEqualTo(result.Revision);
     }
 
@@ -308,7 +336,7 @@ public class AccountsCommandTests {
         await Assert.That(result.Action).IsEqualTo("remove");
         await Assert.That(result.AccountId).IsEqualTo(account.Id);
         await Assert.That(result.Succeeded).IsFalse();
-        await Assert.That(result.Steps.Single(s => !s.Succeeded).Name).IsEqualTo("plugin");
+        await Assert.That(result.Steps.Where(s => !s.Succeeded).Select(s => s.Name)).IsEquivalentTo(["plugin", "statusline"]);
         await Assert.That(result.Error).Contains("It stays registered.");
         await Assert.That(result.Revision).IsEqualTo(before.Revision + 1);
         await Assert.That(after.Revision).IsEqualTo(result.Revision);
@@ -359,8 +387,85 @@ public class AccountsCommandTests {
         var result = SingleResult(capture.GetCapturedOutput());
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(result.AccountId).IsNull();
-        await Assert.That(result.Steps.Length).IsEqualTo(2);
+        await Assert.That(result.Steps.Length).IsEqualTo(4);
         await Assert.That(result.Revision).IsEqualTo(Store.Load().Revision);
+    }
+
+    [Test]
+    public async Task Refresh_json_reports_steps_and_revision() {
+        var dir = ClaudeDir();
+        await Quietly("accounts", "add", "claude", dir);
+        var before = Store.Load().Revision;
+        using var capture = ConsoleOutput.StartCapture();
+
+        var exit = await Sut().HandleAsync(["accounts", "refresh", dir, "--json"]);
+
+        var result  = SingleResult(capture.GetCapturedOutput());
+        var account = Store.Load().Accounts.Single();
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(result.Action).IsEqualTo("refresh");
+        await Assert.That(result.AccountId).IsEqualTo(account.Id);
+        await Assert.That(result.Succeeded).IsTrue();
+        await Assert.That(result.Steps.Select(s => (s.Name, s.Succeeded))).IsEquivalentTo([("identity", true)]);
+        await Assert.That(result.Revision!.Value).IsGreaterThan(before);
+        await Assert.That(result.Revision).IsEqualTo(Store.Load().Revision);
+        await Assert.That(account.Email).IsEqualTo("me@example.com");
+        await Assert.That(account.SignIn).IsEqualTo(SignInStates.SignedIn);
+    }
+
+    [Test]
+    public async Task Refresh_of_every_account_prints_a_line_each_and_exits_1_when_a_step_failed() {
+        await Quietly("accounts", "add", "claude", ClaudeDir());
+        await Quietly("accounts", "add", "claude", ClaudeDir(".claude-other"));
+        using var capture = ConsoleOutput.StartFullCapture();
+
+        var exit = await Sut(StubAccountProbe.Failing).HandleAsync(["accounts", "refresh"]);
+
+        var lines = capture.GetCapturedOutput().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(lines.Length).IsEqualTo(2);
+        await Assert.That(lines.All(l => l.Contains("claude not found on PATH"))).IsTrue();
+        await Assert.That(Store.Load().Accounts.All(a => a.RefreshError == "claude not found on PATH")).IsTrue();
+    }
+
+    [Test]
+    public async Task Refresh_text_names_the_sign_in_and_email() {
+        var dir = ClaudeDir();
+        await Quietly("accounts", "add", "claude", dir);
+        using var capture = ConsoleOutput.StartCapture();
+
+        var exit = await Sut().HandleAsync(["accounts", "refresh", dir]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(capture.GetCapturedOutput()).Contains("signed in").And.Contains("me@example.com");
+    }
+
+    [Test]
+    public async Task Add_result_carries_the_refresh_revision() {
+        var dir = ClaudeDir();
+        using var capture = ConsoleOutput.StartCapture();
+
+        await Sut().HandleAsync(["accounts", "add", "claude", dir, "--json"]);
+
+        var result  = SingleResult(capture.GetCapturedOutput());
+        var account = Store.Load().Accounts.Single();
+        await Assert.That(result.Revision).IsEqualTo(Store.Load().Revision);
+        await Assert.That(account.RefreshedAt).IsNotNull();
+        await Assert.That(account.Label).IsEqualTo("me@example.com");
+    }
+
+    [Test]
+    public async Task Add_whose_refresh_fails_still_succeeds_and_warns() {
+        var dir = ClaudeDir();
+        using var capture = ConsoleOutput.StartFullCapture();
+
+        var exit = await Sut(StubAccountProbe.Failing).HandleAsync(["accounts", "add", "claude", dir, "--json"]);
+
+        var result = SingleResult(capture.GetCapturedOutput());
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(result.Succeeded).IsTrue();
+        await Assert.That(result.Steps.Single(s => s.Name == "identity").Succeeded).IsFalse();
+        await Assert.That(capture.GetCapturedError()).Contains("Warning").And.Contains("claude not found on PATH");
     }
 
     [Test]

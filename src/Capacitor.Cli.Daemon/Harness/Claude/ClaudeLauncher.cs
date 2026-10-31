@@ -20,7 +20,7 @@ internal sealed partial class ClaudeLauncher(
     ) : IHostedAgentLauncher {
 
     public string Vendor  => "claude";
-    public string CliPath => config.ClaudePath;
+    public string CliPath => harnesses.LaunchCommand(HarnessId.Claude, config.ClaudePath);
     public bool   SupportsUnattended => true;
     public bool   SupportsPrReview   => true;
 
@@ -107,6 +107,8 @@ internal sealed partial class ClaudeLauncher(
 
     public bool SupportsResume => true;
 
+    public bool SupportsReviewerResume => true;
+
     public LaunchArgs BuildArgs(LauncherContext ctx) {
         var args = new List<string>();
         string? mcpConfigPath = null;
@@ -132,8 +134,10 @@ internal sealed partial class ClaudeLauncher(
             // MCP servers, so the reviewer can't recursively start a nested review flow.
             // Interactive (Default) agents keep prompts + their configured MCP servers.
             if (ctx.ResumeSessionId is { Length: > 0 } resumeId) {
+                // Transcript discovery records the id dashless. Claude reads anything but a dashed
+                // UUID as a picker search term, and the pasted prompt then lands in that search box.
                 args.Add("--resume");
-                args.Add(resumeId);
+                args.Add(Guid.TryParse(resumeId, out var resumeGuid) ? resumeGuid.ToString("D") : resumeId);
             } else if (ctx.PinnedSessionId is { Length: > 0 } pinnedId) {
                 args.Add("--session-id");
                 args.Add(pinnedId);
@@ -262,11 +266,13 @@ internal sealed partial class ClaudeLauncher(
     /// in front of them unless they already choose the session: in place, every Claude session in the
     /// folder shares the cwd, so only the id tells this agent's transcript from the user's own.
     public LaunchArgs BuildPassthrough(LauncherContext ctx, IReadOnlyList<string> userArgs) {
-        if (ClaudeSessionArgs.SelectsSession(userArgs, out var chosen)) return new([.. userArgs], McpConfigPath: null, chosen);
+        var mode = ClaudePermissionModeArgs.Selected(userArgs);
+
+        if (ClaudeSessionArgs.SelectsSession(userArgs, out var chosen)) return new([.. userArgs], McpConfigPath: null, chosen, mode);
 
         var pinned = Guid.NewGuid().ToString();
 
-        return new(["--session-id", pinned, .. userArgs], McpConfigPath: null, pinned);
+        return new(["--session-id", pinned, .. userArgs], McpConfigPath: null, pinned, mode);
     }
 
     public void Cleanup(AgentInstance agent) {
@@ -465,7 +471,10 @@ internal sealed partial class ClaudeLauncher(
                 }
             }
 
-            if (serverNames.Any(known.Add)) {
+            var before = known.Count;
+            known.UnionWith(serverNames);
+
+            if (known.Count > before) {
                 // Rebuild the array via JSON parsing to avoid AOT issues with
                 // JsonArray.Add(string) / JsonValue.Create<string>.
                 var json = "[" + string.Join(",", known.Select(n => $"\"{JsonEncodedText.Encode(n)}\"")) + "]";
@@ -642,14 +651,13 @@ internal sealed partial class ClaudeLauncher(
 
         var mcpJsonPath = Path.Combine(worktreePath, ".mcp.json");
 
-        // Read existing .mcp.json if present (e.g. committed to git)
-        JsonObject merged;
+        // Merged into the existing document (e.g. committed to git) so its other keys survive.
+        var wrapper = (File.Exists(mcpJsonPath) ? JsonNode.Parse(File.ReadAllText(mcpJsonPath)) as JsonObject : null)
+                   ?? new JsonObject();
 
-        if (File.Exists(mcpJsonPath)) {
-            var existing = JsonNode.Parse(File.ReadAllText(mcpJsonPath));
-            merged = existing?["mcpServers"]?.AsObject() ?? new JsonObject();
-        } else {
-            merged = new JsonObject();
+        if (wrapper["mcpServers"] is not JsonObject merged) {
+            merged                = new JsonObject();
+            wrapper["mcpServers"] = merged;
         }
 
         // The kcap Claude plugin already ships its servers session-wide, so a semantically
@@ -679,7 +687,6 @@ internal sealed partial class ClaudeLauncher(
             }
         }
 
-        var wrapper = new JsonObject { ["mcpServers"] = merged };
         File.WriteAllText(mcpJsonPath, wrapper.ToJsonString(IndentedJsonOpts));
     }
 

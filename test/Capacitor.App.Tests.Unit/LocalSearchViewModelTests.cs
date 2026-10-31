@@ -173,7 +173,6 @@ public class LocalSearchViewModelTests {
             h.Vm.Choice.UseKeyword = true;
 
             await Assert.That(h.Vm.CanApply).IsTrue();
-            await Assert.That(h.Vm.ApplyLabel).IsEqualTo("Use keyword search");
         });
     }
 
@@ -193,11 +192,45 @@ public class LocalSearchViewModelTests {
     }
 
     [Test]
+    [Arguments(0, true)]
+    [Arguments(0, false)]
+    [Arguments(1, true)]
+    [Arguments(1, false)]
+    public async Task An_upgrade_search_warning_allows_the_unchanged_builtin_choice_until_setup_succeeds(int exitCode, bool configured) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness(LocalEmbeddingSetting.Builtin(new string('a', 64)));
+            var canApply = false;
+            using var subscription = h.Vm.WhenAnyValue(x => x.CanApply).Subscribe(value => canApply = value);
+            const string skipped = """{"v":1,"event":"embeddings_skipped","code":"model_download_failed","message":"Model download failed"}""";
+            h.Cli.LocalUpgradeBehavior = UpgradeScript.Prints(0,
+                UpgradeScript.Planned("1.2.0", "1.3.0"), skipped, UpgradeScript.Upgraded("1.2.0", "1.3.0"));
+
+            await h.Upgrade.StartAsync(CancellationToken.None);
+            await h.Upgrade.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            await Assert.That(h.Vm.Choice.UseBuiltin).IsTrue();
+            await Assert.That(canApply).IsTrue();
+            await Assert.That(h.Vm.ApplyLabel).IsEqualTo("Try again");
+            await Assert.That(h.Vm.StateText).IsEqualTo("keyword search");
+            await Assert.That(h.Vm.CurrentText).Contains("keyword");
+
+            await h.ApplyAsync(exitCode,
+                configured ? """{"v":1,"event":"embeddings_configured","provider":"builtin"}""" : skipped,
+                exitCode == 0 ? LocalSetupScript.Committed : LocalSetupScript.Failed("start_failed"));
+
+            await Assert.That(h.Cli.SetupLocalEmbeddings).IsEquivalentTo([LocalEmbeddingChoice.Builtin], CollectionOrdering.Matching);
+            var succeeded = exitCode == 0 && configured;
+            await Assert.That(canApply).IsEqualTo(!succeeded);
+            await Assert.That(h.Vm.ApplyLabel).IsEqualTo(succeeded ? "Save" : "Try again");
+            await Assert.That(h.Vm.StateText).IsEqualTo(succeeded ? "search by meaning" : "keyword search");
+        });
+    }
+
+    [Test]
     public async Task Turning_search_by_meaning_on_reruns_setup_with_the_model_and_reconnects() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var h = new Harness(LocalEmbeddingSetting.Declined);
             h.Vm.Choice.UseOllama = true;
-            await Assert.That(h.Vm.ApplyLabel).IsEqualTo("Turn on search by meaning");
 
             h.Setting = LocalEmbeddingSetting.Ollama("mxbai-embed-large");
             await h.ApplyAsync(0,

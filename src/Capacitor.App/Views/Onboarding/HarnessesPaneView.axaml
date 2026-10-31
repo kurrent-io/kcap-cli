@@ -61,14 +61,14 @@
                 </StackPanel>
 
                 <TextBlock Classes="onboardingBody" IsVisible="{Binding NoneFound}">
-                    <Run Text="No harnesses were found on " /><Run Text="{Binding MachineName}" FontFamily="{StaticResource OnboardingMonoFont}"
-                        Foreground="{StaticResource OnboardingTextBrush}" /><Run Text=". Install a harness, then reopen setup from Help and support." />
+                    <Run Text="No coding tools were found on " /><Run Text="{Binding MachineName}" FontFamily="{StaticResource OnboardingMonoFont}"
+                        Foreground="{StaticResource OnboardingTextBrush}" /><Run Text="{x:Static vm:SetupLocation.NoneFoundTail}" />
                 </TextBlock>
 
                 <!-- The table: one row per detected harness, record and tools in fixed cells. -->
                 <StackPanel IsVisible="{Binding ShowsTable}">
-                    <Border Classes="onboardingRowRule" Padding="0,0,0,8">
-                        <Grid ColumnDefinitions="*,68,68">
+                    <Border Classes="onboardingRowRule" Padding="2,0,2,8">
+                        <Grid ColumnDefinitions="*,68,68" ColumnSpacing="8">
                             <TextBlock Classes="onboardingMicro">
                                 <Run Text="FOUND ON " /><Run Text="{Binding MachineName}" Foreground="{StaticResource OnboardingTextBrush}" />
                             </TextBlock>
@@ -81,34 +81,36 @@
                             <DataTemplate x:DataType="vm:HarnessRowViewModel">
                                 <Border Classes="onboardingRowRule" Padding="2,11">
                                     <StackPanel Spacing="6">
-                                        <!-- The box shares the name's row. The line under the name must not pull it down. -->
-                                        <Grid ColumnDefinitions="*,Auto,68,68" RowDefinitions="Auto,Auto" ColumnSpacing="8">
+                                        <!-- Center controls across the name and subtitle, above any consent note. -->
+                                        <Grid ColumnDefinitions="*,68,68" RowDefinitions="Auto,Auto" ColumnSpacing="8">
                                             <TextBlock Grid.Row="0" x:Name="HarnessLabelText" Classes="onboardingLabel" VerticalAlignment="Center"
                                                        Text="{Binding Label}" />
-                                            <TextBlock Grid.Row="1" Grid.Column="0" Classes="onboardingSignal" Margin="0,2,0,0"
-                                                       Text="{Binding SignalLine}" />
-                                            <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                                <TextBlock Classes="onboardingSignal" Text="installing…" IsVisible="{Binding Installing}" />
-                                                <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding Succeeded}">
-                                                    <icons:AppIcon Kind="Check" Size="12" Foreground="{StaticResource KcapSuccessBrush}" />
-                                                    <TextBlock Classes="onboardingSignal" Text="turned on" Foreground="{StaticResource KcapSuccessBrush}" />
+                                            <WrapPanel Grid.Row="1" Grid.Column="0" Orientation="Horizontal" Margin="0,2,0,0">
+                                                <TextBlock Classes="onboardingSignal" Margin="0,0,12,0" VerticalAlignment="Center"
+                                                           Text="{Binding SignalLine}" />
+                                                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                                    <TextBlock Classes="onboardingSignal" Text="installing…" IsVisible="{Binding Installing}" />
+                                                    <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding Succeeded}">
+                                                        <icons:AppIcon Kind="Check" Size="12" VerticalAlignment="Center" Foreground="{StaticResource KcapSuccessBrush}" />
+                                                        <TextBlock Classes="onboardingSignal" VerticalAlignment="Center" Text="turned on" Foreground="{StaticResource KcapSuccessBrush}" />
+                                                    </StackPanel>
+                                                    <Button x:Name="HarnessRetryButton" Classes="onboardingSecondary onboardingCompact" Content="Retry"
+                                                            Command="{Binding RetryCommand}" IsVisible="{Binding Failed}" />
                                                 </StackPanel>
-                                                <Button x:Name="HarnessRetryButton" Classes="onboardingSecondary onboardingCompact" Content="Retry"
-                                                        Command="{Binding RetryCommand}" IsVisible="{Binding Failed}" />
-                                            </StackPanel>
-                                            <CheckBox Grid.Row="0" Grid.Column="2" x:Name="RecordCheckBox" Classes="onboardingCheck"
+                                            </WrapPanel>
+                                            <CheckBox Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" x:Name="RecordCheckBox" Classes="onboardingCheck onboardingTableCheck"
                                                       HorizontalAlignment="Center" VerticalAlignment="Center"
                                                       IsEnabled="{Binding $parent[UserControl].((vm:HarnessesStepViewModel)DataContext).ChoicesEditable}"
                                                       IsChecked="{Binding Record, Mode=TwoWay}"
                                                       ToolTip.Tip="{Binding Label, StringFormat='Record {0} sessions'}"
                                                       AutomationProperties.Name="{Binding Label, StringFormat='Record {0} sessions'}" />
-                                            <CheckBox Grid.Row="0" Grid.Column="3" x:Name="ToolsCheckBox" Classes="onboardingCheck"
+                                            <CheckBox Grid.Row="0" Grid.RowSpan="2" Grid.Column="2" x:Name="ToolsCheckBox" Classes="onboardingCheck onboardingTableCheck"
                                                       HorizontalAlignment="Center" VerticalAlignment="Center"
                                                       IsEnabled="{Binding $parent[UserControl].((vm:HarnessesStepViewModel)DataContext).ChoicesEditable}"
                                                       IsChecked="{Binding Tools, Mode=TwoWay}" IsVisible="{Binding !ToolsBundled}"
                                                       ToolTip.Tip="{Binding Label, StringFormat='Give {0} kcap tools'}"
                                                       AutomationProperties.Name="{Binding Label, StringFormat='Give {0} kcap tools'}" />
-                                            <TextBlock Grid.Row="0" Grid.Column="3" Text="BUNDLED" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                            <TextBlock Grid.Row="0" Grid.RowSpan="2" Grid.Column="2" Text="BUNDLED" HorizontalAlignment="Center" VerticalAlignment="Center"
                                                        FontSize="9.5" FontWeight="SemiBold" LetterSpacing="0.6"
                                                        Foreground="{StaticResource OnboardingDimBrush}" IsVisible="{Binding ToolsBundled}" />
                                         </Grid>
@@ -121,6 +123,8 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                    <TextBlock x:Name="SettingsOnlyNoteText" Classes="onboardingNote" Text="{Binding SettingsOnlyNote}" Margin="0,11,0,0"
+                               IsVisible="{Binding SettingsOnlyNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                     <TextBlock Classes="onboardingNote" Text="{Binding NotFoundLine}" Margin="0,11,0,0"
                                IsVisible="{Binding NotFoundLine, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 </StackPanel>
@@ -143,12 +147,11 @@
                 <!-- Turning a harness on also puts the bundled CLI on the login shell. -->
                 <TextBlock x:Name="PathNoteText" Classes="onboardingNote" IsVisible="{Binding PathHazard}"
                            views:OnboardingSpans.Spans="{Binding PathNote}" />
-                <StackPanel Orientation="Horizontal" Spacing="9" IsVisible="{Binding PathResolved}">
+                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9" IsVisible="{Binding PathResolved}">
                     <icons:AppIcon Kind="Check" Size="14" VerticalAlignment="Center" Foreground="{StaticResource KcapSuccessBrush}" />
-                    <TextBlock Classes="onboardingDetail" Foreground="{StaticResource OnboardingMutedBrush}">
-                        <Run Text="Your login shell on " /><Run Text="{Binding MachineName}" FontFamily="{StaticResource OnboardingMonoFont}" /><Run Text=" can now find " /><Run Text="kcap" FontFamily="{StaticResource OnboardingMonoFont}" /><Run Text=". Capture will record." />
-                    </TextBlock>
-                </StackPanel>
+                    <TextBlock Grid.Column="1" x:Name="PathResolvedText" Classes="onboardingDetail" Foreground="{StaticResource OnboardingMutedBrush}"
+                               views:OnboardingSpans.Spans="{Binding PathResolvedNote}" />
+                </Grid>
 
                 <TextBlock Classes="onboardingError" Text="{Binding Message}"
                            IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
@@ -156,11 +159,8 @@
         </Border>
 
         <TextBlock Classes="onboardingNote" IsVisible="{Binding DeclineVisible}"
-                   Text="No new connections selected. Reopen setup from Help and support whenever you're ready." />
+                   Text="{x:Static vm:SetupLocation.NothingSelectedNote}" />
         <TextBlock Classes="onboardingNote" IsVisible="{Binding ConnectionsSaved}"
                    Text="{Binding SavedNote}" />
-        <TextBlock Classes="onboardingNote" IsVisible="{Binding !DeclineVisible}">
-            <Run Text="Then you can ask " /><Run Text="“have I hit this before?”" Foreground="{StaticResource OnboardingMutedBrush}" /><Run Text=" or " /><Run Text="“what did I change in the importer last week?”" Foreground="{StaticResource OnboardingMutedBrush}" />
-        </TextBlock>
     </StackPanel>
 </UserControl>
