@@ -19,7 +19,7 @@ public sealed class EditionStepViewModel : ReactiveObject, IWizardStep {
     public const string ExistingTitle = "Sign in to a workspace";
     public const string ExistingDetail =
         "Connect to a workspace you created or one your team invited you to.";
-    public const string UnsupportedPlatform = "The local edition runs only on Apple silicon Macs for now, so it isn't available on this machine.";
+    public const string UnsupportedPlatform = "The local edition runs only on Apple silicon Macs and x64 Windows PCs for now, so it isn't available on this machine.";
     public const string CloudProfilePresent =
         "This machine is set up for a cloud workspace. Switching to local setup isn't supported yet.";
 

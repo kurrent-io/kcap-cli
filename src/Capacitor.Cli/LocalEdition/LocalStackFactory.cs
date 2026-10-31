@@ -11,8 +11,8 @@ sealed class LocalStackFactory(LocalRoot root, UserHome home, TimeProvider time,
     public LocalRoot Root => root;
 
     public LocalStack Create() {
-        if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux())
-            throw new LocalInstallFailure(LocalInstallFailureCode.UnsupportedPlatform, "The local edition runs on macOS for now.");
+        if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux() && !OperatingSystem.IsWindows())
+            throw new LocalInstallFailure(LocalInstallFailureCode.UnsupportedPlatform, "The local edition runs on Apple silicon Macs and x64 Windows for now.");
 
         return new(root, home, LocalServerServices.ForCurrentOs(home, time), http.CreateClient(CapacitorClients.LocalInstallation), time, recorders, config);
     }

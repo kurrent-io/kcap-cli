@@ -13,7 +13,7 @@ namespace Capacitor.App.ViewModels.Onboarding;
 /// once the outcome is Installed.
 /// </summary>
 public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
-    public const string BusyText   = "Another kcap setup, upgrade or uninstall is running on this Mac.";
+    public static readonly string BusyText = $"Another kcap setup, upgrade or uninstall is running on {ThisDevice.Name}.";
     public const string LockedText     = "The install did not finish.";
     public const string ProfileMismatchCode = "profile_mismatch";
     public const string AnswerRequiredText  = "This installer needs answers this version of kcap doesn't give. Update kcap, then try again.";
@@ -27,8 +27,8 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     static readonly TimeSpan RetryGap = TimeSpan.FromSeconds(3);
 
     static readonly HashSet<string> StartFailureCodes = new(StringComparer.Ordinal) { "start_failed", "recovery_failed", "commit_failed" };
-    public const string RepairingText  = "Updating an older kcap on this Mac";
-    public const string OldClientText  = "An older kcap on this Mac is still in the way. Try again to update it.";
+    public static readonly string RepairingText = $"Updating an older kcap on {ThisDevice.Name}";
+    public static readonly string OldClientText = $"An older kcap on {ThisDevice.Name} is still in the way. Try again to update it.";
 
     readonly LocalInstallController _controller;
     readonly Func<string?>          _appProfile;
@@ -38,6 +38,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     readonly Func<CancellationToken, Task<LocalEmbeddingModelManifest?>> _builtinOffer;
     readonly Func<bool>             _resuming;
     readonly Func<CancellationToken, Task<ClientRepairOutcome>> _repairClients;
+    readonly bool                   _canRepair;
     readonly TimeProvider           _time;
     readonly Func<IReadOnlyList<string>, FeedbackMailOutcome>? _mailSupport;
     readonly List<string>           _startFailures = [];
@@ -76,6 +77,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
         _time                = time ?? TimeProvider.System;
         _mailSupport         = mailSupport;
         _repairClients       = repairClients ?? (_ => Task.FromResult<ClientRepairOutcome>(new ClientRepairOutcome.Clear()));
+        _canRepair           = repairClients is not null;
 
         Search          = new SearchChoiceViewModel();
         TryAgainCommand = ReactiveCommand.CreateFromTask(TryAgainAsync);
@@ -96,7 +98,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
 
     public WizardStepId Id                => WizardStepId.Install;
     /// Nothing installs while the search choice is up, so the headline says the page is still asking.
-    public string       Title             => ChoiceVisible ? "One more step before installing" : "Installing kcap on this Mac";
+    public string       Title             => ChoiceVisible ? "One more step before installing" : $"Installing kcap on {ThisDevice.Name}";
     public string       Eyebrow           => "Install";
     public bool         Applicable        => true;
     public bool         Satisfied         => _controller.Outcome is LocalInstallOutcome.Installed;
@@ -107,7 +109,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     public bool         CanContinue       => !ChoiceVisible || (Search.Valid && !Search.Checking);
     public bool         PassThrough       => !_onLocalPath() || _controller.Outcome is LocalInstallOutcome.Installed;
 
-    public string Lede => "kcap runs on this Mac and your sessions stay on it";
+    public string Lede => $"kcap runs on {ThisDevice.Name} and your sessions stay on it";
 
     public LocalSetupProgress Progress => _controller.Progress;
 
@@ -148,6 +150,8 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
         null                                         => null,
         _ when GaveUp                                => GaveUpText,
         { Affordance: LocalInstallAffordance.Busy }  => BusyText,
+        // Trying again cannot help where the app has no repair: the installer's own words say what to update.
+        { Code: "client_below_floor" } when !_canRepair => TerminalAdvice.Strip(Failure.Message) ?? OldClientText,
         { Affordance: LocalInstallAffordance.Retry } => RetryGuidance(Failure.Code),
         { Code: "answer_required" }                  => AnswerRequiredText,
         var failed                                   => TerminalAdvice.Strip(failed.Message) ?? LockedText,

@@ -111,11 +111,16 @@ public partial class App : Application {
     readonly UninstallMode? _uninstallMode = Program.Uninstall;
     UninstallRunViewModel? _uninstallRun;
 
+    /// <summary>The machines a local edition bundle is built for, as the CLI's preflight decides it.</summary>
+    static bool LocalEditionSupported =>
+        (OperatingSystem.IsMacOS() && RuntimeInformation.OSArchitecture == Architecture.Arm64)
+     || (OperatingSystem.IsWindows() && RuntimeInformation.OSArchitecture == Architecture.X64);
+
     public App() {
         // A live facade creates the device id and the spool under the config root being removed.
         _telemetry   = CliTelemetry.Start(
             DesktopTelemetry(_uninstallMode, _endpoints.SignupUrl,
-                UsageDataEdition.ForDesktop(_config, _localRoot, OperatingSystem.IsMacOS() && RuntimeInformation.OSArchitecture == Architecture.Arm64)),
+                UsageDataEdition.ForDesktop(_config, _localRoot, LocalEditionSupported)),
             _config, _time);
         _usageNotice = new UsageDataNotice(_telemetry, _config);
         _foreignHttp = new ServiceCollection().AddAppForeignHttp(_config, _serverEnv).BuildValidated();
@@ -1155,7 +1160,7 @@ public partial class App : Application {
         var localServer = new LocalServerRecoveryViewModel(
             serverLane.Status, isLocalServer, lifecycleCli.LocalStartAsync, () => serverLane.RestartAsync(), _shutdown.Token,
             busy: stackOwnsStart, readCondition: ct => LocalServerConditions.ReadAsync(_localRoot, ct),
-            canStart: OperatingSystem.IsMacOS() || OperatingSystem.IsLinux());
+            canStart: OperatingSystem.IsMacOS() || OperatingSystem.IsLinux() || OperatingSystem.IsWindows());
         _localServer = localServer;
         var webWorkspace = new WebWorkspaceViewModel(profiles?.Resolution.ServerUrl, opener, notifier.Notify,
             _shutdown.Token, localServer);
@@ -1743,7 +1748,7 @@ public partial class App : Application {
             Time: _time,
             ShutdownToken: _shutdown.Token,
             LocalRoot: _localRoot,
-            LocalEditionSupported: OperatingSystem.IsMacOS() && RuntimeInformation.OSArchitecture == Architecture.Arm64,
+            LocalEditionSupported: LocalEditionSupported,
             AlreadyAuthenticated: alreadyAuthenticated,
             ConfiguredDaemonName: () => ResolveConfiguredDaemonName(_config, _serverEnv, _localRoot),
             HeldDaemonNames: HeldDaemonNamesAsync,
@@ -1751,7 +1756,8 @@ public partial class App : Application {
             UsageNotice: _usageNotice,
             ReportCliSetup: ReportWizardCliSetupAsync,
             ReadVisibilityOptions: ReadWizardVisibilityOptionsAsync,
-            RepairClients: StaleClientRepair.ForApp(runner, probe, shimTarget, _userHome).RunAsync,
+            // The repair links through a login shell and an administrator prompt only macOS has.
+            RepairClients: OperatingSystem.IsMacOS() ? StaleClientRepair.ForApp(runner, probe, shimTarget, _userHome).RunAsync : null,
             MailSupport: report => FeedbackMail.Send(
                 new FeedbackSubmission(FeedbackCategory.Bug, report, Guid.NewGuid(), FeedbackSource.Desktop),
                 SystemBrowser.Instance, Capacitor.Cli.Core.Auth.Clipboard.TryCopy),

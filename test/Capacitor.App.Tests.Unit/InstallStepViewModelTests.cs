@@ -2,6 +2,7 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using Avalonia.Threading;
 using Capacitor.App.Services.LocalSetup;
+using Capacitor.App.ViewModels;
 using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalEdition;
@@ -516,7 +517,7 @@ public class InstallStepViewModelTests {
 
         await Assert.That(choice).IsTrue();
         await Assert.That(headlines).IsEquivalentTo(
-            ["One more step before installing", "Installing kcap on this Mac", "One more step before installing"],
+            ["One more step before installing", $"Installing kcap on {ThisDevice.Name}", "One more step before installing"],
             CollectionOrdering.Matching);
     }
 
@@ -642,6 +643,23 @@ public class InstallStepViewModelTests {
         await Assert.That(outcome).IsTypeOf<LocalInstallOutcome.Installed>();
         await Assert.That(repair.Calls).IsEqualTo(3);
         await Assert.That(cli.SetupLocalCallCount).IsEqualTo(2);
+    }
+
+    /// Where the app has no repair (Windows), trying again cannot clear an older kcap, so the page says what the
+    /// installer said: which copy, and to update or remove it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Without_a_repair_an_older_kcap_refusal_names_the_copy_to_update() {
+        var cli = new FakeKcapCli { SetupLocalBehavior = RefusedThenCommitted() };
+
+        var message = await AvaloniaSession.DispatchAsync(async () => {
+            var install = Step(Controller(cli, LocalSetupScript.NoSetup(Config), Probe()));
+            await EnterAndInstallAsync(install);
+            return install.FailureMessage;
+        });
+
+        await Assert.That(message).Contains("/usr/local/bin/kcap");
+        await Assert.That(message).Contains("Update or remove it");
     }
 
     static Func<Action<StreamedLine>, CancellationToken, CancellationToken, Task<StreamingResult>> RefusedThenCommitted() {

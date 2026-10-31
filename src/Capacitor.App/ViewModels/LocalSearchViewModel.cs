@@ -15,7 +15,7 @@ namespace Capacitor.App.ViewModels;
 /// An upgrade and a search change cannot run together, so each holds the other off.
 /// </summary>
 public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
-    public const string BusyText = "Another local setup, upgrade or uninstall is running on this Mac. Try again once it has finished.";
+    public static readonly string BusyText = $"Another local setup, upgrade or uninstall is running on {ThisDevice.Name}. Try again once it has finished.";
 
     static readonly string[] Derived = [
         nameof(Running), nameof(StateText), nameof(CurrentText), nameof(CanApply), nameof(ApplyLabel), nameof(Embeddings),

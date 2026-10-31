@@ -11,8 +11,8 @@ sealed class LocalInstallerFactory(
     IOutgoingRecorders recorders)
     : ILocalInstallerFactory {
     public LocalInstaller Create() {
-        if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux())
-            throw new LocalInstallFailure(LocalInstallFailureCode.UnsupportedPlatform, "The local edition runs on macOS for now.");
+        if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux() && !OperatingSystem.IsWindows())
+            throw new LocalInstallFailure(LocalInstallFailureCode.UnsupportedPlatform, "The local edition runs on Apple silicon Macs and x64 Windows for now.");
         if (OperatingSystem.IsLinux() && !ServiceManagerFactory.SystemdRunning())
             throw new LocalInstallFailure(LocalInstallFailureCode.UnsupportedPlatform,
                 "The local edition on Linux needs systemd, which is not running on this machine.");

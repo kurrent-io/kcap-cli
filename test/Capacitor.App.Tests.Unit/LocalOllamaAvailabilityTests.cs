@@ -1,5 +1,6 @@
 using System.Net;
 using Capacitor.App.Services.LocalSetup;
+using TUnit.Core.Enums;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -37,10 +38,16 @@ public class LocalOllamaAvailabilityTests {
             .IsEqualTo(available);
     }
 
-    [Test]
+    [Test, ExcludeOn(OS.Windows)]
     public async Task The_app_bundle_or_a_homebrew_cli_counts_as_installed() {
         await Assert.That(LocalOllamaAvailability.Installed(path => path == "/Applications/Ollama.app")).IsTrue();
         await Assert.That(LocalOllamaAvailability.Installed(path => path == "/opt/homebrew/bin/ollama")).IsTrue();
         await Assert.That(LocalOllamaAvailability.Installed(_ => false)).IsFalse();
+    }
+
+    [Test, RunOn(OS.Windows)]
+    public async Task The_per_user_windows_install_counts_as_installed() {
+        await Assert.That(LocalOllamaAvailability.Installed(path => path.EndsWith(@"\Programs\Ollama\ollama.exe", StringComparison.OrdinalIgnoreCase))).IsTrue();
+        await Assert.That(LocalOllamaAvailability.Installed(path => path == "/Applications/Ollama.app")).IsFalse();
     }
 }
