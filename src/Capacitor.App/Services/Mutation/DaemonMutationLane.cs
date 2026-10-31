@@ -82,9 +82,15 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
 
     /// <summary>The version of the kcap the lane would run <paramref name="request"/> with now, or null when none
     /// resolves or it does not answer</summary>
+    /// <remarks>A probe that throws reads as unknown: the replace prompts await this, and must still appear.</remarks>
     public async Task<string?> CliVersionAsync(MutationRequest request, CancellationToken ct) {
-        var path = await ResolvePathAsync(_pinnedCli(), ct).ConfigureAwait(false);
-        return path is null ? null : await _executorFactory(request, path).VersionAsync(ct).ConfigureAwait(false);
+        try {
+            var path = await ResolvePathAsync(_pinnedCli(), ct).ConfigureAwait(false);
+            return path is null ? null : await _executorFactory(request, path).VersionAsync(ct).ConfigureAwait(false);
+        } catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested) {
+            Console.Error.WriteLine($"DaemonMutationLane: kcap version probe failed ({ex.GetType().Name}): {ex.Message}");
+            return null;
+        }
     }
 
     public async Task<bool> CanRetireAsync(MutationRequest request, CancellationToken ct) {
