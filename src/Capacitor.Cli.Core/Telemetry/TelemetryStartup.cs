@@ -10,16 +10,18 @@ namespace Capacitor.Cli.Core.Telemetry;
 /// it, which also means nothing can re-read it — an MCP server re-deriving its own startup with
 /// <c>this with { Command = "mcp-server" }</c> inherits the decision instead of re-taking it.</para>
 /// </summary>
+/// <param name="Unsaved">What the run does while no choice is saved and no environment variable decides.</param>
 public sealed record TelemetryStartup(
-        string Command, string? ServerUrl, string SignupUrl, bool Suppressed, bool Debug, string Source = TelemetryStartup.CliSource) {
+        string Command, string? ServerUrl, string SignupUrl, bool Suppressed, bool Debug, string Source = TelemetryStartup.CliSource,
+        UnsavedConsent Unsaved = UnsavedConsent.Share) {
     public const string CliSource     = "cli";
     public const string DesktopSource = "desktop";
 
     /// <summary>The desktop app's own facade: its events carry the <c>desktop</c> source, its disclosure is
     /// shown on screen, and its eager captures flush off the calling thread.</summary>
-    public static TelemetryStartup ForDesktopApp(string? serverUrl, string signupUrl) =>
+    public static TelemetryStartup ForDesktopApp(string? serverUrl, string signupUrl, UnsavedConsent unsaved = UnsavedConsent.Share) =>
         new("app", serverUrl, signupUrl, Suppressed: false,
-            Debug: Environment.GetEnvironmentVariable("KCAP_TELEMETRY_DEBUG") == "1", DesktopSource);
+            Debug: Environment.GetEnvironmentVariable("KCAP_TELEMETRY_DEBUG") == "1", DesktopSource, unsaved);
 
     /// <summary>
     /// The app-spawned-child marker: consumed for telemetry suppression and removed from the

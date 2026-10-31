@@ -264,6 +264,14 @@ internal static class WizardComposition {
             },
             locked: () => signedInAtStart || Installed() || Pending() || CommittedLocal());
         bool OnLocalPath() => edition.Choice == EditionChoice.Local || Pending() || CommittedLocal();
+        // The edition decides what an unmade usage-data choice means: the cloud edition's notice, or the local edition's
+        // question. Settled ahead of the funnel event that reports the choice, so a cloud choice sends what was held with it.
+        edition.WhenAnyValue(x => x.Choice).Where(choice => choice is not null)
+            .Subscribe(choice => SettleUsageData(local: choice == EditionChoice.Local));
+        void SettleUsageData(bool local) {
+            options.Bridges.Telemetry.SettleEdition(local);
+            options.UsageNotice?.Restate();
+        }
         var installStep = new InstallStepViewModel(
             install,
             appProfile: () => options.ResolveIdentity()?.Profile ?? options.ProfileOverride,
@@ -368,6 +376,7 @@ internal static class WizardComposition {
         var startAt = options.ResumeWebSignUp && !signedInAtStart && !OnLocalPath() && !Installed()
             ? WizardStepId.SignIn
             : (WizardStepId?)null;
+        if (startAt == WizardStepId.SignIn) SettleUsageData(local: false);
         var wizard = shell = new OnboardingViewModel(
             steps, options.ShutdownToken, options.Surface, startAt, canFinishLater,
             preflight: new HarnessPreflight(detect), restate: durable.Select(_ => Unit.Default));

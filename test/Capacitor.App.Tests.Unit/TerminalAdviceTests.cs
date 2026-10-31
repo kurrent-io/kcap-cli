@@ -13,8 +13,8 @@ public class TerminalAdviceTests {
             "The musl builds of kcap do not support a local installation.");
         yield return () => ("The local edition runs on macOS for now.", "The local edition runs on macOS for now.");
         yield return () => (
-            "The local installation's sockets must have paths of at most 103 bytes: /Users/me/very/long/run/.s.PGSQL.5432 is 110 bytes; /Users/me/very/long/run/kurrentdb.sock is 109 bytes. Set KCAP_LOCAL_ROOT to a shorter directory.",
-            "The local installation's sockets must have paths of at most 103 bytes: /Users/me/very/long/run/.s.PGSQL.5432 is 110 bytes; /Users/me/very/long/run/kurrentdb.sock is 109 bytes.");
+            "The local installation's sockets must have paths of at most 103 bytes: /Users/me/very/long/run/.s.PGSQL.5432 is 110 bytes; /Users/me/very/long/data/kurrentdb/kurrent.sock is 120 bytes. Set KCAP_LOCAL_ROOT to a directory at least 17 bytes shorter.",
+            "The local installation's sockets must have paths of at most 103 bytes: /Users/me/very/long/run/.s.PGSQL.5432 is 110 bytes; /Users/me/very/long/data/kurrentdb/kurrent.sock is 120 bytes.");
         yield return () => (
             "/Users/shared is writable by every user, so the local server refuses to start under it. Run chmod o-w on it, or set KCAP_LOCAL_ROOT to a directory under your home.",
             "/Users/shared is writable by every user, so the local server refuses to start under it.");

@@ -12,8 +12,6 @@ namespace Capacitor.Cli.LocalEdition;
 /// </summary>
 sealed class LocalPreflight(
     LocalRoot root, ConfigRoot config, LocalPlatform platform, ILocalServerService service, int? socketLimit = null, ILocalClientCopies? copies = null) {
-    static readonly string[] Sockets = ["run/.s.PGSQL.5432", "run/kurrentdb.sock"];
-
     /// <summary>Platform, socket paths, ancestors, journal and registry, then (unless a journal calls for
     /// recovery first) profiles, the empty slot and the config, then the version; the other kcap copies last, since
     /// asking them spawns each one. An old copy never blocks a recovery: <see cref="Recheck"/> refuses it after.</summary>
@@ -38,12 +36,15 @@ sealed class LocalPreflight(
 
     public static int SocketLimit(LocalPlatform p) => p.IsMacOS ? 103 : 107;
 
+    /// <summary>Each of <see cref="LocalSockets.All"/> in UTF-8 bytes, the longer of its path under the root as
+    /// configured, which is what the server binds, and under the root with symlinks resolved.</summary>
     public static IReadOnlyList<(string Path, int Bytes)> SocketPaths(LocalRoot root) {
-        var resolvedRoot = ResolvedDirectory(root.Directory);
+        var configured = LocalSockets.All(new(Path.GetFullPath(root.Directory)));
+        var resolved   = LocalSockets.All(new(ResolvedDirectory(root.Directory)));
 
-        return [.. Sockets.Select(s => {
-            var path = Path.Combine(resolvedRoot, s);
-            return (path, Encoding.UTF8.GetByteCount(path));
+        return [.. configured.Zip(resolved, (c, r) => {
+            var (cBytes, rBytes) = (Encoding.UTF8.GetByteCount(c), Encoding.UTF8.GetByteCount(r));
+            return rBytes >= cBytes ? (r, rBytes) : (c, cBytes);
         })];
     }
 
@@ -90,13 +91,15 @@ sealed class LocalPreflight(
 
     void CheckSockets() {
         var limit = socketLimit ?? SocketLimit(platform);
-        var paths = SocketPaths(root);
+        var over = SocketPaths(root).Where(p => p.Bytes > limit).ToList();
 
-        if (paths.All(p => p.Bytes <= limit)) return;
+        if (over.Count == 0) return;
 
-        var listed = string.Join("; ", paths.Select(p => $"{p.Path} is {p.Bytes} bytes"));
+        var listed = string.Join("; ", over.Select(p => $"{p.Path} is {p.Bytes} bytes"));
+        var excess = over.Max(p => p.Bytes) - limit;
 
-        throw Refuse(LocalInstallFailureCode.SocketPathTooLong, $"The local installation's sockets must have paths of at most {limit} bytes: {listed}. Set {LocalRoot.EnvVar} to a shorter directory.");
+        throw Refuse(LocalInstallFailureCode.SocketPathTooLong,
+            $"The local installation's sockets must have paths of at most {limit} bytes: {listed}. Set {LocalRoot.EnvVar} to a directory at least {excess} {(excess == 1 ? "byte" : "bytes")} shorter.");
     }
 
     void CheckAncestors() {
