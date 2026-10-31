@@ -234,6 +234,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     }
 
     string _selectedPermissionMode = DefaultPermissionMode;
+    // Bumped by every user pick, so a repository restore that loaded before it leaves the pick alone.
+    int _permissionModeChoices;
     /// A ClaudePermissionModes token, remembered per repository like the harness and kept across
     /// vendor changes; PermissionModeFor decides whether it rides a given launch.
     public string SelectedPermissionMode {
@@ -1391,6 +1393,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     /// Same persistence rule as ChooseHarnessAsync.
     public async Task ChoosePermissionModeAsync(string mode) {
+        _permissionModeChoices++;
         SelectedPermissionMode = mode;
         if (RemoteMachineSelected) return;
 
@@ -1406,11 +1409,15 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// the viewer cannot launch on, or a server row whose path is not on this machine, changes nothing.
     public async Task SelectRepositoryOfAsync(AgentRow row) {
         if (row.RepoPath is not { Length: > 0 } path) return;
+        // The launcher is already showing while this resolves; a pick made meanwhile wins.
+        var before = (SelectedMachine, RemoteMachineSelected, SelectedRepoPath);
+        bool Untouched() => (SelectedMachine, RemoteMachineSelected, SelectedRepoPath) == before;
 
         if (row.Origin == AgentOrigin.Remote) {
             if (row.MachineBadge is not { Length: > 0 } machine) return;
             // Daemon names are unique per owner only: a teammate's row can name one of the viewer's machines.
-            if (await _viewerId(_shutdown) is not { } viewer || !string.Equals(row.OwnerUserId, viewer, StringComparison.Ordinal)) return;
+            if (await ViewerOrNullAsync() is not { } viewer || !string.Equals(row.OwnerUserId, viewer, StringComparison.Ordinal)) return;
+            if (!Untouched()) return;
             bool OnMachine() => RemoteMachineSelected && string.Equals(SelectedMachine, machine, StringComparison.Ordinal);
             if (!OnMachine()) await SelectMachineAsync(machine, isLocal: false);
             if (OnMachine()) await SelectRepositoryAsync(path);
@@ -1418,9 +1425,17 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         }
 
         var root = await Task.Run(() => Directory.Exists(path) ? PlatformPaths.Normalize(GitRepository.ResolveMainRepoRoot(path)) : "");
-        if (root.Length == 0) return;
+        if (root.Length == 0 || !Untouched()) return;
         if (RemoteMachineSelected) await SelectMachineAsync(_daemon.DaemonName, isLocal: true);
         await SelectRepositoryAsync(root);
+    }
+
+    async Task<string?> ViewerOrNullAsync() {
+        try {
+            return await _viewerId(_shutdown);
+        } catch (Exception) {
+            return null;
+        }
     }
 
     /// The repository chip's menu, assembled per open rather than kept as a live projection — the
@@ -1729,11 +1744,13 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         }
 
         var selected = SelectedRepoPath;
+        var permissionModeChoices = _permissionModeChoices;
         var saved = await _state.LoadAsync();
         // A machine switch or another pick made while the store loaded owns the vendor now.
         if (RemoteMachineSelected || !string.Equals(SelectedRepoPath, selected, StringComparison.Ordinal)) return;
         SetVendor(RepoVendor(Lookup(saved.HarnessByRepo, SelectedRepoPath), Harnesses));
-        SelectedPermissionMode = KnownPermissionMode(Lookup(saved.PermissionModeByRepo, SelectedRepoPath));
+        if (_permissionModeChoices == permissionModeChoices)
+            SelectedPermissionMode = KnownPermissionMode(Lookup(saved.PermissionModeByRepo, SelectedRepoPath));
         RevalidateVendor(Harnesses);
     }
 
