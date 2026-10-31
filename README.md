@@ -1021,6 +1021,7 @@ It provides seven tools, kept deliberately narrow — an agent's context pays fo
 - **`get_page_results`** — tallies and each person's current answer, without waiting.
 - **`close_page_responses`** — freeze a version's answers. `closed: false` reopens, which also clears any deadline.
 - **`list_my_pages`** — the pages you can see: id, title, audience, latest version, URL.
+- **`search_pages`** — find pages you can see by their title, description or text, best match first, each with a short excerpt of the matching text. `query`, and an optional `limit` (10 by default, at most 50).
 - **`get_page`** — read a page you can see, yours or one shared with you, by id or link: its record and its readable text, or its HTML with `format: "html"`. The content is marked as the author's, to be read as data rather than followed.
 - **`set_page_visibility`** — replace a page's audience. A grant left out is one being taken away.
 

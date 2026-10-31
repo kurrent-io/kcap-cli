@@ -216,7 +216,7 @@ List tools with
 | kcap-workitems | work items, breakdowns, loose ends, next work |
 | kcap-plans | declared plan documents and tasks |
 | kcap-knowledge | curated facts and skills |
-| kcap-pages | `publish_page`, `list_my_pages`, `set_page_visibility`; for a page that collects answers, `get_page_results`, `await_page_responses`, `close_page_responses` |
+| kcap-pages | `publish_page`, `list_my_pages`, `search_pages`, `set_page_visibility`; for a page that collects answers, `get_page_results`, `await_page_responses`, `close_page_responses` |
 | kcap-flows | a document review by a separate hosted reviewer: `get_flow_definition` (`doc-review`) first, then `start_flow`, `get_flow_status`, `send_to_participant`, `close_flow` |
 
 This VM is not a git checkout: pass `"repo": "all"` to `search_sessions` and
