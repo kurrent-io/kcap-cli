@@ -389,7 +389,7 @@ public class ClaudeHookCommandTests {
     }
 
     // Cross-vendor isolation: Claude's guidelines come from the hook POST response (top_clusters), NOT
-    // the /api/repositories/{hash}/guidelines GET the eight non-Claude harnesses use. Claude keeps a
+    // the /api/repositories/{hash}/guidelines/delivery GET the non-Claude harnesses use. Claude keeps a
     // memory-only provider, so it must NEVER issue a guidelines GET — pinned here so a future refactor
     // can't silently route Claude through the composite and double-fetch/reorder its envelope.
     [Test, NotInParallel]

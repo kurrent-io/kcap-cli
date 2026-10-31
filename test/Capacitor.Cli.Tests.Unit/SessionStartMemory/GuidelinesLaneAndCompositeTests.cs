@@ -1,4 +1,5 @@
 using System.Net;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.SessionStartMemory;
 
 using Microsoft.Extensions.Time.Testing;
@@ -27,8 +28,9 @@ public class GuidelinesLaneAndCompositeTests {
         new("https://example.test", "/repo", disabled, TimeSpan.FromSeconds(1), CancellationToken.None,
             GuidelinesDisabled: guidelinesDisabled);
 
-    static SessionStartGuidelinesLane Lane(HttpStatusCode status, string body, TimeSpan? retryAfter = null) =>
-        new(Lazy(new HttpClient(new Handler(status, body, retryAfter))), TimeProvider.System);
+    /// A delivery-capable server marks every response; <paramref name="marked"/> false is a server too old to deliver.
+    static SessionStartGuidelinesLane Lane(HttpStatusCode status, string body, TimeSpan? retryAfter = null, bool marked = true) =>
+        new(Lazy(new HttpClient(new Handler(status, body, retryAfter, marked ? SessionStartGuidelinesLane.DeliveryHeader : null))), TimeProvider.System);
 
     // ---- Guidelines lane ----
 
@@ -48,10 +50,24 @@ public class GuidelinesLaneAndCompositeTests {
 
     [Test]
     public async Task NotFound_maps_to_retryable_not_empty() {
-        // The visibility-race rule: 404 means "not visible yet", not "no facts".
+        // The visibility-race rule: a marked 404 means "not visible yet", not "no facts".
         var result = await Lane(HttpStatusCode.NotFound, "")
             .FetchWithScopeAsync(new SessionStartMemoryScope("repo", null), Req(), CancellationToken.None);
         await Assert.That(result.Disposition).IsEqualTo(SessionStartMemoryDisposition.RetryableFailure);
+    }
+
+    /// <summary>A server without the delivery endpoint gets no guidelines and no retry loop, and the lane never
+    /// falls back to the audience-blind dashboard read.</summary>
+    [Test]
+    public async Task Unmarked_NotFound_is_an_old_server_and_completes_without_falling_back() {
+        var handler = new Handler(HttpStatusCode.NotFound, "");
+        var lane    = new SessionStartGuidelinesLane(Lazy(new HttpClient(handler)), TimeProvider.System);
+
+        var result = await lane.FetchWithScopeAsync(new SessionStartMemoryScope("repo", null), Req(), CancellationToken.None);
+
+        await Assert.That(result.Disposition).IsEqualTo(SessionStartMemoryDisposition.CompleteWithoutContext);
+        await Assert.That(handler.Calls).IsEqualTo(1);
+        await Assert.That(handler.Uri!).Contains("/guidelines/delivery");
     }
 
     [Test]
@@ -92,13 +108,20 @@ public class GuidelinesLaneAndCompositeTests {
     }
 
     [Test]
-    public async Task Builds_repo_scoped_url() {
+    public async Task Builds_delivery_url_with_vendor_and_platform() {
         var handler = new Handler(HttpStatusCode.NoContent, "");
         var lane    = new SessionStartGuidelinesLane(Lazy(new HttpClient(handler)), TimeProvider.System);
 
-        await lane.FetchWithScopeAsync(new SessionStartMemoryScope("deadbeef01", null), Req(), CancellationToken.None);
+        await lane.FetchWithScopeAsync(new SessionStartMemoryScope("deadbeef01", null), Req() with { Vendor = "codex" }, CancellationToken.None);
 
-        await Assert.That(handler.Uri).IsEqualTo("https://example.test/api/repositories/deadbeef01/guidelines");
+        var platform = HostPlatform.Normalized is { } p ? "&platform=" + p : "";
+        await Assert.That(handler.Uri).IsEqualTo("https://example.test/api/repositories/deadbeef01/guidelines/delivery?vendor=codex" + platform);
+    }
+
+    [Test]
+    public async Task Delivery_url_without_context_has_no_empty_query() {
+        await Assert.That(SessionStartGuidelinesLane.BuildUrl("https://example.test/", "deadbeef01", null, null))
+            .IsEqualTo("https://example.test/api/repositories/deadbeef01/guidelines/delivery");
     }
 
     // ---- Composite ----
@@ -109,7 +132,7 @@ public class GuidelinesLaneAndCompositeTests {
             Handler? memoryHandler = null, Handler? guidelinesHandler = null) {
         var scope    = new FixedScope("repo", "machine");
         var memH     = memoryHandler ?? new Handler(memory.status, memory.body, memory.retryAfter);
-        var guideH   = guidelinesHandler ?? new Handler(guidelines.status, guidelines.body, guidelines.retryAfter);
+        var guideH   = guidelinesHandler ?? new Handler(guidelines.status, guidelines.body, guidelines.retryAfter, SessionStartGuidelinesLane.DeliveryHeader);
         // One stopped clock for both lanes and the composite: the budget they share must not be
         // spendable by a loaded runner between arming it and the handler answering.
         var time     = new FakeTimeProvider();

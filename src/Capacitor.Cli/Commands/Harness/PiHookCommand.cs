@@ -337,7 +337,7 @@ sealed class PiHookCommand(
             return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 LifecycleFor(file, reason),
                 new SessionStartMemoryContextRequest(Url, scopeRoot, disabled, budget, CancellationToken.None,
-                    GuidelinesDisabled: guidelinesDisabled, WakeUpsWanted: hosted.IsHosted, FlowsDisabled: flowsDisabled));
+                    GuidelinesDisabled: guidelinesDisabled, Vendor: HarnessId.Pi.VendorId, WakeUpsWanted: hosted.IsHosted, FlowsDisabled: flowsDisabled));
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
         }
