@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installs a packed Windows Setup.exe silently for the current user and asserts the layout the app's
-# gates and its update path rely on: Velopack's Update.exe at the root, the app, CLI, daemon and the
-# Windows service binary in current/, and the Start Menu shortcut. A silent install never launches the app.
+# gates and its update path rely on: Velopack's Update.exe at the root, the app in current/, the CLI,
+# daemon and Windows service binary in current/bin/, and the Start Menu shortcut. A silent install never launches the app.
 # Usage: install-windows-setup.sh <Setup.exe>
 set -euo pipefail
 
@@ -13,7 +13,7 @@ shortcut="$(unix "${APPDATA:?APPDATA is not set}")/Microsoft/Windows/Start Menu/
 "$setup" --silent || { echo "Setup.exe failed (exit $?)" >&2; exit 1; }
 
 missing=0
-for f in "$root/Update.exe" "$root/current/kcap-desktop.exe" "$root/current/kcap.exe" "$root/current/kcap-daemon.exe" "$root/current/kcap-service.exe" "$shortcut"; do
+for f in "$root/Update.exe" "$root/current/kcap-desktop.exe" "$root/current/bin/kcap.exe" "$root/current/bin/kcap-daemon.exe" "$root/current/bin/kcap-service.exe" "$shortcut"; do
   [ -f "$f" ] || { echo "Setup.exe did not install $f" >&2; missing=1; }
 done
 [ "$missing" -eq 0 ] || exit 1

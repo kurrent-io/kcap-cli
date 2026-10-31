@@ -14,7 +14,7 @@ public static class WindowsUninstallCleanup {
     static readonly TimeSpan ServiceStepTimeout = TimeSpan.FromSeconds(15);
 
     public static void Run(string appDirectory) {
-        var cli = Path.Combine(appDirectory, CliResolver.BundledCliFileName);
+        var cli = Path.Combine(BundleLayout.CliDirectory(appDirectory), CliResolver.BundledCliFileName);
         if (File.Exists(cli)) RemoveServices(cli, appDirectory);
 
         try {
