@@ -28,9 +28,11 @@ public sealed class CliTelemetry {
     readonly ITelemetrySink _sink;
     readonly TimeProvider   _time;
     readonly string         _command;
-    readonly string?        _deviceId;
+    // Null while the run waits on a usage-data choice: minting it would save telemetry state nobody consented to.
+    volatile string?        _deviceId;
     // Whether the id came off disk: an in-memory fallback id has no file to be replaced.
-    readonly bool           _deviceIdSaved;
+    bool                    _deviceIdSaved;
+    readonly object         _deviceIdGate = new();
     readonly string?        _orgGroup;
     readonly bool           _debug;
     readonly bool           _desktop;
@@ -72,8 +74,8 @@ public sealed class CliTelemetry {
         _sink     = sink;
         _time     = time;
         _command  = command;
-        _deviceId = deviceId;
         _deviceIdSaved = desktopConfig is not null && deviceId is not null && TelemetryDeviceId.ReadPersisted(desktopConfig) == deviceId;
+        _deviceId = deviceId;
         _orgGroup = orgGroup;
         _debug    = debug;
         _shared   = shared;
@@ -105,7 +107,7 @@ public sealed class CliTelemetry {
             unsaved: unsaved == UnsavedConsent.Pending ? UnsavedConsent.Withhold : unsaved);
 
     /// <summary>
-    /// Resolves the opt-out decision, mints the device id and builds the shared property bag,
+    /// Resolves the opt-out decision, mints the device id unless the run waits on a choice, and builds the shared property bag,
     /// returning a facade that is either live or <see cref="Disabled"/>.
     ///
     /// <para>Reaches no console and captures nothing: the one-time privacy notice and
@@ -141,15 +143,11 @@ public sealed class CliTelemetry {
 
             var version = Version();
 
-            // A device id that can't be persisted still gets an in-memory-only id for this
-            // process, rather than disabling telemetry outright: silently going dark on a disk
-            // hiccup costs more in data quality than a marginally inflated unique-device count in
-            // this rare fallback case.
             var telemetry = new CliTelemetry(
                 sink(),
                 startup.Command,
                 enabled: true,
-                TelemetryDeviceId.GetOrCreate(config) ?? Guid.NewGuid().ToString("N"),
+                waiting ? null : MintDeviceId(config),
                 PostHogPayload.OrgGroup(startup.ServerUrl),
                 startup.Debug,
                 startup.SignupUrl,
@@ -279,11 +277,31 @@ public sealed class CliTelemetry {
 
     public async Task FlushAndClose() {
         try {
-            if (!StillEnabled() || StillWaiting() || _deviceId is null) return;
+            if (!StillEnabled() || StillWaiting() || DeviceId() is not { } deviceId) return;
 
-            await _sink.FlushAsync(_deviceId, _orgGroup, FlushBudget);
+            await _sink.FlushAsync(deviceId, _orgGroup, FlushBudget);
         } catch { }
     }
+
+    /// <summary>The id to send under, minted on the first flush after a wait ends.</summary>
+    string? DeviceId() {
+        if (_deviceId is { } id) return id;
+        if (_root is not { } root) return null;
+
+        lock (_deviceIdGate) {
+            if (_deviceId is null) {
+                var minted = MintDeviceId(root);
+                _deviceIdSaved = _config is not null && TelemetryDeviceId.ReadPersisted(_config) == minted;
+                _deviceId      = minted;
+            }
+            return _deviceId;
+        }
+    }
+
+    // An id that cannot be saved still gets an in-memory one rather than turning telemetry off: going dark
+    // on a disk hiccup costs more than a slightly inflated unique-device count.
+    static string MintDeviceId(ConfigRoot config) =>
+        TelemetryDeviceId.GetOrCreate(config) ?? Guid.NewGuid().ToString("N");
 
     /// <summary>
     /// The run settled its edition. The cloud edition ends the wait: the notice is due, and what was held goes with

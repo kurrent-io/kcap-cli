@@ -56,6 +56,8 @@ public class SetupEditionTests {
     [Test]
     public async Task Local_runs_the_local_install() {
         using var noUrl   = EnvScope.Exclusive(ProfileOverrides.UrlVar, null);
+        using var noTel   = EnvScope.Exclusive("KCAP_TELEMETRY", null);
+        using var noDnt   = EnvScope.Exclusive("DO_NOT_TRACK", null);
         using var console = new ScriptedConsole().Enter().Line("no");
         using var capture = ConsoleOutput.StartErrorCapture();
 
@@ -71,6 +73,8 @@ public class SetupEditionTests {
     [Arguments("NO", false)]
     public async Task Local_asks_about_usage_data_and_saves_the_answer(string answer, bool shared) {
         using var noUrl   = EnvScope.Exclusive(ProfileOverrides.UrlVar, null);
+        using var noTel   = EnvScope.Exclusive("KCAP_TELEMETRY", null);
+        using var noDnt   = EnvScope.Exclusive("DO_NOT_TRACK", null);
         using var console = new ScriptedConsole().Enter().Line(answer);
         using var capture = ConsoleOutput.StartErrorCapture();
 
@@ -85,6 +89,8 @@ public class SetupEditionTests {
     [Test]
     public async Task The_usage_data_question_has_no_default_answer() {
         using var noUrl   = EnvScope.Exclusive(ProfileOverrides.UrlVar, null);
+        using var noTel   = EnvScope.Exclusive("KCAP_TELEMETRY", null);
+        using var noDnt   = EnvScope.Exclusive("DO_NOT_TRACK", null);
         using var console = new ScriptedConsole().Enter().Enter();
 
         await Assert.That(async () => await Command(localAvailable: true).HandleAsync(["setup"])).Throws<InvalidOperationException>();

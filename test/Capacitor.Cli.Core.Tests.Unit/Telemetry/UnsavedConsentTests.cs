@@ -61,6 +61,19 @@ public class UnsavedConsentTests {
     }
 
     [Test]
+    public async Task A_waiting_run_saves_no_device_id_until_sharing_is_settled() {
+        var probe = Start(UnsavedConsent.Pending);
+        await probe.Telemetry.FlushAndClose();
+
+        await Assert.That(TelemetryDeviceId.ReadPersisted(Config.Root)).IsNull();
+
+        probe.Telemetry.SettleEdition(local: false);
+        await probe.Telemetry.FlushAndClose();
+
+        await Assert.That(TelemetryDeviceId.ReadPersisted(Config.Root)).IsNotNull();
+    }
+
+    [Test]
     public async Task The_local_edition_waits_until_an_opt_in_is_saved_then_sends_what_waited() {
         var probe = Start(UnsavedConsent.Pending);
         probe.Telemetry.SettleEdition(local: false);
