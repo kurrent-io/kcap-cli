@@ -882,6 +882,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _logger            = logger;
         _consentGate       = consentGate;
         _statusNotifier    = statusNotifier ?? new();
+        if (accounts is not null) accounts.Changed += OnAccountsChanged;
         _subagentExpiry    = _time.CreateTimer(
             _ => RescheduleSubagentExpiry(announce: false), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         _quietTurn = _time.CreateTimer(
@@ -1740,6 +1741,17 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         accountId is not null && AccountsSnapshot()?.Accounts.FirstOrDefault(a => string.Equals(a.Id, accountId, StringComparison.Ordinal)) is { } row
             ? row.Label
             : launchLabel;
+
+    (string Id, string Label)[]? _accountLabels;
+
+    /// <summary>Status rows carry <see cref="CurrentAccountLabel"/>, so a relabel must wake status subscribers.
+    /// Only a label change pulses: reading updates republish the snapshot every few seconds.</summary>
+    internal void OnAccountsChanged(AccountsSnapshotDto snapshot) {
+        (string Id, string Label)[] labels = [.. snapshot.Accounts.Select(a => (a.Id, a.Label))];
+        var previous = _accountLabels;
+        _accountLabels = labels;
+        if (previous is null || !previous.SequenceEqual(labels)) _statusNotifier.Pulse();
+    }
 
     readonly AccountReadingSink? _readings;
 

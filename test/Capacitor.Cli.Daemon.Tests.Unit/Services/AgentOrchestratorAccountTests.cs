@@ -365,6 +365,22 @@ public class AgentOrchestratorAccountTests {
         await Assert.That(orch.SnapshotAgentsForStatus().Single(a => a.Id == "acct-ledger-now").AccountLabel).IsEqualTo("new@x");
     }
 
+    /// <summary>A status subscriber is woken by a relabel alone, and not by a snapshot whose labels are
+    /// unchanged, which reading updates produce every few seconds.</summary>
+    [Test]
+    public async Task A_relabel_wakes_status_subscribers_and_a_reading_change_does_not() {
+        await using var orch = Build(new CaptureServerConnection(), LivePty(), Spy());
+        var notifier = orch.StatusNotifierForTest;
+        orch.OnAccountsChanged(SnapshotLabelling(WorkId, "old@x"));
+        var baseline = notifier.Version;
+
+        orch.OnAccountsChanged(SnapshotLabelling(WorkId, "old@x") with { Revision = 2 });
+        await Assert.That(notifier.Version).IsEqualTo(baseline);
+
+        orch.OnAccountsChanged(SnapshotLabelling(WorkId, "new@x") with { Revision = 3 });
+        await Assert.That(notifier.Version).IsGreaterThan(baseline);
+    }
+
     [Test]
     public async Task Unknown_account_id_keeps_the_launch_label() {
         Register(WorkId, HarnessId.Claude, Tmp.CreateDir(".claude-work"), "old@x");
