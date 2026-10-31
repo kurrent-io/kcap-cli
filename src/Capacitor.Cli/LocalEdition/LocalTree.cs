@@ -21,11 +21,17 @@ static class LocalTree {
 
         if (!info.Exists) return false;
 
-        if (OperatingSystem.IsWindows())
-            foreach (var link in info.EnumerateDirectories("*", SearchOption.AllDirectories).Where(d => d.LinkTarget is not null).ToList())
-                link.Delete();
+        if (OperatingSystem.IsWindows()) RemoveLinks(info);
 
         Directory.Delete(path, recursive: true);
         return true;
+    }
+
+    /// <summary>Each link goes before anything descends into it, so a link out of the tree is never walked.</summary>
+    static void RemoveLinks(DirectoryInfo directory) {
+        foreach (var child in directory.EnumerateDirectories().ToList()) {
+            if (child.LinkTarget is not null) child.Delete();
+            else RemoveLinks(child);
+        }
     }
 }

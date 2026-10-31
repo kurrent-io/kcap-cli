@@ -13,15 +13,22 @@ public class LocalTreeTests {
     public async Task A_bin_holding_current_is_removed_without_following_it() {
         var outside = Tmp.CreateDir("outside");
         File.WriteAllText(Path.Combine(outside, "keep"), "x");
+        var nested = Path.Combine(outside, "nested");
+        Link(nested, Tmp.CreateDir("far"));
         Directory.CreateDirectory(Path.Combine(LocalBin.Directory(Root), "1.2.3"));
         LocalBin.Switch(Root, "1.2.3");
-        if (OperatingSystem.IsWindows()) WindowsJunction.Create(Path.Combine(LocalBin.Directory(Root), "elsewhere"), outside);
-        else Directory.CreateSymbolicLink(Path.Combine(LocalBin.Directory(Root), "elsewhere"), outside);
+        Link(Path.Combine(LocalBin.Directory(Root), "elsewhere"), outside);
 
         await Assert.That(LocalTree.Remove(LocalBin.Directory(Root))).IsTrue();
 
         await Assert.That(Directory.Exists(LocalBin.Directory(Root))).IsFalse();
         await Assert.That(File.Exists(Path.Combine(outside, "keep"))).IsTrue();
+        await Assert.That(new DirectoryInfo(nested).LinkTarget).IsNotNull();
+    }
+
+    static void Link(string path, string target) {
+        if (OperatingSystem.IsWindows()) WindowsJunction.Create(path, target);
+        else Directory.CreateSymbolicLink(path, target);
     }
 
     [Test]
