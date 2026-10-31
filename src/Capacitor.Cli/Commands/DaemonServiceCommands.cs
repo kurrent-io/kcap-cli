@@ -33,8 +33,15 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
-        // Elevated first, so the install below already finds the service and enrolls with it.
+        var serviceId = DaemonStore.Sanitize(DaemonNameResolver.Resolve(rest, profiles.DaemonName));
+
+        // Elevated first, so the install below already finds the service and enrolls with it. The elevated step
+        // changes the machine's service, so a hosted caller is refused ahead of it.
         if (system && action == "install" && OperatingSystem.IsWindows()) {
+            var enrolled = new RegistryServiceEnrollmentStore().Read()?.Name;
+            // A malformed --retire names no target here; the install below refuses it
+            if (await RefuseHostedCallerAsync(HostsCallerOf(store), serviceId, ParseRetire(rest).Id, enrolled, rest)) return 1;
+
             var elevated = WindowsServiceElevation.Run("install");
             if (elevated != 0) return await ElevationFailedAsync(elevated, "install");
         }
@@ -47,7 +54,6 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
-        var serviceId = DaemonStore.Sanitize(DaemonNameResolver.Resolve(rest, profiles.DaemonName));
         var verbs = new DaemonServiceCommands(store, root, profiles, manager, serviceId, home, time);
 
         // An update of the service binary: when the daemon is already enrolled as asked, the elevated step was the
@@ -268,6 +274,51 @@ sealed class DaemonServiceCommands(
     /// <summary>Stops a running daemon for a reload. Test seam; production uses the control socket.</summary>
     internal Func<string, ReloadStop>? ReloadStopper { get; init; }
 
+    /// <summary>Whether the daemon of a service id hosts this process. Test seam; production asks <see cref="HostedCaller"/>.</summary>
+    internal Func<string, bool>? HostsCaller { get; init; }
+
+    static Func<string, bool> HostsCallerOf(DaemonStore store) => serviceId => HostedCaller.HostedBy(store, serviceId);
+
+    /// <summary>Refuses an install whose service <paramref name="id"/>, retired daemon or displaced enrollment hosts
+    /// this process, naming the command to run elsewhere: replacing that daemon would end this command with it.</summary>
+    /// <param name="enrolledId">This user's <c>kcap-service</c> enrollment. The service holds one per user and stops
+    /// the daemon of the one an install replaces.</param>
+    static async Task<bool> RefuseHostedCallerAsync(
+            Func<string, bool> hostsCaller, string id, string? retireId, string? enrolledId, string[] args) {
+        if (HostedTarget(hostsCaller, id, retireId, enrolledId) is not { } host) return false;
+
+        List<string> words = ["kcap", "daemon", "service", "install", .. args];
+        if (!args.Contains("--name")) words.AddRange(["--name", id]);
+        await Console.Error.WriteLineAsync(HostedCaller.Refusal(host, $"`{string.Join(' ', words)}`"));
+
+        return true;
+    }
+
+    /// <summary>The first of the targets an install stops whose daemon hosts this process, or null</summary>
+    static string? HostedTarget(Func<string, bool> hostsCaller, string id, string? retireId, string? enrolledId) =>
+        new[] { id, retireId, enrolledId }.FirstOrDefault(target => target is not null && hostsCaller(target));
+
+    /// <summary>This user's <c>kcap-service</c> enrollment, which an install under another name replaces; null off Windows</summary>
+    string? EnrolledServiceId() => manager is WindowsServiceManager && manager.ListInstalled() is [var first, ..] ? first : null;
+
+    /// <summary>The sanitized <c>--retire</c> target, or the refusal for a malformed one</summary>
+    internal static (string? Id, string? Error) ParseRetire(string[] args) {
+        string? retire;
+        try {
+            retire = DaemonCommands.ExtractFlagValue(args, "--retire");
+        } catch (ArgumentException ex) {
+            return (null, ex.Message);
+        }
+        if (retire is null) return (null, null);
+
+        // Sanitize maps a blank or all-invalid value to "daemon", the fallback name that usually shares the
+        // profile: a raw value that is not itself a spelling of "daemon" is a typo aimed at the wrong target.
+        var retireId = DaemonStore.Sanitize(retire);
+        return retireId == "daemon" && !string.Equals(retire.Trim(), "daemon", StringComparison.OrdinalIgnoreCase)
+            ? (null, $"--retire value '{retire}' is not a service id.")
+            : (retireId, null);
+    }
+
     static readonly TimeSpan ForcedLockWait = TimeSpan.FromSeconds(10);
 
     internal static string RefreshToken(UnitRefresh outcome) => outcome switch {
@@ -472,21 +523,9 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
-        string? retire;
-        try {
-            retire = DaemonCommands.ExtractFlagValue(args, "--retire");
-        } catch (ArgumentException ex) {
-            await Console.Error.WriteLineAsync(ex.Message);
-
-            return 1;
-        }
-        var retireId = retire is null ? null : DaemonStore.Sanitize(retire);
-
-        // Sanitize maps a blank or all-invalid value to "daemon" — the fallback name, which usually
-        // shares the profile. A raw value that isn't itself (a spelling of) "daemon" but sanitizes to
-        // it is a typo aimed at the wrong target, not a deliberate name for the default daemon.
-        if (retireId == "daemon" && retire is not null && !string.Equals(retire.Trim(), "daemon", StringComparison.OrdinalIgnoreCase)) {
-            await Console.Error.WriteLineAsync($"--retire value '{retire}' is not a service id.");
+        var (retireId, retireError) = ParseRetire(args);
+        if (retireError is not null) {
+            await Console.Error.WriteLineAsync(retireError);
             return 1;
         }
 
@@ -499,6 +538,8 @@ sealed class DaemonServiceCommands(
             await Console.Error.WriteLineAsync("--retire names the service being installed; nothing to retire.");
             return 1;
         }
+
+        if (await RefuseHostedCallerAsync(HostsCaller ?? HostsCallerOf(store), id, retireId, EnrolledServiceId(), args)) return 1;
 
         var daemonPath = UnitIdentity.ResolveDaemonBinary();
         if (daemonPath is null) { await Console.Error.WriteLineAsync(DaemonCommands.DaemonNotFoundMessage()); return 1; }
@@ -547,6 +588,7 @@ sealed class DaemonServiceCommands(
         try {
             if (verify) {
                 await Console.Out.WriteLineAsync($"Service '{id}' installed (verified, {manager.Describe()}).");
+                await Console.Out.WriteLineAsync($"  Daemon:    {CapacitorVersion.CurrentDisplay()} is running; the unit starts {daemonPath}");
             } else {
                 await Console.Out.WriteLineAsync($"Service '{id}' installed ({manager.Describe()}).");
                 await Console.Out.WriteLineAsync("  Auto-restarts on crash/SIGKILL; starts at login.");
@@ -1015,6 +1057,12 @@ sealed class DaemonServiceCommands(
     /// transaction on launchd (or on Windows when retiring a renamed service) or a plain install
     /// elsewhere.</summary>
     async Task<(ServiceEnsureJson, int)> EnsureInstall(string? profileName, string state, string? retireServiceId) {
+        if (HostedTarget(HostsCaller ?? HostsCallerOf(store), id, retireServiceId, EnrolledServiceId()) is { } host) {
+            var profile = profileName is null ? "" : $" --profile {profileName}";
+            await Console.Error.WriteLineAsync(HostedCaller.Refusal(host, $"`kcap daemon service ensure --name {id}{profile}`"));
+            return (new ServiceEnsureJson(id, state, "install", "refused", null, "hosted_caller"), 1);
+        }
+
         var serverUrl = await ResolveServerUrlAsync(profileName);
         if (serverUrl is null)
             return (new ServiceEnsureJson(id, state, "install", "refused", null, "no_server_configured"), 1);

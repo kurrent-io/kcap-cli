@@ -101,4 +101,12 @@ public class HostedAgentTests {
 
         await Assert.That(markers.ToDictionary()).IsEquivalentTo(new Dictionary<string, string> { ["KCAP_SESSION_KIND"] = "flow_participant" });
     }
+
+    /// <summary>A surviving agent carries the id its daemon computed, and a restarted daemon or a CLI
+    /// compares against it, so the bytes are pinned rather than recomputed here.</summary>
+    [Test]
+    public async Task The_daemon_id_is_a_fixed_hash_of_the_name() {
+        await Assert.That(HostedAgent.DaemonId("tony")).IsEqualTo("e9e326d5f3b4741f");
+        await Assert.That(HostedAgent.DaemonId("tony")).IsNotEqualTo(HostedAgent.DaemonId("tony-1"));
+    }
 }

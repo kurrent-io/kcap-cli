@@ -19,6 +19,9 @@ public sealed record HostedAgent(string? AgentId, bool IsRendered, DaemonBridge 
     public const string FlowRoleVar    = "KCAP_FLOW_ROLE";
     public const string DaemonEpochVar = "KCAP_DAEMON_EPOCH";
 
+    /// <summary>Carries <see cref="DaemonId"/> of the daemon that launched the process, private agents included.</summary>
+    public const string DaemonIdVar = "KCAP_DAEMON_ID";
+
     /// <summary>Set to "1" on an envelope-sourced app-server session, whose transcript and approvals the
     /// daemon owns, so the Codex hook stands down from both.</summary>
     public const string HostedAppServerVar = "KCAP_HOSTED_APPSERVER";
@@ -69,6 +72,13 @@ public sealed record HostedAgent(string? AgentId, bool IsRendered, DaemonBridge 
         if (isFlowParticipant && !string.IsNullOrWhiteSpace(flowRole)) markers.Add(new(FlowRoleVar, flowRole));
         return markers;
     }
+
+    /// <summary>A daemon's stable id: a hash of its name, so another daemon of the same user never matches.
+    /// Persisted in surviving agents' environments, which a restarted daemon compares against, so these
+    /// bytes must not change.</summary>
+    public static string DaemonId(string? daemonName) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(daemonName ?? "")))
+            [..16].ToLowerInvariant();
 
     /// <summary>What a kcap MCP server inside the agent needs to ask its daemon for the agent's session:
     /// the agent, and which of the daemons on the machine hosts it.</summary>
