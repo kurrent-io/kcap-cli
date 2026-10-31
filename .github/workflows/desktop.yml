@@ -12,9 +12,9 @@ on:
         type: string
       release:
         description: >-
-          Sign and notarize on macOS, Authenticode-sign on Windows when a certificate is configured,
-          diff against the published feed and refuse a version already in the bucket. Needs the
-          Apple, Windows and R2 secrets.
+          Sign and notarize on macOS, sign with Azure Trusted Signing on Windows when its repository
+          variables are set (see RELEASING.md), diff against the published feed and refuse a version
+          already in the bucket. Needs the Apple and R2 secrets.
         type: boolean
         default: false
 
@@ -23,12 +23,16 @@ jobs:
     name: Build
     runs-on: ${{ startsWith(inputs.rid, 'osx-') && 'macos-latest' || startsWith(inputs.rid, 'win-') && 'windows-latest' || 'ubuntu-latest' }}
     timeout-minutes: ${{ startsWith(inputs.rid, 'osx-') && 90 || 60 }}
+    # The federated credential trusts this environment, so only a Windows release that signs enters
+    # it. Keep the condition identical to WINDOWS_SIGN below.
+    environment: ${{ inputs.release && startsWith(inputs.rid, 'win-') && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && (vars.AZURE_TRUSTED_SIGNING_ACCOUNT || vars.AZURE_TRUSTED_SIGNING_PROFILE) && 'windows-signing' || '' }}
     env:
       # vpk is a framework-dependent global tool built for an older runtime than the pinned SDK.
       DOTNET_ROLL_FORWARD: Major
       VERSION: ${{ inputs.version }}
       RID: ${{ inputs.rid }}
       EXE: ${{ startsWith(inputs.rid, 'win-') && '.exe' || '' }}
+      WINDOWS_SIGN: ${{ inputs.release && startsWith(inputs.rid, 'win-') && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && (vars.AZURE_TRUSTED_SIGNING_ACCOUNT || vars.AZURE_TRUSTED_SIGNING_PROFILE) && 'true' || 'false' }}
     defaults:
       run:
         shell: bash
@@ -133,14 +137,34 @@ jobs:
             || echo "no previous release to diff against"
           bash scripts/desktop-baseline.sh releases "$VERSION"
 
-      # Windows signs only once a certificate is configured: an unsigned build still installs and
-      # updates, but SmartScreen warns on the first download.
+      - name: Check the Trusted Signing configuration
+        if: env.WINDOWS_SIGN == 'true'
+        env:
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          AZURE_TRUSTED_SIGNING_PROFILE: ${{ vars.AZURE_TRUSTED_SIGNING_PROFILE }}
+          AZURE_TRUSTED_SIGNING_CLIENT_ID: ${{ vars.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
+          AZURE_TRUSTED_SIGNING_TENANT_ID: ${{ vars.AZURE_TRUSTED_SIGNING_TENANT_ID }}
+          AZURE_TRUSTED_SIGNING_PUBLISHER: ${{ vars.AZURE_TRUSTED_SIGNING_PUBLISHER }}
+          AZURE_TRUSTED_SIGNING_EKU: ${{ vars.AZURE_TRUSTED_SIGNING_EKU }}
+        run: bash scripts/trusted-signing-config.sh "$RUNNER_TEMP/trusted-signing.json"
+
+      - name: Sign in to Azure for Trusted Signing
+        if: env.WINDOWS_SIGN == 'true'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TRUSTED_SIGNING_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # Windows signs only once Trusted Signing is configured: an unsigned build still installs and
+      # updates, but SmartScreen warns on the first download. vpk skips a file that is already
+      # signed; the CLI, daemon and service are also excluded by name, because the bundle must carry
+      # the bytes npm ships and the daemon digest the CLI embeds.
       - name: Pack
         env:
           RELEASE: ${{ inputs.release }}
           APPLE_SIGNING_IDENTITY: ${{ startsWith(inputs.rid, 'osx-') && secrets.APPLE_SIGNING_IDENTITY || '' }}
-          WINDOWS_CERTIFICATE_PFX: ${{ startsWith(inputs.rid, 'win-') && secrets.WINDOWS_CERTIFICATE_PFX || '' }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ startsWith(inputs.rid, 'win-') && secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}
         run: |
           set -euo pipefail
           case "$RUNNER_OS" in
@@ -152,17 +176,14 @@ jobs:
             args+=(--signAppIdentity "$APPLE_SIGNING_IDENTITY" --signEntitlements src/Capacitor.App/Packaging/app.entitlements
                    --signDisableDeep --notaryProfile kcap-notary --keychain "$KEYCHAIN")
           fi
-          if [ "$RELEASE" = true ] && [ "$RUNNER_OS" = Windows ]; then
-            if [ -n "${WINDOWS_CERTIFICATE_PFX:-}" ]; then
-              printf '%s' "$WINDOWS_CERTIFICATE_PFX" | base64 -d > "$RUNNER_TEMP/kcap-sign.pfx"
-              args+=(--signParams "/fd sha256 /td sha256 /tr http://timestamp.digicert.com /f \"$RUNNER_TEMP/kcap-sign.pfx\" /p \"$WINDOWS_CERTIFICATE_PASSWORD\"")
-            else
-              echo "::warning::WINDOWS_CERTIFICATE_PFX is not configured; the Windows app ships unsigned"
-            fi
+          if [ "$WINDOWS_SIGN" = true ]; then
+            args+=(--azureTrustedSignFile "$(cygpath -w "$RUNNER_TEMP/trusted-signing.json")"
+                   --signExclude '(^|[\\/])(kcap|kcap-daemon|kcap-service)\.exe$')
+          elif [ "$RELEASE" = true ] && [ "$RUNNER_OS" = Windows ]; then
+            echo "::warning::Azure Trusted Signing is not configured; the Windows app ships unsigned"
           fi
           vpk pack --packId kcap --packVersion "$VERSION" --packTitle "kcap" --packAuthors Kurrent \
             --channel "$RID" --outputDir releases "${args[@]}"
-          rm -f "$RUNNER_TEMP/kcap-sign.pfx"
 
       - name: Assert and smoke the packed bundle
         if: runner.os == 'macOS'
@@ -213,6 +234,19 @@ jobs:
           bash scripts/assert-bundle-digest.sh "$install" trio/bin/daemon.sha256
           "$install/current/kcap-daemon.exe" --version
           "$install/current/kcap-service.exe" --version
+
+      - name: Verify the Windows signatures
+        if: env.WINDOWS_SIGN == 'true'
+        env:
+          AZURE_TRUSTED_SIGNING_PUBLISHER: ${{ vars.AZURE_TRUSTED_SIGNING_PUBLISHER }}
+          AZURE_TRUSTED_SIGNING_EKU: ${{ vars.AZURE_TRUSTED_SIGNING_EKU }}
+        run: |
+          set -euo pipefail
+          install="$(cygpath -u "$LOCALAPPDATA")/kcap"
+          bash scripts/verify-windows-signatures.sh releases/kcap-win-x64-Setup.exe "$install"/*.exe "$install"/current/*.exe
+          for f in kcap.exe kcap-daemon.exe kcap-service.exe; do
+            cmp -s "trio/bin/$f" "$install/current/$f" || { echo "::error::pack changed $f after the CLI build signed it"; exit 1; }
+          done
 
       # A missing native library or a platform-only call on the startup path ends the process
       # within seconds.

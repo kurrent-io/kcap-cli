@@ -11,7 +11,9 @@ on:
         required: true
         type: string
       sign:
-        description: Sign the macOS binaries. Needs the Apple secrets.
+        description: >-
+          Sign the release binaries: macOS with the Apple secrets, Windows with Azure Trusted Signing
+          when its repository variables are set (see RELEASING.md).
         type: boolean
         default: false
 
@@ -55,9 +57,13 @@ jobs:
         include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container || '' }}
+    # The federated credential trusts this environment, so only a Windows leg that signs enters it.
+    # Keep the condition identical to WINDOWS_SIGN below.
+    environment: ${{ inputs.sign && startsWith(matrix.rid, 'win-') && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && (vars.AZURE_TRUSTED_SIGNING_ACCOUNT || vars.AZURE_TRUSTED_SIGNING_PROFILE) && 'windows-signing' || '' }}
     env:
       VERSION: ${{ inputs.version }}
       EXE: ${{ startsWith(matrix.rid, 'win-') && '.exe' || '' }}
+      WINDOWS_SIGN: ${{ inputs.sign && startsWith(matrix.rid, 'win-') && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && (vars.AZURE_TRUSTED_SIGNING_ACCOUNT || vars.AZURE_TRUSTED_SIGNING_PROFILE) && 'true' || 'false' }}
     defaults:
       run:
         shell: bash
@@ -109,6 +115,39 @@ jobs:
           src/Capacitor.App/Packaging/daemon.entitlements
           publish/daemon/kcap-daemon publish/daemon/libpty_shim.dylib
 
+      - name: Check the Trusted Signing configuration
+        if: env.WINDOWS_SIGN == 'true'
+        env:
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          AZURE_TRUSTED_SIGNING_PROFILE: ${{ vars.AZURE_TRUSTED_SIGNING_PROFILE }}
+          AZURE_TRUSTED_SIGNING_CLIENT_ID: ${{ vars.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
+          AZURE_TRUSTED_SIGNING_TENANT_ID: ${{ vars.AZURE_TRUSTED_SIGNING_TENANT_ID }}
+          AZURE_TRUSTED_SIGNING_PUBLISHER: ${{ vars.AZURE_TRUSTED_SIGNING_PUBLISHER }}
+          AZURE_TRUSTED_SIGNING_EKU: ${{ vars.AZURE_TRUSTED_SIGNING_EKU }}
+        run: bash scripts/trusted-signing-config.sh
+
+      - name: Sign in to Azure for Trusted Signing
+        if: env.WINDOWS_SIGN == 'true'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with: &azure-login
+          client-id: ${{ vars.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TRUSTED_SIGNING_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # Before the digest, like the macOS daemon. The action's dependency cache is off so a signing
+      # job never restores tooling from a cache another run wrote.
+      - name: Sign the Windows daemon
+        if: env.WINDOWS_SIGN == 'true'
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_TRUSTED_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\publish\daemon\kcap-daemon.exe
+          exclude-environment-credential: true
+          cache-dependencies: false
+
       - name: Compute daemon digest
         id: daemon-digest
         run: |
@@ -143,6 +182,35 @@ jobs:
         run: >
           bash scripts/sign-macos.sh "$APPLE_SIGNING_IDENTITY" "$KEYCHAIN"
           src/Capacitor.App/Packaging/cli.entitlements publish/cli/kcap
+
+      # A second sign-in: the AOT publishes after the first can outlast the federated token it holds.
+      - name: Sign in to Azure for Trusted Signing again
+        if: env.WINDOWS_SIGN == 'true'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with: *azure-login
+
+      # e_sqlite3 stays unsigned: the CLI verifies the downloaded native against a pinned SHA-256.
+      - name: Sign the Windows CLI and service
+        if: env.WINDOWS_SIGN == 'true'
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_TRUSTED_SIGNING_PROFILE }}
+          files: |
+            ${{ github.workspace }}\publish\cli\kcap.exe
+            ${{ github.workspace }}\publish\service\kcap-service.exe
+          exclude-environment-credential: true
+          cache-dependencies: false
+
+      - name: Verify the Windows signatures
+        if: env.WINDOWS_SIGN == 'true'
+        env:
+          AZURE_TRUSTED_SIGNING_PUBLISHER: ${{ vars.AZURE_TRUSTED_SIGNING_PUBLISHER }}
+          AZURE_TRUSTED_SIGNING_EKU: ${{ vars.AZURE_TRUSTED_SIGNING_EKU }}
+        run: >
+          bash scripts/verify-windows-signatures.sh
+          publish/daemon/kcap-daemon.exe publish/cli/kcap.exe publish/service/kcap-service.exe
 
       - name: Smoke the binaries
         if: startsWith(matrix.rid, 'osx-')
