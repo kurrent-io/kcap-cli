@@ -1,7 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
 using Capacitor.Cli.Core.LocalEdition;
-using TUnit.Core.Enums;
 
 namespace Capacitor.Cli.Core.Tests.Unit.LocalEdition;
 
