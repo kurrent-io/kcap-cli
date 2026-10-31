@@ -1,5 +1,6 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Services;
+using Capacitor.Cli.Tests.Unit.Services;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -31,6 +32,68 @@ internal sealed class DaemonCommandsServiceInstallTests {
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(err.GetCapturedError()).Contains(refusal);
+    }
+
+    /// <summary>An agent the target daemon hosts would be ended by the replace it started, so the command
+    /// refuses before resolving or touching anything, and names the command to run elsewhere. A retired
+    /// daemon ends what it hosts too.</summary>
+    [Test, NotInParallel]
+    [Arguments("test-id", new[] { "--replace", "--verify" }, "`kcap daemon service install --replace --verify --name test-id`")]
+    [Arguments("old", new[] { "--replace", "--verify", "--retire", "old" }, "`kcap daemon service install --replace --verify --retire old --name test-id`")]
+    [Arguments("test-id", new string[0], "`kcap daemon service install --name test-id`")]
+    public async Task Install_refuses_inside_an_agent_the_daemon_it_stops_hosts(string host, string[] args, string command) {
+        using var err = ConsoleOutput.StartErrorCapture();
+        var manager = new CountingManager();
+        var asked   = new List<string>();
+
+        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), manager, "test-id", Home, TimeProvider.System) {
+            HostsCaller = id => { asked.Add(id); return id == host; },
+        }.Install(args, startNow: true);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(err.GetCapturedError()).Contains($"daemon '{host}' hosts");
+        await Assert.That(err.GetCapturedError()).Contains(command);
+        await Assert.That(manager.InstallCalls).IsEqualTo(0);
+        await Assert.That(asked).Contains(host);
+    }
+
+    /// <summary>kcap-service holds one enrollment per user and stops the daemon of the one an install replaces, so
+    /// installing another name inside an agent the enrolled daemon hosts is refused before the service is asked
+    /// anything, and the enrollment is left as it was.</summary>
+    [Test, NotInParallel]
+    public async Task Install_refuses_inside_an_agent_the_enrollment_it_replaces_hosts() {
+        using var err = ConsoleOutput.StartErrorCapture();
+        var pipe        = new FakeServicePipe();
+        var enrollment  = new ServiceEnrollment("work", @"C:\kcap\kcap-daemon.exe", null, null, null);
+        var enrollments = new FakeServiceEnrollmentStore { Current = enrollment };
+        var manager     = new WindowsServiceManager(Config.Root, pipe, enrollments, tasks: null, stopDaemon: _ => true);
+
+        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), manager, "personal", Home, TimeProvider.System) {
+            HostsCaller = id => id == "work",
+        }.Install([], startNow: true);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(err.GetCapturedError()).Contains("daemon 'work' hosts");
+        await Assert.That(err.GetCapturedError()).Contains("`kcap daemon service install --name personal`");
+        await Assert.That(pipe.Verbs).IsEmpty();
+        await Assert.That(enrollments.Current).IsEqualTo(enrollment);
+    }
+
+    /// <summary>The check ahead of the elevated step reads the retire target by the install's own rule: a
+    /// malformed value names no target, so the install refuses the value instead of the default daemon
+    /// being taken for the one to retire.</summary>
+    [Test]
+    [Arguments(new[] { "--replace", "--verify", "--retire", "old" }, "old")]
+    [Arguments(new[] { "--retire", "daemon" }, "daemon")]
+    [Arguments(new[] { "--retire", "***" }, null)]
+    [Arguments(new[] { "--retire", "  " }, null)]
+    [Arguments(new[] { "--retire" }, null)]
+    [Arguments(new[] { "--replace", "--verify" }, null)]
+    public async Task Retire_target_is_none_for_a_value_the_install_refuses(string[] args, string? target) {
+        var (id, error) = DaemonServiceCommands.ParseRetire(args);
+
+        await Assert.That(id).IsEqualTo(target);
+        await Assert.That(error is null).IsEqualTo(target is not null || !args.Contains("--retire"));
     }
 
     /// <summary>A plain (non-verify) install serializes on the same per-label service lock as every

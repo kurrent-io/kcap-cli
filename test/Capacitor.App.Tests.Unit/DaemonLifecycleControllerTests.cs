@@ -1697,6 +1697,74 @@ public class DaemonLifecycleControllerTests {
         await Assert.That(h.Surface.AttentionMessages.Count(m => m.StartsWith("Daemon daemon-a doesn't match", StringComparison.Ordinal))).IsEqualTo(1);
     }
 
+    /// The replace installs the app's own kcap, so an offer to a daemon newer than it says the replace is a downgrade.
+    [Test]
+    public async Task A_replace_offer_to_a_newer_daemon_says_it_downgrades() {
+        if (!AttachedIdentity.SupportsVerifiedReplace) return;
+        await using var h = new Harness();
+        h.Cli.VersionBehavior = _ => Task.FromResult<string?>("1.4.0+abc");
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: true, state: "running"));
+        h.Start();
+        await WaitUntilAsync(() => h.Controller.CliVersion is not null, what: "the version probe");
+
+        h.Client.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(
+            daemon: "daemon-a", version: "1.4.1-beta.1", serverUrl: "https://norton.kcap.ai:443", profile: "norton"));
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.Prompts.Count == 1, what: "the replace offer");
+        await Assert.That(h.Surface.Prompts[0].Disclosure).Contains("The daemon runs 1.4.1-beta.1, newer than this kcap's 1.4.0: replacing it now downgrades it to 1.4.0.");
+    }
+
+    /// The replace runs whichever kcap the lane resolves when it runs, so the offer names the version probed for
+    /// it then, not the one cached at startup.
+    [Test]
+    public async Task A_replace_offer_names_the_kcap_probed_for_it_not_the_cached_one() {
+        if (!AttachedIdentity.SupportsVerifiedReplace) return;
+        await using var h = new Harness();
+        h.Cli.VersionBehavior = _ => Task.FromResult<string?>("1.4.0+abc");
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: true, state: "running"));
+        h.Start();
+        await WaitUntilAsync(() => h.Controller.CliVersion is not null, what: "the version probe");
+        h.Cli.VersionBehavior = _ => Task.FromResult<string?>("1.5.0");
+
+        h.Client.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(
+            daemon: "daemon-a", version: "1.4.1", serverUrl: "https://norton.kcap.ai:443", profile: "norton"));
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.Prompts.Count == 1, what: "the replace offer");
+        await Assert.That(h.Surface.Prompts[0].Disclosure).Contains("The daemon runs 1.4.1; replacing it installs 1.5.0.");
+    }
+
+    /// A snapshot outlives the attach that delivered it, so once an attach fails the version is that attach's own.
+    [Test]
+    public async Task A_failed_attach_reports_its_own_daemon_version_not_the_last_snapshot() {
+        await using var h = new Harness();
+        h.Start();
+
+        h.Client.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(daemon: "daemon-a", version: "1.4.1", serverUrl: h.CanonicalServer!));
+        h.PushConnected();
+        await Assert.That(h.Controller.AttachedDaemonVersion).IsEqualTo("1.4.1");
+
+        h.PushUnreachable("daemon_incompatible");
+        await Assert.That(h.Controller.AttachedDaemonVersion).IsNull();
+
+        h.PushUnreachable("daemon_incompatible", daemonVersion: "1.3.0");
+        await Assert.That(h.Controller.AttachedDaemonVersion).IsEqualTo("1.3.0");
+
+        h.PushConnecting();
+        await Assert.That(h.Controller.AttachedDaemonVersion).IsNull();
+    }
+
+    [Test]
+    public async Task A_prompt_is_left_alone_when_the_versions_are_unknown_or_the_same() {
+        var prompt = new LifecyclePrompt(LifecyclePrompt.KindRepair, null, "1.4.0", false, "Replace it.");
+
+        await Assert.That(DaemonLifecycleController.WithVersionChange(prompt, null, "1.4.0")).IsSameReferenceAs(prompt);
+        await Assert.That(DaemonLifecycleController.WithVersionChange(prompt, "1.4.0+abc", "1.4.0+def")).IsSameReferenceAs(prompt);
+        await Assert.That(DaemonLifecycleController.WithVersionChange(prompt, "1.3.9", "1.4.0").Disclosure)
+            .IsEqualTo("Replace it.\n\nThe daemon runs 1.3.9; replacing it installs 1.4.0.");
+    }
+
     /// Where the platform has no verified replace, a mismatch is reported with the command to run by hand.
     [Test]
     public async Task Without_a_verified_replace_the_mismatch_is_only_reported() {

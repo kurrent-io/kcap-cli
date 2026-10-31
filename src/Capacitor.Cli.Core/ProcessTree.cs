@@ -108,6 +108,42 @@ public static partial class ProcessTree {
         if (Matches(pid, identity)) kill_native(pid, Sigkill);
     }
 
+    /// <summary>Bounds the walk; a daemon's whole tree is far smaller.</summary>
+    const int MaxWalk = 4096;
+
+    /// <summary>
+    /// Whether <paramref name="pid"/> runs under <paramref name="ancestor"/> now. A process reparented away
+    /// from it, by a double fork or its parent's exit, no longer counts. Always false on Windows, which
+    /// this does not walk.
+    /// </summary>
+    public static bool Descends(int pid, int ancestor) {
+        if (pid <= 0 || ancestor <= 0 || pid == ancestor || OperatingSystem.IsWindows()) return false;
+
+        if (OperatingSystem.IsMacOS()) {
+            var seen     = new HashSet<int> { ancestor };
+            var frontier = new Queue<int>([ancestor]);
+
+            while (frontier.Count > 0 && seen.Count < MaxWalk) {
+                foreach (var child in MacChildren(frontier.Dequeue())) {
+                    if (child == pid) return true;
+                    if (child > 0 && seen.Add(child)) frontier.Enqueue(child);
+                }
+            }
+
+            return false;
+        }
+
+        var current = pid;
+        for (var hop = 0; hop < MaxWalk; hop++) {
+            var parent = LinuxParentOf(current);
+            if (parent == ancestor) return true;
+            if (parent is not { } next || next <= 1) return false;
+            current = next;
+        }
+
+        return false;
+    }
+
     static bool Matches(int pid, string identity) => pid > 0 && ProcessStartToken.Matches(pid, identity) == true;
 
     static IEnumerable<int> Children(int parent) =>

@@ -376,6 +376,7 @@ public class EnsureFlowMapTests {
     [Arguments("orphan_label")]
     [Arguments("stale_marker")]
     [Arguments("running_unconfirmed")]
+    [Arguments("hosted_caller")]
     public async Task A_machine_the_ladder_will_not_touch_needs_attention(string reason) {
         var r = EnsureFlowMap.Map(Ladder("attention", reason));
         await Assert.That(r.Outcome).IsEqualTo(FirstRunMachineActionOutcomes.Refused);
