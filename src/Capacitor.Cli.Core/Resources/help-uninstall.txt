@@ -14,6 +14,15 @@ any legacy ~/.codex/skills/kcap-* folders), removes the kcap git hook from
 
 Non-kcap entries in shared files (settings.json, hooks.json) are preserved.
 
+kcap itself stays installed: the installer, npm, the snap or the desktop app
+owns the program, so uninstall leaves it. The plan ends by naming where it
+is and how to remove it.
+
+Codex sandbox network keys kcap set in Codex's config.toml (under CODEX_HOME
+when set, otherwise ~/.codex) stay: they are your security posture, not kcap
+state. Review [sandbox_workspace_write] and [features.network_proxy] there to
+undo them.
+
 Also removes Mistral Vibe hooks/MCP, kcap caches, legacy Cursor pending
 recordings and retired vendor-specific skills.
 

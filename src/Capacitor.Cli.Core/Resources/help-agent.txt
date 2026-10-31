@@ -5,8 +5,9 @@ Usage: kcap agent <subcommand>
 Subcommands:
   start <vendor> [flags] [-- <agent args>]
                           Start an agent the daemon hosts for you
-  ls                      List this daemon's agents (id, status, state, kind,
-                          repo, title)
+  ls                      List this daemon's agents (id, status, state,
+                          activity, kind, harness, session, repo, worktree,
+                          title)
   attach <agent-id>       Attach your terminal to a running agent
   resume <agent-id>       Retry an interrupted agent
   stop <agent-id> [--force]
@@ -71,7 +72,11 @@ Daemon restarts:
   `ls` shows. The STATE column of `ls` reads `running`, `resuming`, or
   `interrupted (<reason>)` for one that could not be brought back; `resume`
   retries it, `stop` discards it, and the next daemon start discards it after
-  30 days. An attached terminal waits for its agent to come back (up to
+  30 days. STATUS is the process; ACTIVITY is what the agent does inside it,
+  as the desktop app shows it: `working`, `idle` (waiting for a prompt) or
+  `needs you`. SESSION is the session it records to, which is not the agent
+  id, and WORKTREE is the checkout it works in when that is not REPO itself.
+  An attached terminal waits for its agent to come back (up to
   KCAP_ATTACH_RECONNECT_SECONDS, default 90) and re-attaches on its own, or
   prints why it did not and exits 1.
 

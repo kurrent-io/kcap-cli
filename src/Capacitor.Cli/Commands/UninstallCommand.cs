@@ -13,6 +13,7 @@ using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.MistralVibe;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
+using Capacitor.Cli.Core.Install;
 using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.LocalEdition;
@@ -179,12 +180,16 @@ sealed class UninstallCommand(
         if (ownsDaemonDir)
             await console.Out.WriteLineAsync($"  • Delete the daemon state directory ({store.Directory})");
 
+        await console.Out.WriteLineAsync(KeptProgramLine(
+            InstallProvenance.Kind(), ScriptInstallLayout.OfRunningBinary()?.Root, SnapLayout.OfRunningBinary()?.Name,
+            Environment.ProcessPath));
+
         if (!skipPrompt) {
             await console.Out.WriteAsync("Proceed? [y/N] ");
             var reply = await console.In.ReadLineAsync();
 
             if (!string.Equals(reply?.Trim(), "y", StringComparison.OrdinalIgnoreCase)) {
-                await console.Out.WriteLineAsync("Cancelled.");
+                await console.Out.WriteLineAsync(CancelledLine);
 
                 return 0;
             }
@@ -444,6 +449,21 @@ sealed class UninstallCommand(
             return 0;
         }
     }
+
+    internal const string CancelledLine = "Uninstall cancelled. Nothing was removed.";
+
+    /// <summary>What the plan leaves: uninstall removes what kcap set up, never the program that runs
+    /// it, which its installer owns.</summary>
+    internal static string KeptProgramLine(InstallKind kind, string? scriptRoot, string? snapName, string? processPath) =>
+        kind switch {
+            InstallKind.Script when scriptRoot is not null =>
+                $"It keeps kcap itself, every installed version under {scriptRoot}. Remove it afterwards by deleting {ScriptInstallLayout.VersionsName}, {ScriptInstallLayout.CurrentName} and {ScriptInstallLayout.MarkerFileName} there, not the whole folder: it can hold data the installer does not own.",
+            InstallKind.Npm => "It keeps kcap itself. Remove it afterwards with: npm uninstall -g @kurrent/kcap",
+            InstallKind.App => "It keeps the kcap desktop app and its command-line tool. Uninstall the app to remove them.",
+            InstallKind.Snap when snapName is not null => $"It keeps the kcap snap. Remove it afterwards with: sudo snap remove {snapName}",
+            _ when processPath is not null => $"It keeps kcap itself ({processPath}). Remove it the way it was installed.",
+            _ => "It keeps kcap itself. Remove it the way it was installed.",
+        };
 
     static string? LocalConsentError(LocalStackState state, string root, bool skipPrompt, bool purgeLocal, bool keepConfig) {
         var interruptedPurge = state is LocalStackState.Interrupted(LocalPurgeJournal.Operation, _);

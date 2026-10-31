@@ -1039,6 +1039,34 @@ public class UninstallCommandTests {
             .IsEquivalentTo(new[] { "local" });
     }
 
+    /// <summary>A declined plan says that nothing happened, and the plan has said up front that kcap
+    /// itself is not part of it.</summary>
+    [Test]
+    public async Task A_declined_plan_names_what_it_keeps_and_says_nothing_was_removed() {
+        await using var fixture = await Fixture.CreateAsync();
+
+        var exit = await NewCommand(fixture, stdin: "n\n").HandleAsync(["uninstall"]);
+
+        var output = fixture.Out.ToString();
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(output).Contains("It keeps kcap itself");
+        await Assert.That(output.IndexOf("It keeps kcap itself", StringComparison.Ordinal))
+            .IsLessThan(output.IndexOf("Proceed?", StringComparison.Ordinal));
+        await Assert.That(output).Contains(UninstallCommand.CancelledLine);
+    }
+
+    [Test]
+    [Arguments(InstallKind.Npm, "npm uninstall -g @kurrent/kcap")]
+    [Arguments(InstallKind.App, "Uninstall the app")]
+    [Arguments(InstallKind.Snap, "sudo snap remove kcap-desktop")]
+    [Arguments(InstallKind.Script, "/home/u/.local/share/kcap. Remove it afterwards by deleting versions, current and install.json there, not the whole folder")]
+    [Arguments(InstallKind.Unknown, "(/opt/kcap/kcap). Remove it the way it was installed.")]
+    public async Task The_plan_says_how_to_remove_kcap_itself(InstallKind kind, string expected) {
+        var line = UninstallCommand.KeptProgramLine(kind, "/home/u/.local/share/kcap", "kcap-desktop", "/opt/kcap/kcap");
+
+        await Assert.That(line).Contains(expected);
+    }
+
     [Test, ExcludeOn(OS.Windows)]
     public async Task Keep_config_keeps_the_local_data() {
         await using var fixture = await Fixture.CreateAsync();
