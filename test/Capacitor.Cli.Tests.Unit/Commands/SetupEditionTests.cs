@@ -3,6 +3,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.Telemetry;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
@@ -55,13 +56,57 @@ public class SetupEditionTests {
     [Test]
     public async Task Local_runs_the_local_install() {
         using var noUrl   = EnvScope.Exclusive(ProfileOverrides.UrlVar, null);
-        using var console = new ScriptedConsole().Enter();
+        using var console = new ScriptedConsole().Enter().Line("no");
         using var capture = ConsoleOutput.StartErrorCapture();
 
         var exit = await Command(localAvailable: true).HandleAsync(["setup"]);
 
         await Assert.That(exit).IsEqualTo(SetupExit.Failed);
         await Assert.That(capture.GetCapturedError()).Contains("This test never runs a local setup.");
+    }
+
+    /// <summary>The local edition asks before the install, and what is typed is saved for every kcap process.</summary>
+    [Test]
+    [Arguments("yes", true)]
+    [Arguments("NO", false)]
+    public async Task Local_asks_about_usage_data_and_saves_the_answer(string answer, bool shared) {
+        using var noUrl   = EnvScope.Exclusive(ProfileOverrides.UrlVar, null);
+        using var console = new ScriptedConsole().Enter().Line(answer);
+        using var capture = ConsoleOutput.StartErrorCapture();
+
+        await Command(localAvailable: true).HandleAsync(["setup"]);
+
+        await Assert.That(console.Text).Contains(LocalUsageDataQuestion.Question);
+        await Assert.That(TelemetryState.PersistedEnabled(Config.Root)).IsEqualTo(shared);
+        await Assert.That(capture.GetCapturedError()).Contains("This test never runs a local setup.");
+    }
+
+    /// <summary>Enter alone answers nothing: the question has no default, so the script runs out asking again.</summary>
+    [Test]
+    public async Task The_usage_data_question_has_no_default_answer() {
+        using var noUrl   = EnvScope.Exclusive(ProfileOverrides.UrlVar, null);
+        using var console = new ScriptedConsole().Enter().Enter();
+
+        await Assert.That(async () => await Command(localAvailable: true).HandleAsync(["setup"])).Throws<InvalidOperationException>();
+
+        await Assert.That(TelemetryState.PersistedEnabled(Config.Root)).IsNull();
+    }
+
+    /// <summary>The script holds no answer, so a run that asked would throw instead of reaching the install.</summary>
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task A_saved_choice_is_not_asked_again(bool saved) {
+        TelemetryState.SetEnabled(saved, Config.Root);
+        using var noUrl   = EnvScope.Exclusive(ProfileOverrides.UrlVar, null);
+        using var console = new ScriptedConsole().Enter();
+        using var capture = ConsoleOutput.StartErrorCapture();
+
+        await Command(localAvailable: true).HandleAsync(["setup"]);
+
+        await Assert.That(console.Text).DoesNotContain(LocalUsageDataQuestion.Question);
+        await Assert.That(capture.GetCapturedError()).Contains("This test never runs a local setup.");
+        await Assert.That(TelemetryState.PersistedEnabled(Config.Root)).IsEqualTo(saved);
     }
 
     [Test]

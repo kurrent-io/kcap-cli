@@ -43,6 +43,9 @@ public sealed class UsageDataNotice : ReactiveObject {
 
     public bool CanTurnOff { get; }
 
+    /// Nobody has chosen yet, and the local edition sends nothing until someone does.
+    public bool ChoicePending => _telemetry.AwaitingChoice;
+
     public ReactiveCommand<Unit, Unit> AcknowledgeCommand { get; }
     public ReactiveCommand<Unit, Unit> TurnOffCommand { get; }
 
@@ -58,6 +61,23 @@ public sealed class UsageDataNotice : ReactiveObject {
 
     /// <returns>Whether the opt-out was saved.</returns>
     public bool TurnOff() => TurnOff(_telemetry, _config, this);
+
+    /// Saves the opt-in every kcap process reads, then lets this process send what it held.
+    /// <returns>Whether it was saved; an unsaved one sends nothing.</returns>
+    public bool TurnOn() {
+        if (!TelemetryState.SetEnabled(true, _config)) return false;
+
+        _telemetry.OptedIn(_config);
+        Acknowledge();
+
+        return true;
+    }
+
+    /// Shows the disclosure once the cloud edition is chosen, which is when it becomes due on a machine that had no
+    /// edition yet.
+    public void Restate() {
+        if (!Visible && _telemetry.NoticeDue(_config)) Visible = true;
+    }
 
     /// Stops this process first, whose queue the saved flag alone would not stop, then saves the opt-out
     /// every kcap process reads. An unsaved one keeps the notice up, saying so.

@@ -113,7 +113,10 @@ public partial class App : Application {
 
     public App() {
         // A live facade creates the device id and the spool under the config root being removed.
-        _telemetry   = CliTelemetry.Start(DesktopTelemetry(_uninstallMode, _endpoints.SignupUrl), _config, _time);
+        _telemetry   = CliTelemetry.Start(
+            DesktopTelemetry(_uninstallMode, _endpoints.SignupUrl,
+                UsageDataEdition.ForDesktop(_config, _localRoot, OperatingSystem.IsMacOS() && RuntimeInformation.OSArchitecture == Architecture.Arm64)),
+            _config, _time);
         _usageNotice = new UsageDataNotice(_telemetry, _config);
         _foreignHttp = new ServiceCollection().AddAppForeignHttp(_config, _serverEnv).BuildValidated();
 #pragma warning disable RS0030 // the one store the ban points every other site at
@@ -123,8 +126,9 @@ public partial class App : Application {
         _betaUpdates = BetaUpdatesSetting.LoadAsync(_appState).GetAwaiter().GetResult();
     }
 
-    internal static TelemetryStartup DesktopTelemetry(UninstallMode? uninstall, string signupUrl) =>
-        TelemetryStartup.ForDesktopApp(serverUrl: null, signupUrl) with { Suppressed = uninstall is not null };
+    internal static TelemetryStartup DesktopTelemetry(
+            UninstallMode? uninstall, string signupUrl, UnsavedConsent unsaved = UnsavedConsent.Share) =>
+        TelemetryStartup.ForDesktopApp(serverUrl: null, signupUrl, unsaved) with { Suppressed = uninstall is not null };
 
     /// The authenticated lanes. They cannot join <see cref="_foreignHttp"/>: their handlers need a
     /// resolved server, and the app starts before a profile has named one. Process-lifetime for the

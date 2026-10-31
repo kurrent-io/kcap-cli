@@ -817,6 +817,12 @@ sealed class SetupCommand(
             }
         }
 
+        // Usage data held so far goes out on the cloud edition; the local edition asks first, and a run that cannot
+        // ask leaves it unsent.
+        if (local is null) telemetry.SettleEdition(local: false);
+        else if (!noPrompt && !local.NoPrompt && AnsiConsole.Profile.Capabilities.Interactive && LocalUsageDataQuestion.Due(config))
+            AnsiConsole.MarkupLine($"  {Markup.Escape(LocalUsageDataQuestion.Record(LocalUsageDataQuestion.Ask(), telemetry, config))}");
+
         if (serverUrlArg is not null) {
             var resolved = await ResolveServerAndProviderAsync(serverUrlArg);
 
@@ -2180,6 +2186,7 @@ sealed class SetupCommand(
             .AddChoices(offered)
             .UseConverter(SetupEdition.Label));
 
+        telemetry.SettleEdition(choice == SetupEdition.Choice.Local);
         telemetry.Funnel.EditionChosen(SetupEdition.Wire(choice));
 
         return choice;

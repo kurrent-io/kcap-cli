@@ -459,7 +459,8 @@ internal sealed class SetupLocalArmTests : IDisposable {
 
     [Test]
     public async Task Terminal_decline_cancels_and_exits_0() {
-        using var console = new ScriptedConsole().Line("n");
+        // The usage-data question comes before the install's own; "no" answers it, and declines the install if it is not due.
+        using var console = new ScriptedConsole().Line("no").Line("n");
 
         var (exit, _, spectre, _) = await RunWith(null, () => console.Text, "setup", "--local");
 
