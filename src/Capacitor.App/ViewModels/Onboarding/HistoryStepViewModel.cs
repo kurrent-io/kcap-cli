@@ -120,7 +120,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         ? "Checked repositories import into kcap on this Mac"
         : "Checked repositories import with your recording privacy setting. Only me keeps a repository's history private";
 
-    /// The harnesses discovery found history from, each one its own choice. Empty when the CLI's report
+    /// The harnesses discovery found repository history from, each one its own choice. Empty when the CLI's report
     /// does not split repositories by harness; the import then reads every harness it counted.
     public IReadOnlyList<HistorySourceOption> Sources { get; private set; } = [];
 
@@ -148,9 +148,11 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     public int SelectedFolderCount => IncludedFolders.Count();
 
     /// A folder pass names no harness of its own: with every harness unchecked it would take no vendor
-    /// flag, which the CLI reads as every harness.
+    /// flag, which the CLI reads as every harness. A folder none of the checked harnesses wrote to has
+    /// nothing to import.
     IEnumerable<HistoryFolderRow> IncludedFolders =>
-        Sources.Count > 0 && !Sources.Any(s => s.IsSelected) ? [] : Folders.Where(f => f.Included);
+        Sources.Count > 0 && !Sources.Any(s => s.IsSelected) ? []
+        : Folders.Where(f => f.Included && (f.Vendors is null || Share(f.Vendors, Selected) is not null));
 
     /// Unchecking is a choice about this import, never a setting: recording and the exclusions already
     /// saved go on exactly as before.
@@ -365,9 +367,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         }
         this.RaisePropertyChanged(nameof(Sources));
 
-        Folders = [.. (report.UnmatchedFolders ?? [])
-            .Where(f => f is { Folder: not null, Sessions: > 0 })
-            .Select(f => new HistoryFolderRow(f.Folder!, f.Sessions, f.Windows, _discoveredLocal))];
+        Folders = [.. (report.UnmatchedFolders ?? []).Select(Offer).OfType<HistoryFolderRow>()];
         foreach (var folder in Folders) {
             folder.PropertyChanged += (_, e) => {
                 if (e.PropertyName == nameof(HistoryFolderRow.Level)) Restate();
@@ -383,6 +383,20 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         this.RaisePropertyChanged(nameof(UnmatchedNote));
     }
 
+    /// A folder as the offered harnesses see it, or null when none of them has a session there. The import
+    /// names only the offered harnesses' flags, so one with no checkbox is neither counted nor imported.
+    HistoryFolderRow? Offer(ImportDiscoveryFolder folder) {
+        if (folder is not { Folder: { } path, Sessions: > 0 }) return null;
+        if (Sources.Count == 0 || folder.Vendors is null or { Count: 0 })
+            return new HistoryFolderRow(path, folder.Sessions, folder.Windows, null, _discoveredLocal);
+
+        return Share(folder.Vendors, id => Sources.Any(s => s.Id == id)) is { } offered
+            ? new HistoryFolderRow(path, offered.Sessions, offered.Windows, folder.Vendors, _discoveredLocal)
+            : null;
+    }
+
+    bool Selected(HarnessId id) => Sources.Any(s => s.Id == id && s.IsSelected);
+
     /// The repositories the selected harnesses wrote to. A repository keeps the choices made on it, even
     /// across its harness being unchecked and checked again.
     void Regroup() {
@@ -390,7 +404,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
 
         var rows = new List<HistoryRepoRow>();
         foreach (var repo in report.Repos) {
-            if (Project(repo, id => Sources.Any(s => s.Id == id && s.IsSelected)) is not { } projected) continue;
+            if (Project(repo, Selected) is not { } projected) continue;
 
             var row = new HistoryRepoRow(projected, _discoveredLocal);
             if (_lastRows.TryGetValue(row.Slug, out var previous)) row.Adopt(previous);
@@ -415,8 +429,19 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     /// A repository the report does not split by harness counts every harness.
     static ImportDiscoveryRepo? Project(ImportDiscoveryRepo repo, Func<HarnessId, bool> included) {
         if (repo.Vendors is null or { Count: 0 }) return repo;
+        if (Share(repo.Vendors, included) is not { } share) return null;
 
-        var cells    = repo.Vendors.Where(v => HarnessId.From(v.Vendor) is { } id && included(id)).ToList();
+        return repo with {
+            Sessions      = share.Sessions,
+            LastSessionAt = share.LastSessionAt,
+            Windows       = share.Windows,
+        };
+    }
+
+    /// The included harnesses' part of a split, or null when none of them has a session there.
+    static (int Sessions, DateTimeOffset? LastSessionAt, IReadOnlyList<ImportDiscoveryWindow>? Windows)? Share(
+            IReadOnlyList<ImportDiscoveryVendor> vendors, Func<HarnessId, bool> included) {
+        var cells    = vendors.Where(v => HarnessId.From(v.Vendor) is { } id && included(id)).ToList();
         var sessions = cells.Sum(v => v.Sessions);
         if (sessions == 0) return null;
 
@@ -426,11 +451,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
             ? first.Select((w, i) => new ImportDiscoveryWindow(w.Since, cells.Sum(c => c.Windows![i].Sessions))).ToList()
             : null;
 
-        return repo with {
-            Sessions      = sessions,
-            LastSessionAt = cells.Max(c => c.LastSessionAt),
-            Windows       = windows,
-        };
+        return (sessions, cells.Max(c => c.LastSessionAt), windows);
     }
 
     void BuildWindows(ImportDiscoveryReport report) {
@@ -517,16 +538,18 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         return counts.Any(c => c is null) ? null : SessionCount(counts.Sum(c => c!.Value));
     }
 
-    /// Each checked repository's and folder's sessions in the window, null where unknown. A folder is not
-    /// split by harness, so its count is unknown while any harness is unchecked.
-    List<int?> SelectedCounts(DateOnly? since) {
-        var everyHarness = Sources.All(s => s.IsSelected);
+    /// Each checked repository's and folder's sessions in the window, null where unknown.
+    List<int?> SelectedCounts(DateOnly? since) => [
+        .. Groups.SelectMany(g => g.Repos).Where(r => r.Level != ImportLevel.Skip).Select(r => r.SessionsSince(since)),
+        .. IncludedFolders.Select(f => FolderSessionsSince(f, since)),
+    ];
 
-        return [
-            .. Groups.SelectMany(g => g.Repos).Where(r => r.Level != ImportLevel.Skip).Select(r => r.SessionsSince(since)),
-            .. IncludedFolders.Select(f => everyHarness ? f.SessionsSince(since) : null),
-        ];
-    }
+    /// A folder the report did not split by harness may hold one the import's flags leave out, so its
+    /// count is unknown whenever the page offers harnesses at all.
+    int? FolderSessionsSince(HistoryFolderRow folder, DateOnly? since) =>
+        folder.Vendors is { } vendors ? Share(vendors, Selected)?.Windows?.FirstOrDefault(w => w.Since == since)?.Sessions
+        : Sources.Count == 0          ? folder.SessionsSince(since)
+        :                               null;
 
     static string FolderCount(int count) => count == 1 ? "1 folder" : $"{count.ToString("N0", CultureInfo.CurrentCulture)} folders";
 

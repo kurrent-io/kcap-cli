@@ -40,10 +40,7 @@ public static class ImportDiscoveryRender {
             new ImportDiscoveryJson(
                 [.. summary.Repos.Select(r => new ImportDiscoveryRepoJson(
                     r.Owner, r.Name, r.SessionCount, r.LastSessionAt?.UtcDateTime.ToString("O"),
-                    WindowsOf(summary, r.SessionsByWindow),
-                    [.. (r.ByVendor ?? []).Select(v => new ImportDiscoveryVendorJson(
-                        v.Vendor.VendorId, v.SessionCount, v.LastSessionAt?.UtcDateTime.ToString("O"),
-                        WindowsOf(summary, v.SessionsByWindow)))]))],
+                    WindowsOf(summary, r.SessionsByWindow), VendorsOf(summary, r.ByVendor ?? [])))],
                 summary.UnmatchedCount,
                 [.. summary.ByWindow.Select(w => new ImportDiscoveryWindowJson(
                     w.Since?.ToString("yyyy-MM-dd"), w.SessionCount))],
@@ -51,8 +48,17 @@ public static class ImportDiscoveryRender {
                     f.Folder, f.Sessions,
                     f.Folder is { } named && summary.UnmatchedFolderWindows.TryGetValue(named, out var windows)
                         ? WindowsOf(summary, windows)
+                        : null,
+                    f.Folder is { } split && summary.UnmatchedFolderVendors.TryGetValue(split, out var vendors)
+                        ? VendorsOf(summary, vendors)
                         : null))]),
             ImportDiscoveryJsonContext.Default.ImportDiscoveryJson);
+
+    static IReadOnlyList<ImportDiscoveryVendorJson> VendorsOf(
+            ImportDiscoverySummary summary, IReadOnlyList<ImportDiscoverySummary.VendorTotals> vendors) =>
+        [.. vendors.Select(v => new ImportDiscoveryVendorJson(
+            v.Vendor.VendorId, v.SessionCount, v.LastSessionAt?.UtcDateTime.ToString("O"),
+            WindowsOf(summary, v.SessionsByWindow)))];
 
     static IReadOnlyList<ImportDiscoveryWindowJson> WindowsOf(
             ImportDiscoverySummary summary, IReadOnlyDictionary<string, int> sessionsByWindow) =>

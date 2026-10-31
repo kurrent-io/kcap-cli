@@ -12,10 +12,13 @@ public sealed class HistoryFolderRow : ReactiveObject {
     bool _included;
     bool _onlyMe = true;
 
-    internal HistoryFolderRow(string path, int sessions, IReadOnlyList<ImportDiscoveryWindow>? windows, bool local) {
+    internal HistoryFolderRow(
+            string path, int sessions, IReadOnlyList<ImportDiscoveryWindow>? windows,
+            IReadOnlyList<ImportDiscoveryVendor>? vendors, bool local) {
         Path     = path;
         Sessions = sessions;
         Windows  = windows ?? [];
+        Vendors  = vendors;
         Local    = local;
     }
 
@@ -24,6 +27,9 @@ public sealed class HistoryFolderRow : ReactiveObject {
     public bool   Local    { get; }
 
     internal IReadOnlyList<ImportDiscoveryWindow> Windows { get; }
+
+    /// The folder's sessions split by harness, or null when the report did not split it.
+    internal IReadOnlyList<ImportDiscoveryVendor>? Vendors { get; }
 
     public string SignalLine => $"{HistoryStepViewModel.SessionCount(Sessions)} on disk · no repository";
 

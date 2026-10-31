@@ -548,20 +548,77 @@ public class HistoryStepViewModelTests {
         await Assert.That(h.Vm.UnmatchedNote!).Contains("check their folders under Customize");
     }
 
-    /// A folder's count is not split by harness, so with a harness unchecked it is unknown rather than wrong.
+    /// A folder the report does not split by harness may hold one the page offers no checkbox for, so
+    /// while harnesses are offered its count is unknown rather than a guess.
     [Test]
-    public async Task A_folder_with_a_harness_unchecked_shows_no_count_rather_than_a_guess() {
+    public async Task An_unsplit_folder_shows_no_count_while_harnesses_are_offered() {
         var h = new Harness(OlderClaudeAndCodexHistory() with {
             UnmatchedSessions = 3, UnmatchedFolders = [new("/w/scratch", 3, [new(D30, 1), new(D90, 2), new(null, 3)])],
         });
         await h.EnterAsync();
+        var counted = h.Vm.Windows.Select(w => w.CountLabel).ToList();
 
         h.Vm.Folders.Single().Included = true;
-        var counted = h.Vm.Windows.Select(w => w.CountLabel).ToList();
-        h.Vm.Sources.Single(s => s.Id == HarnessId.Codex).IsSelected = false;
 
         await Assert.That(counted.All(c => c is not null)).IsTrue();
         await Assert.That(h.Vm.Windows.All(w => w.CountLabel is null)).IsTrue();
+    }
+
+    static ImportDiscoveryFolder SplitFolder(string path, params ImportDiscoveryVendor[] shares) =>
+        new(path, shares.Sum(s => s.Sessions),
+            [.. shares[0].Windows!.Select((w, i) => new ImportDiscoveryWindow(w.Since, shares.Sum(s => s.Windows![i].Sessions)))],
+            shares);
+
+    /// The import names only the offered harnesses' flags, so a folder's Pi sessions, with no Pi checkbox
+    /// to leave them out by, are neither offered nor counted, and a folder only Pi wrote to is not listed.
+    [Test]
+    public async Task A_folder_harness_with_no_checkbox_is_neither_counted_nor_imported() {
+        var h = new Harness(OlderClaudeAndCodexHistory() with {
+            UnmatchedSessions = 7,
+            UnmatchedFolders  = [
+                SplitFolder("/w/scratch", Share("claude", 2, 2, 1, 29), Share("pi", 3, 2, 1, 28)),
+                SplitFolder("/w/pi-only", Share("pi", 2, 1, 0, 27)),
+            ],
+        });
+        await h.EnterAsync();
+
+        var folder = h.Vm.Folders.Single();
+        folder.Included = true;
+        var counts = h.Vm.Windows.Select(w => w.CountLabel ?? "").ToList();
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await h.Vm.Run!.Completion;
+
+        await Assert.That(h.Vm.Sources.Select(s => s.Id)).IsEquivalentTo([HarnessId.Claude, HarnessId.Codex], CollectionOrdering.Matching);
+        await Assert.That((folder.Path, folder.Sessions)).IsEqualTo(("/w/scratch", 2));
+        await Assert.That(counts).IsEquivalentTo(["6 sessions", "27 sessions", "51 sessions"], CollectionOrdering.Matching);
+        await Assert.That(h.Vm.Run!.Expected).IsEqualTo(27);
+        await Assert.That(h.Cli.ImportRequests.All(r => r.VendorFlags.SequenceEqual(["--claude", "--codex"]))).IsTrue();
+        await Assert.That(h.Cli.ImportRequests.Single(r => r.Private).Folders!).IsEquivalentTo(["/w/scratch"]);
+    }
+
+    /// A checked folder counts only its checked harnesses' sessions, and one that only an unchecked
+    /// harness wrote to leaves the import, as such a repository does.
+    [Test]
+    public async Task A_folder_follows_the_checked_harnesses() {
+        var h = new Harness(OlderClaudeAndCodexHistory() with {
+            UnmatchedSessions = 6,
+            UnmatchedFolders  = [
+                SplitFolder("/w/mixed", Share("claude", 2, 2, 1, 29), Share("codex", 1, 1, 0, 28)),
+                SplitFolder("/w/codex-only", Share("codex", 3, 2, 1, 27)),
+            ],
+        });
+        await h.EnterAsync();
+
+        foreach (var folder in h.Vm.Folders) folder.Included = true;
+        h.Vm.Sources.Single(s => s.Id == HarnessId.Codex).IsSelected = false;
+        var counts = h.Vm.Windows.Select(w => w.CountLabel ?? "").ToList();
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await h.Vm.Run!.Completion;
+
+        await Assert.That(h.Vm.SelectedFolderCount).IsEqualTo(1);
+        await Assert.That(counts).IsEquivalentTo(["5 sessions", "20 sessions", "35 sessions"], CollectionOrdering.Matching);
+        await Assert.That(h.Cli.ImportRequests.All(r => r.VendorFlags.SequenceEqual(["--claude"]))).IsTrue();
+        await Assert.That(h.Cli.ImportRequests.Single(r => r.Private).Folders!).IsEquivalentTo(["/w/mixed"]);
     }
 
     [Test]

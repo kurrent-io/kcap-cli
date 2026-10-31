@@ -82,6 +82,30 @@ public class ImportDiscoveryRenderTests {
         await Assert.That(vendors[1]!["windows"]!.AsArray()[0]!["sessions"]!.GetValue<int>()).IsEqualTo(1);
     }
 
+    /// A folder carries the same split, so a caller can count and import it by the harnesses chosen; the
+    /// sessions with no folder recorded cannot be named, so they carry none.
+    [Test]
+    public async Task Json_carries_each_harness_share_of_a_folder_under_its_flag_id() {
+        var summary = ImportDiscoverySummary.Build(
+            [("a", new DateTimeOffset(2026, 3, 1, 9, 0, 0, TimeSpan.Zero)),
+             ("b", new DateTimeOffset(2026, 1, 4, 9, 0, 0, TimeSpan.Zero)),
+             ("c", null)],
+            new Dictionary<string, (string Owner, string Name)?> { ["a"] = null, ["b"] = null, ["c"] = null },
+            [new ImportDiscoveryWindow(FirstRunImportWindows.Last30, new DateOnly(2026, 2, 1)),
+             new ImportDiscoveryWindow(FirstRunImportWindows.Everything, null)],
+            new Dictionary<string, HarnessId> { ["a"] = HarnessId.Pi, ["b"] = HarnessId.Claude, ["c"] = HarnessId.Claude },
+            new Dictionary<string, string> { ["a"] = "/w/scratch", ["b"] = "/w/scratch" });
+
+        var folders = JsonNode.Parse(ImportDiscoveryRender.ToJson(summary))!["unmatched_folders"]!.AsArray();
+        var vendors = folders[0]!["vendors"]!.AsArray();
+
+        await Assert.That(vendors.Select(v => v!["vendor"]!.GetValue<string>())).IsEquivalentTo(["claude", "pi"]);
+        await Assert.That(vendors[1]!["sessions"]!.GetValue<int>()).IsEqualTo(1);
+        await Assert.That(vendors[1]!["windows"]!.AsArray()[0]!["sessions"]!.GetValue<int>()).IsEqualTo(1);
+        await Assert.That(folders[1]!["folder"]).IsNull();
+        await Assert.That(folders[1]!["vendors"]).IsNull();
+    }
+
     [Test]
     public async Task Json_names_everything_as_a_null_window_rather_than_omitting_it() {
         // A reader has to be able to tell "no cap" from "a window that happens to hold everything".

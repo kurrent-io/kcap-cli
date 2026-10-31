@@ -25,6 +25,9 @@ public class ImportDiscoveryReportTests {
     [Arguments("{\"repos\":[{\"owner\":\"org\",\"name\":\"repo\",\"sessions\":1,\"vendors\":[null]}]}")]
     [Arguments("{\"repos\":[{\"owner\":\"org\",\"name\":\"repo\",\"sessions\":1,\"vendors\":[{\"vendor\":\"\",\"sessions\":1}]}]}")]
     [Arguments("{\"repos\":[{\"owner\":\"org\",\"name\":\"repo\",\"sessions\":1,\"vendors\":[{\"vendor\":\"claude\",\"sessions\":-1}]}]}")]
+    [Arguments("{\"repos\":[],\"unmatched_sessions\":1,\"unmatched_folders\":[{\"folder\":\"/w/scratch\",\"sessions\":1,\"vendors\":[null]}]}")]
+    [Arguments("{\"repos\":[],\"unmatched_sessions\":1,\"unmatched_folders\":[{\"folder\":\"/w/scratch\",\"sessions\":1,\"vendors\":[{\"vendor\":\" \",\"sessions\":1}]}]}")]
+    [Arguments("{\"repos\":[],\"unmatched_sessions\":1,\"unmatched_folders\":[{\"folder\":\"/w/scratch\",\"sessions\":1,\"vendors\":[{\"vendor\":\"pi\",\"sessions\":1,\"windows\":[{\"since\":null,\"sessions\":-1}]}]}]}")]
     public async Task An_invalid_harness_share_rejects_the_report(string json) =>
         await Assert.That(ImportDiscoveryReport.Parse(json)).IsNull();
 
@@ -56,5 +59,22 @@ public class ImportDiscoveryReportTests {
         await Assert.That(report.UnmatchedFolders![0].Windows!.Single().Sessions).IsEqualTo(2);
         await Assert.That(ImportDiscoveryReport.Parse("""{"repos":[],"unmatched_sessions":0}""")!.UnmatchedFolders).IsEmpty();
         await Assert.That(ImportDiscoveryReport.Parse("""{"repos":[],"unmatched_sessions":1,"unmatched_folders":[{"folder":"","sessions":1}]}""")).IsNull();
+    }
+
+    /// A folder carries its harness split as a repository does; a folder with none recorded has none.
+    [Test]
+    public async Task Each_harness_share_of_a_folder_loads_with_its_windows() {
+        var report = ImportDiscoveryReport.Parse("""
+            {"repos":[],"unmatched_sessions":4,"windows":[{"since":null,"sessions":4}],
+             "unmatched_folders":[{"folder":"/w/scratch","sessions":3,"windows":[{"since":null,"sessions":3}],
+                                   "vendors":[{"vendor":"claude","sessions":1,"windows":[{"since":null,"sessions":1}]},
+                                              {"vendor":"pi","sessions":2,"windows":[{"since":null,"sessions":2}]}]},
+                                  {"folder":null,"sessions":1,"windows":null,"vendors":null}]}
+            """);
+
+        var folders = report!.UnmatchedFolders!;
+        await Assert.That(folders[0].Vendors!.Select(v => (v.Vendor, v.Sessions))).IsEquivalentTo([("claude", 1), ("pi", 2)]);
+        await Assert.That(folders[0].Vendors![1].Windows!.Single().Sessions).IsEqualTo(2);
+        await Assert.That(folders[1].Vendors).IsNull();
     }
 }

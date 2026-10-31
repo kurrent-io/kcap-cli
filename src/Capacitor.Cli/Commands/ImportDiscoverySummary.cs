@@ -35,6 +35,11 @@ public sealed record ImportDiscoverySummary(
     public IReadOnlyDictionary<string, IReadOnlyDictionary<string, int>> UnmatchedFolderWindows { get; init; } =
         FrozenDictionary<string, IReadOnlyDictionary<string, int>>.Empty;
 
+    /// <summary>Each named folder's sessions split by the harness that wrote them, keyed by folder: a
+    /// folder imports only what the vendor flags it is asked with select.</summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<VendorTotals>> UnmatchedFolderVendors { get; init; } =
+        FrozenDictionary<string, IReadOnlyList<VendorTotals>>.Empty;
+
     /// <param name="SessionCount">Every session for this repository, whatever its age. Kept rather
     /// than read out of <paramref name="SessionsByWindow"/>, so it still means that when the caller
     /// asks for no "everything" window.</param>
@@ -95,6 +100,8 @@ public sealed record ImportDiscoverySummary(
                 if (!folders.TryGetValue(folder, out var bucket)) folders[folder] = bucket = new Accumulator(windows.Count);
 
                 bucket.Add(startedAt, windows);
+
+                if (vendorBySession?.TryGetValue(sessionId, out var vendor) == true) bucket.Vendor(vendor).Add(startedAt, windows);
             } else {
                 unknown++;
             }
@@ -104,8 +111,7 @@ public sealed record ImportDiscoverySummary(
 
         var repos = byRepo
             .Select(kv => new RepoTotals(
-                kv.Key.Owner, kv.Key.Name, kv.Value.Count, kv.Value.Last, kv.Value.ByWindow(windows),
-                [.. kv.Value.Vendors.Select(v => new VendorTotals(v.Key, v.Value.Count, v.Value.Last, v.Value.ByWindow(windows)))]))
+                kv.Key.Owner, kv.Key.Name, kv.Value.Count, kv.Value.Last, kv.Value.ByWindow(windows), kv.Value.ByVendor(windows)))
             // Newest first, so a cap over this list keeps the repositories someone is working in.
             .OrderByDescending(r => r.LastSessionAt ?? DateTimeOffset.MinValue)
             .ThenBy(r => $"{r.Owner}/{r.Name}", StringComparer.OrdinalIgnoreCase)
@@ -127,6 +133,7 @@ public sealed record ImportDiscoverySummary(
             unmatched.ByWindow(windows)) {
             UnmatchedFolders       = unmatchedFolders,
             UnmatchedFolderWindows = folders.ToDictionary(f => f.Key, f => f.Value.ByWindow(windows), StringComparer.Ordinal),
+            UnmatchedFolderVendors = folders.ToDictionary(f => f.Key, f => f.Value.ByVendor(windows), StringComparer.Ordinal),
         };
     }
 
@@ -173,6 +180,9 @@ public sealed record ImportDiscoverySummary(
 
             return counts;
         }
+
+        public IReadOnlyList<VendorTotals> ByVendor(IReadOnlyList<ImportDiscoveryWindow> windows) =>
+            [.. Vendors.Select(v => new VendorTotals(v.Key, v.Value.Count, v.Value.Last, v.Value.ByWindow(windows)))];
 
         static DateTimeOffset? Later(DateTimeOffset? a, DateTimeOffset? b) =>
             a is null ? b : b is null ? a : a > b ? a : b;

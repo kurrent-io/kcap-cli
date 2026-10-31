@@ -4,5 +4,8 @@ namespace Capacitor.Cli.Commands;
 /// <param name="Folder">Null for sessions with no folder recorded, which no flag can name.</param>
 /// <param name="Windows">In the order of the report's own <see cref="ImportDiscoveryJson.Windows"/>; null when
 /// <paramref name="Folder"/> is.</param>
+/// <param name="Vendors">The same figures for each harness that wrote sessions here; null when
+/// <paramref name="Folder"/> is.</param>
 public sealed record ImportDiscoveryFolderJson(
-    string? Folder, int Sessions, IReadOnlyList<ImportDiscoveryWindowJson>? Windows);
+    string? Folder, int Sessions, IReadOnlyList<ImportDiscoveryWindowJson>? Windows,
+    IReadOnlyList<ImportDiscoveryVendorJson>? Vendors);

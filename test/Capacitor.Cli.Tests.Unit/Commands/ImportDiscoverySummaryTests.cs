@@ -197,4 +197,26 @@ public class ImportDiscoverySummaryTests {
         await Assert.That(split[1].SessionCount).IsEqualTo(1);
         await Assert.That(split.Sum(v => v.SessionCount)).IsEqualTo(s.Repos.Single().SessionCount);
     }
+
+    /// A folder imports only through the vendor flags it is asked with, so it splits by harness as a
+    /// repository does, including a harness that wrote to no repository at all.
+    [Test]
+    public async Task A_folder_splits_by_the_harness_that_wrote_each_session_in_registry_order() {
+        var s = ImportDiscoverySummary.Build(
+            [("a", At(-1)), ("b", At(-50)), ("c", At(-3)), ("d", At(-2))],
+            new Dictionary<string, (string Owner, string Name)?> { ["a"] = null, ["b"] = null, ["c"] = null, ["d"] = ("E", "kcap") },
+            Windows,
+            new Dictionary<string, HarnessId> {
+                ["a"] = HarnessId.Pi, ["b"] = HarnessId.Pi, ["c"] = HarnessId.Claude, ["d"] = HarnessId.Claude,
+            },
+            new Dictionary<string, string> { ["a"] = "/w/scratch", ["b"] = "/w/scratch", ["c"] = "/w/scratch", ["d"] = "/w/kcap" });
+
+        var split = s.UnmatchedFolderVendors["/w/scratch"];
+
+        await Assert.That(split.Select(v => v.Vendor)).IsEquivalentTo([HarnessId.Claude, HarnessId.Pi], CollectionOrdering.Matching);
+        await Assert.That(split[1].SessionCount).IsEqualTo(2);
+        await Assert.That(split[1].SessionsByWindow[FirstRunImportWindows.Last30]).IsEqualTo(1);
+        await Assert.That(split.Sum(v => v.SessionCount)).IsEqualTo(s.UnmatchedFolders.Single().Sessions);
+        await Assert.That(s.UnmatchedFolderVendors.ContainsKey("/w/kcap")).IsFalse();
+    }
 }
