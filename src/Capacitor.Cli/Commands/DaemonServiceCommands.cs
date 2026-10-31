@@ -44,6 +44,9 @@ sealed class DaemonServiceCommands(
 
             var elevated = WindowsServiceElevation.Run("install");
             if (elevated != 0) return await ElevationFailedAsync(elevated, "install");
+
+            if (await LocalEdition.LocalServerMigration.ToServiceAsync(Core.LocalEdition.LocalRoot.FromEnvironment(home), home, time) is { } moved)
+                await Console.Out.WriteLineAsync(moved);
         }
 
         IServiceManager manager;
@@ -103,6 +106,14 @@ sealed class DaemonServiceCommands(
     /// other users keep their daemons running, unsupervised, until they install again</summary>
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     internal async Task<int> UninstallSystem() {
+        // Before anything else: the service is not removed from under a server it still runs.
+        try {
+            if (await LocalEdition.LocalServerMigration.ToTaskAsync(home, time) is { } moved) await Console.Out.WriteLineAsync(moved);
+        } catch (Exception ex) when (ex is Core.LocalEdition.LocalLifecycleException or IOException or UnauthorizedAccessException) {
+            await Console.Error.WriteLineAsync($"The local server could not be moved off kcap-service: {ex.Message}. The Windows service was not changed.");
+            return 1;
+        }
+
         if (manager is WindowsServiceManager) {
             var unenrolled = await Uninstall();
             if (unenrolled != 0) return unenrolled;

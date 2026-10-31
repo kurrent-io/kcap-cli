@@ -78,6 +78,10 @@ internal sealed class LocalSetupJsonLinesTests {
             """{"v":1,"event":"embeddings_skipped","code":"model_download_failed","message":"Failed."}""");
         yield return () => (new LocalInstallEvent.EmbeddingsSkipped(LocalEmbeddingSkipCode.OllamaNotFound, "No Ollama."),
             """{"v":1,"event":"embeddings_skipped","code":"ollama_not_found","message":"No Ollama."}""");
+        yield return () => (new LocalInstallEvent.WindowsServiceDeclined(), """{"v":1,"event":"windows_service_declined"}""");
+        yield return () => (new LocalInstallEvent.WindowsServiceUnavailable("No service."),
+            """{"v":1,"event":"windows_service_unavailable","message":"No service."}""");
+        yield return () => (new LocalInstallEvent.Fetched("1.3.0", "/r/cache"), """{"v":1,"event":"fetched","version":"1.3.0","path":"/r/cache"}""");
     }
 
     [Test]

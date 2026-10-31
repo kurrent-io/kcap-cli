@@ -504,6 +504,54 @@ public class LocalUninstallTests {
         await Assert.That(_log).DoesNotContain("recorders:stop");
     }
 
+    Task<LocalUninstallOutcome> QuickUninstallAsync() =>
+        Stack.RunAsync(_events,
+            (lease, state, ct) => new LocalUninstall(Service, Home, Recorders) { QuickGrace = TimeSpan.FromSeconds(1) }
+                .RunAsync(lease, state, purge: false, force: true, Config.Directory, ct),
+            CancellationToken.None);
+
+    [Test]
+    public async Task A_quick_uninstall_removes_the_unit_and_the_servers_files_once_the_stack_is_down() {
+        await InstallAsync();
+
+        await Assert.That(await QuickUninstallAsync()).IsEqualTo(LocalUninstallOutcome.Uninstalled);
+        await Assert.That(_log).Contains("uninstall-within");
+        await Assert.That(File.Exists(Plist)).IsFalse();
+        await Assert.That(Directory.Exists(Dir("bin"))).IsFalse();
+        await Assert.That(Directory.Exists(Dir("data"))).IsTrue();
+    }
+
+    /// <summary>An app uninstaller cannot wait for a server still stopping, and deleting files it holds would fail
+    /// under it.</summary>
+    [Test]
+    public async Task A_quick_uninstall_leaves_the_servers_files_to_a_server_still_stopping() {
+        await InstallAsync();
+        var serverLock = Tmp.CreateFile($"home/.config/kcap/local/run/{LocalStackProbe.ServerLockName}");
+
+        LocalUninstallOutcome outcome;
+        using (new FileStream(serverLock, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            outcome = await QuickUninstallAsync();
+
+        await Assert.That(outcome).IsEqualTo(LocalUninstallOutcome.Unloaded);
+        await Assert.That(File.Exists(Plist)).IsFalse();
+        await Assert.That(Directory.Exists(Dir("bin"))).IsTrue();
+        await Assert.That(Directory.Exists(Dir("run"))).IsTrue();
+    }
+
+    [Test]
+    public async Task A_quick_uninstall_cannot_purge() {
+        await InstallAsync();
+        _log.Clear();
+
+        await Assert.ThrowsAsync<LocalLifecycleException>(() => Stack.RunAsync(_events,
+            (lease, state, ct) => new LocalUninstall(Service, Home, Recorders) { QuickGrace = TimeSpan.FromSeconds(1) }
+                .RunAsync(lease, state, purge: true, force: true, Config.Directory, ct),
+            CancellationToken.None));
+
+        await Assert.That(_log).DoesNotContain("recorders:stop");
+        await Assert.That(_log).DoesNotContain("uninstall-within");
+    }
+
     [Test]
     public async Task A_purge_journal_this_build_did_not_write_is_left_as_it_is() {
         var installed = await InstallAsync();

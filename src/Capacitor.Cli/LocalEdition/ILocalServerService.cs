@@ -1,7 +1,8 @@
 namespace Capacitor.Cli.LocalEdition;
 
 /// <summary>
-/// The OS service that runs the local server: launchd on macOS, systemd on Linux. Every call runs under the
+/// The OS service that runs the local server: launchd on macOS, systemd on Linux, <c>kcap-service</c> or a
+/// Scheduled Task on Windows. Every call runs under the
 /// lifecycle lease. Failures throw <see cref="Core.LocalEdition.LocalLifecycleException"/> naming what is
 /// left.
 ///
@@ -26,6 +27,10 @@ interface ILocalServerService {
 
     /// <summary>A verified stop, then the unit file removed.</summary>
     Task UninstallAsync(LocalServerUnit unit, CancellationToken ct);
+
+    /// <summary>Asks the server to stop, gives it about <paramref name="grace"/>, then removes the unit whether or not
+    /// the stack is down, so it fits an app uninstaller's deadline. Nothing is verified: the caller checks what is left.</summary>
+    Task UninstallWithinAsync(LocalServerUnit unit, TimeSpan grace, CancellationToken ct) => UninstallAsync(unit, ct);
 
     /// <summary>Where the unit's definition lives on disk, present or not.</summary>
     string UnitFile(LocalServerUnit unit);

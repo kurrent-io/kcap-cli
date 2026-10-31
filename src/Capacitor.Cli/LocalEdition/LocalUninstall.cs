@@ -12,10 +12,16 @@ namespace Capacitor.Cli.LocalEdition;
 /// (see <see cref="LocalPurge"/>).
 /// </summary>
 sealed class LocalUninstall(ILocalServerService service, UserHome home, IOutgoingRecorders recorders) {
+    /// <summary>Set, the server gets this long to stop before its unit is removed regardless, and what is still running
+    /// keeps <c>bin/</c> and <c>run/</c>. For an app uninstaller with a deadline; it cannot purge.</summary>
+    public TimeSpan? QuickGrace { get; init; }
+
     /// <summary>Throws <see cref="LocalLifecycleException"/> naming what stopped it; nothing is deleted before the
     /// stops are verified.</summary>
     public async Task<LocalUninstallOutcome> RunAsync(LifecycleLease lease, LocalStackState state, bool purge, bool force, string configDir,
         CancellationToken ct) {
+        if (QuickGrace is not null && purge) throw new LocalLifecycleException("A quick uninstall cannot purge. Nothing was changed.");
+
         var installation = state switch {
             LocalStackState.Installed installed           => installed.Installation,
             LocalStackState.NotInstalled                  => null,
@@ -35,6 +41,19 @@ sealed class LocalUninstall(ILocalServerService service, UserHome home, IOutgoin
         FaultPoints.Hit("uninstall:recorders-stopped");
 
         var unit = LocalServerUnit.ForInstallation(lease.Root, installation.Port);
+
+        if (QuickGrace is { } grace) {
+            if (!await LocalStackStop.RunWithinAsync(lease.Root, unit, service, home, grace, ct)) return LocalUninstallOutcome.Unloaded;
+
+            try {
+                LocalStackStop.Delete(lease.Root, "bin", "run");
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                // The server let go of the root but its process has not exited yet, and its files are still open.
+                return LocalUninstallOutcome.Unloaded;
+            }
+
+            return LocalUninstallOutcome.Uninstalled;
+        }
 
         if (!purge) {
             await LocalStackStop.RunAsync(lease.Root, unit, service, home, removeUnit: true, ct);

@@ -9,7 +9,8 @@ namespace Capacitor.Cli.LocalEdition;
 
 /// <summary>
 /// The local server as a per-user logon Scheduled Task, <c>conhost --headless</c> running a <c>.cmd</c> wrapper that
-/// runs the server. No elevation: the machine's <c>kcap-service</c> supervises daemons only.
+/// runs the server. Needs no elevation, which makes it the supervisor wherever <c>kcap-service</c> is not installed or
+/// cannot run the server, and the one <see cref="LocalServerWindowsService"/> falls back to.
 ///
 /// <para>A stop is a Ctrl+Break on the task's console, which the server takes as a graceful shutdown and Postgres,
 /// on a console of its own, never sees. <c>schtasks /End</c> alone would close that console under the server and end
@@ -189,6 +190,28 @@ sealed class LocalServerTaskService(
             File.Delete(file);
             FaultPoints.Hit($"unlink:{file}");
         }
+    }
+
+    /// <summary>The stop marker stays while anything may still run: the wrapper's cmd outlives an ended task and would
+    /// launch the server again once the one running exits.</summary>
+    public async Task UninstallWithinAsync(LocalServerUnit unit, TimeSpan grace, CancellationToken ct) {
+        var live     = findLive ?? LocalStackProbe.FindLive;
+        var deadline = time.GetUtcNow() + grace;
+
+        _schtasks(LocalServerTaskUnit.DisableArgs(unit));
+        _writeUnit(StopMarker(unit), "", null);
+
+        if (_findServer(unit) is { } pid) _breakConsole(pid);
+
+        while (live(unit.Root) is not null && time.GetUtcNow() < deadline) await Task.Delay(ExitPollGap, time, ct);
+
+        _schtasks(LocalServerTaskUnit.EndArgs(unit));
+
+        var (exit, _, err) = _schtasks(LocalServerTaskUnit.DeleteArgs(unit));
+        if (exit != 0 && !ConfirmedAbsent(unit)) throw Failed(LocalServerTaskUnit.DeleteArgs(unit), exit, err);
+
+        if (File.Exists(LocalServerTaskUnit.WrapperPath(home, unit))) File.Delete(LocalServerTaskUnit.WrapperPath(home, unit));
+        if (live(unit.Root) is null && _findServer(unit) is null) ClearStop(unit);
     }
 
     void Check(string[] args) {

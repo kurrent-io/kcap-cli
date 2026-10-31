@@ -24,8 +24,9 @@ static class LocalServerTaskUnit {
     public const int TerminatedResult = 0x41306;
 
     /// <summary>Beside the unit lock: the task is per user, so its wrapper is too.</summary>
-    public static string WrapperPath(UserHome home, LocalServerUnit unit) =>
-        Path.Combine(home.Path, ".config", "kcap", unit.TaskName + ".cmd");
+    public static string WrapperPath(UserHome home, LocalServerUnit unit) => WrapperPath(home, unit.TaskName);
+
+    public static string WrapperPath(UserHome home, string taskName) => Path.Combine(home.Path, ".config", "kcap", taskName + ".cmd");
 
     public static string XmlPath(UserHome home, LocalServerUnit unit) => Path.ChangeExtension(WrapperPath(home, unit), ".task.xml");
 

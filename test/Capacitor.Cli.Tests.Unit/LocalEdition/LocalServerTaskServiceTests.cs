@@ -98,6 +98,24 @@ public class LocalServerTaskServiceTests {
         await Assert.That(File.ReadAllText(WrapperPath)).IsEqualTo("previous");
     }
 
+    /// <summary>An app uninstaller's deadline does not wait for a server still stopping, and the stop marker stays, or the
+    /// wrapper's cmd would launch the server again once it exits.</summary>
+    [Test]
+    public async Task A_quick_uninstall_ends_and_deletes_the_task_within_its_grace() {
+        var schtasks = new Schtasks();
+        Write(WrapperPath, WrapperText);
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        await Service(schtasks, findLive: _ => "the server still holds its instance lock")
+            .UninstallWithinAsync(Unit, TimeSpan.FromMilliseconds(300), CancellationToken.None);
+
+        await Assert.That(System.Diagnostics.Stopwatch.GetElapsedTime(started)).IsLessThan(TimeSpan.FromSeconds(5));
+        await Assert.That(schtasks.Calls).Contains("/End /TN kcap-local");
+        await Assert.That(schtasks.Calls).Contains("/Delete /TN kcap-local /F");
+        await Assert.That(File.Exists(WrapperPath)).IsFalse();
+        await Assert.That(File.Exists(StopMarker)).IsTrue();
+    }
+
     [Test]
     public async Task A_stop_disables_the_task_breaks_the_server_and_then_ends_the_wrapper() {
         var schtasks = new Schtasks();

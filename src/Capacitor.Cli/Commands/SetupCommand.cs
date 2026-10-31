@@ -843,7 +843,8 @@ sealed class SetupCommand(
             // A named server can be one still being created, which the provisioner says to re-run setup against.
             if (!await WaitForWorkspaceAsync(serverUrl, NewWorkspaceWait)) return 1;
         } else if (local is not null) {
-            var (exit, committed) = await new LocalSetupTerminal(localInstallers, local, _json).RunAsync();
+            var (exit, committed) = await new LocalSetupTerminal(localInstallers, local, _json,
+                local.WindowsService ? WindowsServiceStepAsync : null).RunAsync();
 
             if (committed is null) return exit;
 
@@ -2854,6 +2855,13 @@ sealed class SetupCommand(
                 return SetupExit.Refused;
             }
 
+            if (args.WindowsService) {
+                await WindowsServiceStepAsync(progress);
+
+                // An installer built before would still pick the supervisor the machine had then.
+                installer = localInstallers.Create();
+            }
+
             var embeddings = args.Embeddings;
             var builtin    = await LocalSetupTerminal.BuiltinModelAsync(installer, plan, embeddings, deferral.Token);
             var committed  = await installer.InstallAsync(new(args.SingleUser, args.Yes, embeddings, builtin), progress, deferral.Token);
@@ -2868,6 +2876,17 @@ sealed class SetupCommand(
 
             return LocalSetupJsonLines.Exit(failure.Code);
         }
+    }
+
+    /// <summary>Replaces the real <c>--windows-service</c> step, which raises an administrator prompt.</summary>
+    internal LocalWindowsServiceStep? WindowsServiceStep { get; init; }
+
+    /// <summary>Narrates on stderr: under <c>--local --json</c> stdout carries only the JSON lines.</summary>
+    Task WindowsServiceStepAsync(IProgress<LocalInstallEvent> progress) {
+        var step = WindowsServiceStep;
+        if (step is null && OperatingSystem.IsWindows()) step = LocalWindowsServiceStep.ForCurrentProcess(localRoot, home, time);
+
+        return step is null ? Task.CompletedTask : step.RunAsync(progress, line => Console.Error.WriteLine($"  {line}"));
     }
 
     static void WriteJsonLine(string line) {

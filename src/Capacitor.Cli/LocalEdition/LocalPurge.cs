@@ -50,7 +50,7 @@ static class LocalPurge {
         }
 
         await LocalStackStop.RunAsync(root, unit, service, home, removeUnit: true, ct);
-        LocalStackStop.Delete(root, "bin", "run", "data", "logs", "models");
+        LocalStackStop.Delete(root, "bin", "run", "data", "logs", "models", "cache");
         FaultPoints.Hit("purge:after-data");
 
         var config = new ConfigRoot(details.ConfigDir);

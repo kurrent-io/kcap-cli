@@ -87,7 +87,7 @@ Update with `kcap update`. It also retries an installed local server’s upgrade
 - **Name the workspace up front:** pass setup options after a second `--`, e.g. `curl -fsSL https://www.kurrent.io/install | bash -s -- -- --server-url https://acme.kcap.ai` (on Windows, set `KCAP_SETUP_ARGS`). Without a terminal the installer adds `--no-prompt`, which needs a workspace (`<tenant>` or `--server-url`), or `--org` and `--slug` to create one; see [Unattended setup](#unattended-setup). `--no-setup` installs without running setup, and `--beta` installs the beta channel.
 - **npm:** `npm install -g @kurrent/kcap`, then `kcap setup`. This needs Node.js; see [npm installs and upgrades](#npm-installs-and-upgrades) for npm 11's install-script gate.
 - **Desktop app:** on macOS or Windows the [desktop app](#desktop-app) bundles `kcap` and the daemon.
-- **Run the server on this machine:** `kcap setup --local` installs a kcap server on a Mac instead of using a hosted workspace; `kcap local status` then says how it is doing. With [Ollama](https://ollama.com) running, it also sets up search by meaning. See [Local edition](#local-edition) and [Local server](#local-server-kcap-local).
+- **Run the server on this machine:** `kcap setup --local` installs a kcap server on a Mac or an x64 Windows PC instead of using a hosted workspace (on Windows, `--windows-service` has the `kcap-service` Windows service run it, after one administrator prompt); `kcap local status` then says how it is doing. With [Ollama](https://ollama.com) running, it also sets up search by meaning. See [Local edition](#local-edition) and [Local server](#local-server-kcap-local).
 
 ## Desktop app
 
@@ -202,7 +202,7 @@ At a glance — each links to its section below:
 | Command | What it does |
 |---------|--------------|
 | [`kcap setup`](#initial-setup) | Interactive wizard — server, auth, agent hooks, daemon (`--local` runs the server on this machine) |
-| [`kcap local`](#local-server-kcap-local) | Status, start, stop, restart, upgrade, logs, web UI and uninstall of the server `kcap setup --local` installed |
+| [`kcap local`](#local-server-kcap-local) | Status, start, stop, restart, upgrade, bundle prefetch, logs, web UI and uninstall of the server `kcap setup --local` installed |
 | [`.kcap/approvals.yaml`](#approval-policy) | Auto-allow, deny, or force-ask specific tool calls |
 | [`kcap import`](#loading-historical-sessions) | Backfill past sessions from every detected agent |
 | [`kcap muse-assistant`](#muse-assistant) | Record Muse Assistant chats as private sessions, run by Muse's own cron inside its VM |
@@ -252,6 +252,8 @@ kcap setup --org "Acme" --slug acme --no-prompt   # create a workspace, unattend
 kcap setup --local                           # run a kcap server on this machine
 kcap setup --local --embedding-model <model> # …embedding with this Ollama model
 kcap setup --local --builtin-embeddings      # …embedding with the built-in model
+kcap setup --local --windows-service         # …run by the kcap-service Windows service (Windows)
+kcap local fetch                             # download the server bundle ahead of the install
 kcap local uninstall [--purge]               # remove it, keeping (or deleting) its data
 ```
 
@@ -345,7 +347,11 @@ The first version is for a machine with one user: on a shared machine, other OS 
 - Builds of kcap for musl Linux are not supported.
 - `--local` cannot be combined with `<tenant>`, `--server-url`, `--discover`, `--org`, `--slug`, `--tier`, `--invite-code`, `--device`, `--github` or `--muse-assistant`, and is refused while `KCAP_URL` is set.
 
-`--json` without `--no-prompt` is for the desktop app. It writes one JSON object per line to stdout, ends with `committed` or `failed`, and runs only the server and login steps. (`--json --no-prompt` reports the whole run instead; see [Unattended setup](#unattended-setup).) It accepts only `--single-user`, `--yes`, `--no-update-check`, `--embedding-model`, `--no-embeddings` and `--builtin-embeddings`, and without one of the last three chooses as `--no-prompt` does. The built-in model reports `embeddings_builtin_downloading` (with `bytes`), `embeddings_builtin_progress` and `embeddings_configured` with `"provider":"builtin"` in place of the Ollama events:
+**On Windows**, `--windows-service` runs the server under the machine's `kcap-service` [Windows service](#windows-service), which starts it as you when you sign in, from your own installation, and restarts it when it fails. When the service is missing or too old to run the server, setup installs it first behind one administrator prompt. A declined prompt, or a `kcap` that does not carry `kcap-service.exe` (such as npm's), is not a failure: setup carries on and the server runs as a per-user Scheduled Task named `kcap-local` while you are signed in, and `--json` reports `{"v":1,"event":"windows_service_declined"}` or `{"v":1,"event":"windows_service_unavailable","message":"…"}`. An installation whose server a Scheduled Task already runs moves to the service as part of it; so does any installation when `kcap daemon service install --system` installs the service, and `kcap daemon service uninstall --system` moves the server back to a Scheduled Task first, refusing to remove the service if it cannot. The flag is refused on other systems.
+
+`kcap local fetch` downloads and verifies the bundle for this `kcap`'s version into `cache/` under the installation's root (archive, manifest and signature), so the install that follows does not wait for it; the desktop app runs it while you are still choosing. An install takes the cached archive only when its digest matches the manifest it has just verified, downloads otherwise, and empties the cache once it has unpacked the bundle. With `--json` it writes the install's `downloading`, `download_progress` and `verified` events and ends with `{"v":1,"event":"fetched","version":"…","path":"…"}`, `nothing_to_do` when the installation already runs this version, or `failed`. It exits 0 when the bundle is cached, 1 on a failure, 3 when there is nothing to do, and 4 when no bundle is published for this version yet.
+
+`--json` without `--no-prompt` is for the desktop app. It writes one JSON object per line to stdout, ends with `committed` or `failed`, and runs only the server and login steps. (`--json --no-prompt` reports the whole run instead; see [Unattended setup](#unattended-setup).) It accepts only `--single-user`, `--yes`, `--no-update-check`, `--embedding-model`, `--no-embeddings`, `--builtin-embeddings` and `--windows-service`, and without one of the three embedding flags chooses as `--no-prompt` does. The built-in model reports `embeddings_builtin_downloading` (with `bytes`), `embeddings_builtin_progress` and `embeddings_configured` with `"provider":"builtin"` in place of the Ollama events:
 
 ```json
 {"v":1,"event":"preflight_passed","plan":"install","version":"0.13.0","root":"/Users/me/.config/kcap/local"}
@@ -376,6 +382,8 @@ kcap local uninstall --purge    # also delete its data and retire its URL
 ```
 
 `kcap local uninstall` refuses while a daemon is running agents, unless `--force` ends them with the daemon. It then stops every kcap daemon and watcher and removes the daemon service, stops the local server and verifies that nothing of it is still running, and only then removes the server's service and its `bin/` and `run/` directories. If anything cannot be stopped, nothing is removed. Its data, its identity and your profile stay, so `kcap setup --local` brings the same installation back on the same URL, downloading the version it was running.
+
+`--quick` is for an app uninstaller with a deadline: it gives the server about 10 seconds to stop, then removes its service whether or not it has finished (under `kcap-service`, the service finishes stopping it in the background), and leaves `bin/` and `run/` in place while the server still holds them. It cannot be combined with `--purge`.
 
 `--purge` goes on to retire the installation, then delete its `data/` and `logs/`, the pending recordings and the caches for it in the config directory, and clear the server URL of every profile there that points at it. A retired URL is never sent to again: a watcher still running, or a profile under another `KCAP_CONFIG_DIR`, is refused with an error naming the removed installation, and a later `kcap setup --local` creates a new installation on a new port. A purge that is interrupted is finished by the next `kcap local` command or `kcap setup --local`. `--yes` skips the confirmation.
 
@@ -512,7 +520,7 @@ If you run `kcap setup` outside any git working tree, it still completes — hoo
 
 ### Local server (`kcap local`)
 
-The server `kcap setup --local` installed runs as a per-user service (a launchd LaunchAgent on macOS, a systemd user unit on Linux, a Scheduled Task named `kcap-local` on Windows, which needs no administrator rights) and starts at login. These commands manage it:
+The server `kcap setup --local` installed runs as a per-user service (a launchd LaunchAgent on macOS, a systemd user unit on Linux) and starts at login. On Windows the machine's `kcap-service` Windows service runs it as you when the service is installed (see [Local edition](#local-edition)); otherwise a Scheduled Task named `kcap-local`, which needs no administrator rights, runs it while you are signed in. These commands manage it:
 
 ```bash
 kcap local status          # explain its state and what to do about it
@@ -522,6 +530,7 @@ kcap local restart
 kcap local logs -n 200     # the end of the server's log, which holds Postgres's and KurrentDB's too
 kcap local open            # open the web UI in a browser
 kcap local upgrade         # move it forward to this kcap's version
+kcap local fetch           # download and verify this kcap's bundle ahead of an install
 kcap local uninstall       # remove it, keeping its data; --purge deletes it (see Removing the local edition)
 ```
 
@@ -1346,7 +1355,7 @@ On **Linux**, to run the daemon as a service requires systemd. Without systemd, 
 
 #### Windows service
 
-On a machine with the desktop app, the daemon can run under `kcap-service`, a Windows service that starts with Windows and starts each enrolled user's daemon when they sign in, as that user, from their own app install. `kcap daemon service install --system` (or the app's own offer) installs it behind one administrator prompt: the elevated step copies only `kcap-service.exe` into `%ProgramFiles%\kcap\service\`, which only administrators can write, registers the service to restart on failure, and starts it. Once it is installed, `kcap daemon service install` enrolls your daemon with it instead of writing a Scheduled Task, retiring a task the same name already had, and `start`, `stop`, `status` and `uninstall` act on your daemon through the service; another user's daemon is never visible to you. The service restarts a daemon that crashes after five seconds and leaves one that exits 0 stopped; stopping or updating the service itself leaves the daemons running, and it picks them up again when it starts. The daemon keeps updating with the app, without a prompt; only a new `kcap-service.exe` asks again, and `service status --json` reports it as `service_upgrade_available`. Uninstalling the app hands your daemon back, and the service removes itself once no user on the machine is enrolled; `kcap daemon service uninstall --system` removes it on demand. It does not run a daemon before you sign in: the daemon runs as you, and Windows only lends a service your identity while you are signed in. Until `kcap-service` is installed on the machine, every install uses the Scheduled Task described next, whether it came from npm, the script or the app with its prompt declined.
+On a machine with the desktop app, the daemon can run under `kcap-service`, a Windows service that starts with Windows and starts each enrolled user's daemon when they sign in, as that user, from their own app install. `kcap daemon service install --system` (or the app's own offer) installs it behind one administrator prompt: the elevated step copies only `kcap-service.exe` into `%ProgramFiles%\kcap\service\`, which only administrators can write, registers the service to restart on failure, and starts it. Once it is installed, `kcap daemon service install` enrolls your daemon with it instead of writing a Scheduled Task, retiring a task the same name already had, and `start`, `stop`, `status` and `uninstall` act on your daemon through the service; another user's daemon is never visible to you. The service restarts a daemon that crashes after five seconds and leaves one that exits 0 stopped; stopping or updating the service itself leaves the daemons running, and it picks them up again when it starts. The daemon keeps updating with the app, without a prompt; only a new `kcap-service.exe` asks again, and `service status --json` reports it as `service_upgrade_available`. Uninstalling the app hands your daemon back, and the service removes itself once no user on the machine is enrolled; `kcap daemon service uninstall --system` removes it on demand. It does not run a daemon before you sign in: the daemon runs as you, and Windows only lends a service your identity while you are signed in. Until `kcap-service` is installed on the machine, every install uses the Scheduled Task described next, whether it came from npm, the script or the app with its prompt declined. The service runs your [local server](#local-edition) the same way, from your own installation and only while you are signed in: installing the service moves a local server a Scheduled Task runs onto it, and `--system` uninstall moves it back first.
 
 On **Windows** the service is a per-user Scheduled Task scoped to your account, so installing it needs no administrator rights. It runs the daemon in a windowless console (`conhost --headless`) at sign-in, and the task's wrapper restarts the daemon five seconds after any non-zero exit — a crash, or the daemon's own `kcap daemon restart` — the way systemd's `Restart=on-failure` does; an exit 0 is a deliberate stop. `service stop` and `service uninstall` end the task and then the daemon itself, since ending a task leaves its child processes running. Uninstalling the desktop app runs `service uninstall --under` for the app's own folder and takes that folder back off your user PATH, so a task that would otherwise retry the deleted daemon at every sign-in goes with it; a service an npm or standalone install wrote is left alone. The wrapper also carries the installing shell's `HOME` when it is an absolute path, so a Git Bash or redirected home resolves the same daemons directory for the daemon as for the CLI.
 

@@ -30,7 +30,7 @@ public class LocalCommandTests {
     public async Task A_trailing_argument_is_refused_before_anything_runs(string sub) {
         using var stderr = ConsoleOutput.StartErrorCapture();
 
-        var exit = await new LocalCommand(new NoStack(), new LocalUpgradeCommand(new NoStack()), new NoBrowser(), new FakeOutgoingRecorders([]), new ConfigRoot("/no-config"), new UserHome("/no-home")).HandleAsync(["local", sub, "--bogus"]);
+        var exit = await new LocalCommand(new NoStack(), new LocalUpgradeCommand(new NoStack()), new LocalFetchCommand(new NoStack()), new NoBrowser(), new FakeOutgoingRecorders([]), new ConfigRoot("/no-config"), new UserHome("/no-home")).HandleAsync(["local", sub, "--bogus"]);
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(stderr.GetCapturedError()).Contains("takes no arguments: --bogus");

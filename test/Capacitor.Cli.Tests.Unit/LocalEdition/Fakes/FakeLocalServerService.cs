@@ -92,6 +92,20 @@ sealed class FakeLocalServerService(List<string> log, UserHome home) : ILocalSer
         return Task.CompletedTask;
     }
 
+    /// <summary>Unloads and removes the unit as the real quick paths do: whatever of the stack is still alive is left for
+    /// the caller to find.</summary>
+    public Task UninstallWithinAsync(LocalServerUnit unit, TimeSpan grace, CancellationToken ct) {
+        Log("uninstall-within");
+        if (UninstallFailure is { } failure) throw failure;
+
+        LoadedRoot = null;
+        Running    = false;
+
+        if (File.Exists(UnitFile(unit))) File.Delete(UnitFile(unit));
+
+        return Task.CompletedTask;
+    }
+
     public string UnitFile(LocalServerUnit unit) => Path.Combine(home.Path, "Library", "LaunchAgents", unit.Label + ".plist");
 
     public bool IsInstalled(LocalServerUnit unit) => File.Exists(UnitFile(unit));
