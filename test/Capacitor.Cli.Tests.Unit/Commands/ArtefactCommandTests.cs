@@ -117,6 +117,97 @@ public class ArtefactCommandTests {
         await Assert.That(ArtefactCommand.ForTerminal("ok\u001b[2Jcleared\r\nnext\tcell"))
                     .IsEqualTo("ok\\u001b[2Jcleared\\u000d\nnext\tcell");
 
+    static PageSearchHitDto Hit(string id, string title, string excerpt = "", string? name = "Ada Lovelace",
+                                bool mine = false) =>
+        new(id, title, "github:42", name, "org", 2, new DateTimeOffset(2026, 9, 16, 10, 0, 0, TimeSpan.Zero),
+            mine, $"https://kcap.test/pages/{id}", excerpt, "body");
+
+    static async Task<(int Exit, string Out, string Err)> SearchAsync(RecordingArtefactsApi api, params string[] args) {
+        using var console = ConsoleOutput.StartFullCapture();
+        var exit = await new ArtefactCommand(api).HandleAsync(["page", "search", .. args]);
+
+        return (exit, console.GetCapturedOutput(), console.GetCapturedError());
+    }
+
+    [Test]
+    public async Task Search_prints_the_list_table_with_an_author_column_and_excerpt_lines() {
+        var api = new RecordingArtefactsApi {
+            SearchResult = new ArtefactSearchResult.Found([
+                Hit("p1", "Ferry timetable", excerpt: "harbour departures", mine: true),
+                Hit("p2", "Harbour schedule", name: "Grace Hopper"),
+                Hit("p3", "Untitled", name: null)
+            ])
+        };
+
+        var (exit, output, _) = await SearchAsync(api, "ferry");
+
+        var lines = output.TrimEnd().Split(Environment.NewLine);
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(lines).Count().IsEqualTo(5);
+        await Assert.That(lines[0]).IsEqualTo("PAGE  VERSION VISIBILITY UPDATED     AUTHOR        TITLE");
+        await Assert.That(lines[1]).IsEqualTo("p1    v2      org        2026-09-16  you           Ferry timetable");
+        await Assert.That(lines[2]).IsEqualTo("    harbour departures");
+        await Assert.That(lines[3]).IsEqualTo("p2    v2      org        2026-09-16  Grace Hopper  Harbour schedule");
+        await Assert.That(lines[4]).IsEqualTo("p3    v2      org        2026-09-16  github:42     Untitled");
+    }
+
+    [Test]
+    public async Task Search_neutralises_control_characters_in_author_text() {
+        var api = new RecordingArtefactsApi {
+            SearchResult = new ArtefactSearchResult.Found([Hit("p1", "Q3\u001b[31m", excerpt: "a\nb", name: "Eve\r\nRoot")])
+        };
+
+        var (_, output, _) = await SearchAsync(api, "q3");
+
+        await Assert.That(output).DoesNotContain("\u001b");
+        await Assert.That(output).Contains("a b");
+        await Assert.That(output).Contains("Eve Root");
+        await Assert.That(output.TrimEnd().Split(Environment.NewLine)).Count().IsEqualTo(3);
+    }
+
+    [Test]
+    public async Task Search_joins_positionals_and_passes_the_limit() {
+        var api = new RecordingArtefactsApi();
+
+        await SearchAsync(api, "ferry", "timetable", "--limit", "5");
+        await SearchAsync(api, "ferry");
+
+        await Assert.That(api.Calls).IsEquivalentTo(new[] { "search:ferry timetable:5", "search:ferry:20" });
+    }
+
+    [Test]
+    public async Task Search_with_no_hits_says_so_and_exits_0() {
+        var (exit, output, _) = await SearchAsync(new RecordingArtefactsApi(), "ferry");
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(output.Trim()).IsEqualTo("No pages match \"ferry\".");
+    }
+
+    [Test]
+    public async Task Search_against_an_older_server_exits_1() {
+        var api = new RecordingArtefactsApi { SearchResult = new ArtefactSearchResult.ServerTooOld() };
+
+        var (exit, output, error) = await SearchAsync(api, "ferry");
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(output).IsEmpty();
+        await Assert.That(error.Trim()).IsEqualTo("This server does not support page search yet; it needs a newer kcap server.");
+    }
+
+    [Test]
+    [Arguments("")]
+    [Arguments("--limit 5")]
+    [Arguments("ferry --limit many")]
+    public async Task Search_without_a_query_or_with_a_bad_limit_is_a_usage_error(string args) {
+        var api = new RecordingArtefactsApi();
+
+        var (exit, _, error) = await SearchAsync(api, args.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(api.Calls).IsEmpty();
+        await Assert.That(error).Contains("kcap page search");
+    }
+
     sealed class RecordingArtefactsApi : IArtefactsApi {
         public const string SharedHtml = "<h1>Shared plan</h1><script>steal()</script>";
 
@@ -153,6 +244,13 @@ public class ArtefactCommandTests {
         public Task<List<ArtefactDto>> ListAsync(CancellationToken ct = default) {
             Calls.Add("list");
             return Task.FromResult(new List<ArtefactDto>());
+        }
+
+        public ArtefactSearchResult SearchResult { get; init; } = new ArtefactSearchResult.Found([]);
+
+        public Task<ArtefactSearchResult> SearchAsync(string query, int limit, CancellationToken ct = default) {
+            Calls.Add($"search:{query}:{limit.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+            return Task.FromResult(SearchResult);
         }
 
         public Task<ArtefactReadResult> ReadAsync(string artefactId, int? version, CancellationToken ct = default) {

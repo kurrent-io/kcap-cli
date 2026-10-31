@@ -5,6 +5,8 @@ Usage: kcap page <subcommand>
 Subcommands:
   publish <file.html> [options]    Publish a page, print its URL
   list [--mine]                    Pages you can see
+  search <query...> [--limit N]    Pages you can see whose title, description
+                                   or text match, best first (20 by default)
   get <id|url> [--version N]       Print a page's text; --html prints its HTML
   share <id> --visibility V [--to] Change who may open a page
   delete <id>                      Remove a page
@@ -52,5 +54,6 @@ EXAMPLES
   kcap page publish report.html --visibility scoped --to team:platform
   kcap page publish plan.html --update art_01J9...
   kcap page list --mine
+  kcap page search retention numbers
   kcap page get https://kcap.example.com/pages/art_01J9... --html > page.html
   kcap page share art_01J9... --visibility none
