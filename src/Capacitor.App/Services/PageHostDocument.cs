@@ -21,7 +21,9 @@ public static class PageHostDocument {
     public const string HostPolicy = ContentPolicy + "; frame-src http: https: mailto:";
 
     const string NoncePlaceholder = "\"__KCAP_NONCE__\"";
-    const string PolicyMeta = $"<meta http-equiv=\"Content-Security-Policy\" content=\"{ContentPolicy}\">";
+    /// CSP does not govern DNS prefetch, which a link's host would otherwise trigger with no request.
+    const string DnsPrefetchOff = "<meta http-equiv=\"x-dns-prefetch-control\" content=\"off\">";
+    const string PolicyMeta = $"<meta http-equiv=\"Content-Security-Policy\" content=\"{ContentPolicy}\">{DnsPrefetchOff}";
 
     static readonly Lazy<string> HostScript = new(() => {
         using var stream = typeof(PageHostDocument).Assembly.GetManifestResourceStream("Capacitor.App.Assets.page-host.js")
@@ -37,7 +39,7 @@ public static class PageHostDocument {
         if (nonce.Length == 0 || !nonce.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_'))
             throw new ArgumentException("The nonce must be base64url.", nameof(nonce));
 
-        return $"<!doctype html><html><head><meta charset=\"utf-8\"><meta http-equiv=\"Content-Security-Policy\" content=\"{HostPolicy}\">" +
+        return $"<!doctype html><html><head><meta charset=\"utf-8\"><meta http-equiv=\"Content-Security-Policy\" content=\"{HostPolicy}\">" + DnsPrefetchOff +
             "<style>html,body{margin:0;height:100%;background:transparent}iframe{display:block;border:0;width:100%;height:100%}</style>" +
             "</head><body><script>" + HostScript.Value.Replace(NoncePlaceholder, $"\"{nonce}\"", StringComparison.Ordinal) + "</script>" +
             $"<iframe id=\"kcap-page\" sandbox=\"{FrameSandbox}\" srcdoc=\"{EscapeAttribute(WithPolicy(pageHtml))}\"></iframe></body></html>";

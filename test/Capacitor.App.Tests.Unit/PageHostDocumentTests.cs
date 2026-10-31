@@ -35,7 +35,8 @@ public class PageHostDocumentTests {
     public async Task The_page_starts_with_the_content_policy() {
         var srcdoc = Srcdoc(PageHostDocument.Build("<p>x</p>", Nonce));
 
-        await Assert.That(srcdoc).StartsWith($"<meta http-equiv=\"Content-Security-Policy\" content=\"{PageHostDocument.ContentPolicy}\">");
+        await Assert.That(srcdoc).StartsWith(
+            $"<meta http-equiv=\"Content-Security-Policy\" content=\"{PageHostDocument.ContentPolicy}\"><meta http-equiv=\"x-dns-prefetch-control\" content=\"off\"><p>");
         await Assert.That(PageHostDocument.ContentPolicy).Contains("connect-src 'none'");
         await Assert.That(PageHostDocument.ContentPolicy).Contains("default-src 'none'");
         await Assert.That(PageHostDocument.ContentPolicy).DoesNotContain("frame-ancestors");
@@ -58,7 +59,8 @@ public class PageHostDocumentTests {
     public async Task The_host_carries_the_content_policy_and_lets_the_frame_ask_to_navigate() {
         var host = PageHostDocument.Build("<p>x</p>", Nonce);
 
-        await Assert.That(host).Contains($"<meta http-equiv=\"Content-Security-Policy\" content=\"{PageHostDocument.HostPolicy}\">");
+        await Assert.That(host).Contains(
+            $"<meta http-equiv=\"Content-Security-Policy\" content=\"{PageHostDocument.HostPolicy}\"><meta http-equiv=\"x-dns-prefetch-control\" content=\"off\">");
         await Assert.That(PageHostDocument.HostPolicy).StartsWith(PageHostDocument.ContentPolicy + ";");
         await Assert.That(PageHostDocument.HostPolicy).EndsWith("frame-src http: https: mailto:");
         await Assert.That(host.IndexOf(PageHostDocument.HostPolicy, StringComparison.Ordinal)).IsLessThan(host.IndexOf("<script>", StringComparison.Ordinal));
