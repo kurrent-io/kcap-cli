@@ -1,0 +1,13 @@
+{
+  "envelope": "v1",
+  "inbound": {
+    "ready": [],
+    "submit": ["payload"],
+    "refresh": []
+  },
+  "outbound": {
+    "init": ["version", "theme", "viewer", "prior"],
+    "ack": ["accepted", "response_id", "version", "error", "code"],
+    "results": ["mode", "version", "closed", "revealed", "results"]
+  }
+}

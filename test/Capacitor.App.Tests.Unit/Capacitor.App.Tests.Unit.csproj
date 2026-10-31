@@ -19,6 +19,9 @@
         <FrameworkReference Include="Microsoft.AspNetCore.App" />
     </ItemGroup>
     <ItemGroup>
+        <None Include="Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
+    </ItemGroup>
+    <ItemGroup>
         <Using Include="Capacitor.Tests.Helpers" />
         <Using Include="Capacitor.Models.Transcripts" />
     </ItemGroup>
