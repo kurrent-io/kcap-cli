@@ -1302,7 +1302,8 @@ public class RemoteSessionViewModelTests {
             using var lifetime = monitor;
 
             h.Directory.Rows.AddOrUpdate(row with { SessionId = "s2" });
-            await Assert.That(ended).IsTrue();
+            // A new lease re-asks a refused session, so the monitor ends once that second answer is a refusal too.
+            await WaitUntilAsync(() => Task.FromResult(ended), "monitor ended on the refusal");
             h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Ok);
             h.Lane.SessionAccessChangedSubject.OnNext("s2");
             await WaitUntilAsync(async () => await lease.State.FirstAsync() == SessionAccessState.Established, "restored access");
