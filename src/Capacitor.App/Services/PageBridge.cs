@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Frozen;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -27,7 +28,7 @@ public sealed class PageBridge : IAsyncDisposable {
     readonly IPageSource _source;
     readonly ArtefactDto _page;
     readonly int _version;
-    readonly byte[] _nonce;
+    readonly string _prefix;
     readonly Func<string, Task> _postToPage;
     readonly TimeProvider _time;
     readonly SemaphoreSlim _gate = new(1, 1);
@@ -46,7 +47,7 @@ public sealed class PageBridge : IAsyncDisposable {
         _page = page;
         _version = version;
         _access = access;
-        _nonce = Encoding.UTF8.GetBytes(nonce);
+        _prefix = $"{{\"nonce\":\"{nonce}\"";
         _postToPage = postToPage;
         _time = time;
     }
@@ -72,15 +73,19 @@ public sealed class PageBridge : IAsyncDisposable {
         }
     }
 
+    /// The host script writes the nonce as the first member, so a message without this load's exact
+    /// prefix is dropped unparsed. The prefix comparison is the nonce check: it runs in fixed time
+    /// over the prefix's length, which leaks only the nonce's length, a public constant.
     JsonElement? Unwrap(string raw) {
-        if (string.IsNullOrEmpty(raw) || raw.Length > MaxRawLength) return null;
+        if (raw.Length > MaxRawLength || raw.Length < _prefix.Length
+            || !CryptographicOperations.FixedTimeEquals(MemoryMarshal.AsBytes(raw.AsSpan(0, _prefix.Length)), MemoryMarshal.AsBytes(_prefix.AsSpan())))
+            return null;
         try {
             using var doc = JsonDocument.Parse(raw);
-            var root = doc.RootElement;
-            if (root.Str("nonce") is not { } nonce || !CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(nonce), _nonce)) return null;
-            if (root.Obj("data") is not { } data || data.Str("kcap") != "v1" || data.Str("type") is null) return null;
+            if (doc.RootElement.Obj("data") is not { } data || data.Str("kcap") != "v1" || data.Str("type") is null) return null;
             return data.Clone();
-        } catch (JsonException) {
+        } catch (Exception e) when (e is JsonException or InvalidOperationException) {
+            // InvalidOperationException: a string member holding a lone surrogate, which JSON.stringify writes as an escape.
             return null;
         }
     }

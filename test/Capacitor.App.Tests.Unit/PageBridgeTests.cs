@@ -76,6 +76,52 @@ public class PageBridgeTests {
         await Assert.That(h.Source.BridgeRequested).IsEmpty();
     }
 
+    /// The host script writes the nonce first, so this load's exact prefix is the only shape that is parsed.
+    [Test]
+    [Arguments("""{"data":{"kcap":"v1","type":"ready"},"nonce":"n0nce-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}""")]
+    [Arguments(""" {"nonce":"n0nce-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","data":{"kcap":"v1","type":"ready"}}""")]
+    [Arguments("""{ "nonce":"n0nce-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","data":{"kcap":"v1","type":"ready"}}""")]
+    [Arguments("""{"nonce":"n0nce-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAx","data":{"kcap":"v1","type":"ready"}}""")]
+    [Arguments("""{"nonce":"n0nce-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","data":{"kcap":"v1","type":"ready"}}""")]
+    [Arguments("""{"nonce":"\u006e0nce-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","data":{"kcap":"v1","type":"ready"}}""")]
+    public async Task A_message_not_starting_with_this_loads_nonce_prefix_is_dropped(string raw) {
+        await using var h = new Harness();
+        var bridge = h.Bridge(PageResultsAccess.Visible);
+
+        await bridge.OnNativeMessageAsync(raw);
+
+        await Assert.That(h.Posts).IsEmpty();
+        await Assert.That(h.Source.BridgeRequested).IsEmpty();
+    }
+
+    [Test]
+    public async Task The_host_scripts_shape_passes_the_prefix_check() {
+        await using var h = new Harness();
+        h.Source.EnqueueReply("mine", Reply(200, """{"responses":[]}"""));
+        var bridge = h.Bridge(PageResultsAccess.Hidden);
+
+        await bridge.OnNativeMessageAsync("""{"nonce":"n0nce-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","data":{"kcap":"v1","type":"ready"}}""");
+
+        await Assert.That(h.Types()).IsEquivalentTo(new[] { "init" });
+    }
+
+    /// GetString throws InvalidOperationException on a lone surrogate; the drop must be as silent as for bad JSON.
+    [Test]
+    [NotInParallel]
+    [Arguments("""{"kcap":"v1","type":"\uD800"}""")]
+    [Arguments("""{"kcap":"\uDC00","type":"ready"}""")]
+    public async Task A_lone_surrogate_is_dropped_without_a_word(string data) {
+        await using var h = new Harness();
+        h.Bridge(PageResultsAccess.Visible);
+        using var stderr = ConsoleOutput.StartErrorCapture();
+
+        await h.Send(data);
+
+        await Assert.That(stderr.GetCapturedError()).IsEmpty();
+        await Assert.That(h.Posts).IsEmpty();
+        await Assert.That(h.Source.BridgeRequested).IsEmpty();
+    }
+
     [Test]
     public async Task An_oversized_message_is_dropped_before_it_is_parsed() {
         await using var h = new Harness();
