@@ -124,6 +124,7 @@ jobs:
           AZURE_TRUSTED_SIGNING_CLIENT_ID: ${{ vars.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
           AZURE_TRUSTED_SIGNING_TENANT_ID: ${{ vars.AZURE_TRUSTED_SIGNING_TENANT_ID }}
           AZURE_TRUSTED_SIGNING_PUBLISHER: ${{ vars.AZURE_TRUSTED_SIGNING_PUBLISHER }}
+          AZURE_TRUSTED_SIGNING_EKU: ${{ vars.AZURE_TRUSTED_SIGNING_EKU }}
         run: bash scripts/trusted-signing-config.sh
 
       - name: Sign in to Azure for Trusted Signing
@@ -206,6 +207,7 @@ jobs:
         if: env.WINDOWS_SIGN == 'true'
         env:
           AZURE_TRUSTED_SIGNING_PUBLISHER: ${{ vars.AZURE_TRUSTED_SIGNING_PUBLISHER }}
+          AZURE_TRUSTED_SIGNING_EKU: ${{ vars.AZURE_TRUSTED_SIGNING_EKU }}
         run: >
           bash scripts/verify-windows-signatures.sh
           publish/daemon/kcap-daemon.exe publish/cli/kcap.exe publish/service/kcap-service.exe

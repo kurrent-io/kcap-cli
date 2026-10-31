@@ -8,7 +8,8 @@ set -euo pipefail
 
 missing=()
 for v in AZURE_TRUSTED_SIGNING_ENDPOINT AZURE_TRUSTED_SIGNING_ACCOUNT AZURE_TRUSTED_SIGNING_PROFILE \
-         AZURE_TRUSTED_SIGNING_CLIENT_ID AZURE_TRUSTED_SIGNING_TENANT_ID AZURE_TRUSTED_SIGNING_PUBLISHER; do
+         AZURE_TRUSTED_SIGNING_CLIENT_ID AZURE_TRUSTED_SIGNING_TENANT_ID AZURE_TRUSTED_SIGNING_PUBLISHER \
+         AZURE_TRUSTED_SIGNING_EKU; do
   [ -n "${!v:-}" ] || missing+=("$v")
 done
 if [ "${#missing[@]}" -gt 0 ]; then
@@ -25,6 +26,13 @@ endpoint="${AZURE_TRUSTED_SIGNING_ENDPOINT%/}"
 for v in AZURE_TRUSTED_SIGNING_ACCOUNT AZURE_TRUSTED_SIGNING_PROFILE; do
   [[ "${!v}" =~ ^[A-Za-z0-9-]+$ ]] || { echo "::error::$v holds characters a Trusted Signing name cannot"; exit 1; }
 done
+
+# Every Public Trust certificate carries 311.97.1.0, so pinning it would admit any subscriber.
+[[ "$AZURE_TRUSTED_SIGNING_EKU" =~ ^1\.3\.6\.1\.4\.1\.311\.97(\.[0-9]+)+$ \
+   && "$AZURE_TRUSTED_SIGNING_EKU" != 1.3.6.1.4.1.311.97.1.0 ]] || {
+  echo "::error::AZURE_TRUSTED_SIGNING_EKU must be the certificate profile's own EKU, 1.3.6.1.4.1.311.97.<profile-specific values>"
+  exit 1
+}
 
 echo "Windows signing with $AZURE_TRUSTED_SIGNING_ACCOUNT/$AZURE_TRUSTED_SIGNING_PROFILE at $endpoint"
 
