@@ -4,6 +4,8 @@ using Capacitor.Cli.Service.Logging;
 using Capacitor.Cli.Service.Supervision;
 using Capacitor.Cli.Service.Tests.Unit.Supervision;
 using Microsoft.Extensions.Time.Testing;
+using DaemonSupervisor = Capacitor.Cli.Service.Supervision.Supervisor<Capacitor.Cli.Service.Sessions.Enrollment>;
+using ServerSupervisor = Capacitor.Cli.Service.Supervision.Supervisor<Capacitor.Cli.Service.Sessions.ServerEnrollment>;
 
 namespace Capacitor.Cli.Service.Tests.Unit.Control;
 
@@ -15,13 +17,19 @@ public class ControlDispatcherTests {
         public void Write(string line) { }
     }
 
+    static readonly TimeSpan StopWait = TimeSpan.FromSeconds(15);
+
     readonly FakeDaemonHost _host = new();
+    readonly FakeServerHost _serverHost;
     readonly FakeEnrollmentIndex _index = new();
     int _lastUserGone;
 
-    ControlDispatcher NewDispatcher(out Supervisor supervisor, bool removalStarts = true) {
-        supervisor = new Supervisor(_host, new FakeTimeProvider(), new NullLog());
-        return new ControlDispatcher(supervisor, _index, () => {
+    public ControlDispatcherTests() => _serverHost = new FakeServerHost(_host.Sessions);
+
+    ControlDispatcher NewDispatcher(out DaemonSupervisor supervisor, bool removalStarts = true) {
+        supervisor = new DaemonSupervisor(_host, new FakeTimeProvider(), new NullLog(), StopWait);
+        var servers = new ServerSupervisor(_serverHost, new FakeTimeProvider(), new NullLog(), StopWait);
+        return new ControlDispatcher(supervisor, servers, _index, () => {
             _lastUserGone++;
             return removalStarts;
         }, "1.5.0", new NullLog());
@@ -35,7 +43,10 @@ public class ControlDispatcherTests {
 
         var response = Parse(await dispatcher.HandleAsync(Alice, """{"verb":"capabilities"}""", CancellationToken.None));
 
-        await Assert.That(response.Capabilities!.Verbs).IsEquivalentTo(["capabilities", "enroll", "start", "status", "stop", "unenroll"]);
+        await Assert.That(response.Capabilities!.Verbs).IsEquivalentTo([
+            "capabilities", "enroll", "server-enroll", "server-start", "server-status", "server-stop", "server-unenroll",
+            "start", "status", "stop", "unenroll",
+        ]);
         await Assert.That(response.Capabilities.Protocol).IsEqualTo(ControlDispatcher.Protocol);
         await Assert.That(response.Capabilities.Version).IsEqualTo("1.5.0");
     }
@@ -209,6 +220,95 @@ public class ControlDispatcherTests {
         dispatcher.Supervised(Bob);
 
         await Assert.That(_index.IsEmpty).IsTrue();
+    }
+
+    [Test]
+    public async Task Server_verbs_act_on_the_server_and_leave_the_daemon_alone() {
+        _host.SignIn(1, Alice);
+        _serverHost.Enroll(Alice);
+        _serverHost.StopRequestEndsDaemon = true;
+        var dispatcher = NewDispatcher(out var daemons);
+
+        var enroll = Parse(await dispatcher.HandleAsync(Alice, """{"verb":"server-enroll"}""", CancellationToken.None));
+        var status = Parse(await dispatcher.HandleAsync(Alice, """{"verb":"server-status"}""", CancellationToken.None));
+        var stop   = Parse(await dispatcher.HandleAsync(Alice, """{"verb":"server-stop"}""", CancellationToken.None));
+        var start  = Parse(await dispatcher.HandleAsync(Alice, """{"verb":"server-start"}""", CancellationToken.None));
+
+        await Assert.That(enroll.Ok).IsTrue();
+        await Assert.That(status.Status!.State).IsEqualTo("running");
+        await Assert.That(status.Status.Name).IsEqualTo("kcap-local");
+        await Assert.That(stop.Status!.State).IsEqualTo("stopped");
+        await Assert.That(start.Status!.State).IsEqualTo("running");
+        await Assert.That(_serverHost.StopRequests).IsEquivalentTo([Alice]);
+        await Assert.That(_serverHost.LaunchCount).IsEqualTo(2);
+        await Assert.That(_host.LaunchCount).IsEqualTo(0);
+        await Assert.That(daemons.Status(Alice).State).IsEqualTo(DaemonState.NoSession);
+        await Assert.That(_index.Sids).Contains(Alice);
+    }
+
+    [Test]
+    public async Task A_stopped_server_is_not_started_and_says_why() {
+        _host.SignIn(1, Alice);
+        _serverHost.Refusals[Alice] = "stopped";
+        var dispatcher = NewDispatcher(out _);
+
+        var response = Parse(await dispatcher.HandleAsync(Alice, """{"verb":"server-start"}""", CancellationToken.None));
+
+        await Assert.That(response.Ok).IsFalse();
+        await Assert.That(response.Error).IsEqualTo("stopped");
+        await Assert.That(_serverHost.LaunchCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Server_unenroll_keeps_the_user_indexed_while_their_daemon_enrollment_remains() {
+        _host.SignIn(1, Alice);
+        _serverHost.Enroll(Alice);
+        _host.StopRequestEndsDaemon = true;
+        _serverHost.StopRequestEndsDaemon = true;
+        var dispatcher = NewDispatcher(out _);
+        await dispatcher.HandleAsync(Alice, """{"verb":"enroll"}""", CancellationToken.None);
+        await dispatcher.HandleAsync(Alice, """{"verb":"server-enroll"}""", CancellationToken.None);
+
+        var response = Parse(await dispatcher.HandleAsync(Alice, """{"verb":"server-unenroll"}""", CancellationToken.None));
+        _serverHost.Enrollments.Remove(Alice);
+
+        await Assert.That(response.Ok).IsTrue();
+        await Assert.That(_index.Sids).Contains(Alice);
+        await Assert.That(_lastUserGone).IsEqualTo(0);
+
+        await dispatcher.HandleAsync(Alice, """{"verb":"unenroll"}""", CancellationToken.None);
+
+        await Assert.That(_index.IsEmpty).IsTrue();
+        await Assert.That(_lastUserGone).IsEqualTo(1);
+    }
+
+    /// A stopped server launches nothing, yet its enrollment still needs the service
+    [Test]
+    public async Task Unenroll_keeps_the_user_indexed_while_a_stopped_server_enrollment_remains() {
+        _host.SignIn(1, Alice);
+        _serverHost.Refusals[Alice] = "stopped";
+        _host.StopRequestEndsDaemon = true;
+        var dispatcher = NewDispatcher(out _);
+        await dispatcher.HandleAsync(Alice, """{"verb":"enroll"}""", CancellationToken.None);
+
+        var response = Parse(await dispatcher.HandleAsync(Alice, """{"verb":"unenroll"}""", CancellationToken.None));
+
+        await Assert.That(response.Ok).IsTrue();
+        await Assert.That(_index.Sids).Contains(Alice);
+        await Assert.That(_lastUserGone).IsEqualTo(0);
+    }
+
+    /// Without a session the other enrollment cannot be read, and removing the service on a guess could strand it
+    [Test]
+    public async Task A_user_whose_other_enrollment_cannot_be_read_stays_indexed() {
+        _index.Add(Bob);
+        var dispatcher = NewDispatcher(out _);
+
+        var response = Parse(await dispatcher.HandleAsync(Bob, """{"verb":"server-unenroll"}""", CancellationToken.None));
+
+        await Assert.That(response.Ok).IsTrue();
+        await Assert.That(_index.Sids).Contains(Bob);
+        await Assert.That(_lastUserGone).IsEqualTo(0);
     }
 
     [Test]
