@@ -187,4 +187,70 @@ public class ArtefactsApiTests : IDisposable {
 
         await Assert.That(async () => await Api().PublishAsync(Body())).Throws<CapacitorApiException>();
     }
+
+    const string HitJson = """
+        {
+          "artefact_id": "a1",
+          "title": "Ferry timetable",
+          "owner_user_id": "github:42",
+          "owner_display_name": "Ada Lovelace",
+          "visibility": "org",
+          "latest_version": 3,
+          "updated_at": "2026-09-16T10:00:00+00:00",
+          "is_owner": true,
+          "url": "https://kcap.test/pages/a1",
+          "excerpt": "harbour departures",
+          "matched_in": "body"
+        }
+        """;
+
+    void AnswerSearch(string body) =>
+        _server.Given(Request.Create().WithPath("/api/search").UsingGet())
+               .RespondWith(Response.Create().WithStatusCode(HttpStatusCode.OK)
+                                    .WithHeader("Content-Type", "application/json").WithBody(body));
+
+    /// <summary>An older server answers <c>mode=pages</c> as a session search, with no pages lane;
+    /// reading that as "nothing matched" would hide that the server cannot search pages at all.</summary>
+    [Test]
+    [Arguments("""{"sessions":[],"transcripts":null,"took_ms":1}""")]
+    [Arguments("""{"sessions":null,"transcripts":null,"took_ms":1,"pages":null}""")]
+    public async Task Search_tells_an_older_server_from_an_empty_answer(string body) {
+        AnswerSearch(body);
+
+        await Assert.That(await Api().SearchAsync("ferry", 20)).IsTypeOf<ArtefactSearchResult.ServerTooOld>();
+    }
+
+    [Test]
+    public async Task Search_with_an_empty_pages_lane_found_nothing() {
+        AnswerSearch("""{"sessions":null,"transcripts":null,"took_ms":0,"pages":[]}""");
+
+        var found = await Assert.That(await Api().SearchAsync("ferry", 20)).IsTypeOf<ArtefactSearchResult.Found>();
+
+        await Assert.That(found!.Pages).IsEmpty();
+    }
+
+    [Test]
+    public async Task Search_binds_every_hit_field_and_escapes_the_query() {
+        AnswerSearch($$"""{"sessions":null,"transcripts":null,"took_ms":3,"pages":[{{HitJson}}]}""");
+
+        var found = await Assert.That(await Api().SearchAsync("ferry & timetable#", 7)).IsTypeOf<ArtefactSearchResult.Found>();
+
+        var hit = found!.Pages.Single();
+        await Assert.That(hit.ArtefactId).IsEqualTo("a1");
+        await Assert.That(hit.Title).IsEqualTo("Ferry timetable");
+        await Assert.That(hit.OwnerUserId).IsEqualTo("github:42");
+        await Assert.That(hit.OwnerDisplayName).IsEqualTo("Ada Lovelace");
+        await Assert.That(hit.Visibility).IsEqualTo("org");
+        await Assert.That(hit.LatestVersion).IsEqualTo(3);
+        await Assert.That(hit.UpdatedAt).IsEqualTo(new DateTimeOffset(2026, 9, 16, 10, 0, 0, TimeSpan.Zero));
+        await Assert.That(hit.IsOwner).IsTrue();
+        await Assert.That(hit.Url).IsEqualTo("https://kcap.test/pages/a1");
+        await Assert.That(hit.Excerpt).IsEqualTo("harbour departures");
+        await Assert.That(hit.MatchedIn).IsEqualTo("body");
+
+        var request = _server.LogEntries.Single().RequestMessage;
+        await Assert.That(request.Query!["q"].Single()).IsEqualTo("ferry & timetable#");
+        await Assert.That(request.Query["mode"].Single()).IsEqualTo("pages");
+        await Assert.That(request.Query["limit"].Single()).IsEqualTo("7");
+    }
 }

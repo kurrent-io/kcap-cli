@@ -41,6 +41,19 @@ internal sealed class ArtefactsApi(ICapacitorHttpClient http, CapacitorServer se
         return listed?.Artefacts ?? [];
     }
 
+    public async Task<ArtefactSearchResult> SearchAsync(string query, int limit, CancellationToken ct = default) {
+        using var response = await CapacitorApiRequests.SendAsync(
+            http, server,
+            (c, token) => c.GetWithRetryAsync(
+                $"{server.Url}/api/search?q={Uri.EscapeDataString(query)}&mode=pages&limit={limit}", time, ct: token), ct);
+
+        if (response.StatusCode != HttpStatusCode.OK) throw await CapacitorApiRequests.FailureAsync(response);
+
+        var answer = await response.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.PageSearchResponseDto, ct);
+
+        return answer?.Pages is { } pages ? new ArtefactSearchResult.Found(pages) : new ArtefactSearchResult.ServerTooOld();
+    }
+
     public async Task<ArtefactReadResult> ReadAsync(string artefactId, int? version, CancellationToken ct = default) {
         using var record = await CapacitorApiRequests.SendAsync(
             http, server, (c, token) => c.GetWithRetryAsync($"{server.Url}/api/artefacts/{Escape(artefactId)}", time, ct: token), ct);
