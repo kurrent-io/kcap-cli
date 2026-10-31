@@ -26,15 +26,26 @@ public class ServerConnectionHandoffBeginTests {
     [Arguments("transport")]
     [Arguments("hub")]
     [Arguments("null")]
+    [Arguments("dropped")]
     public async Task Any_other_failure_is_unreachable(string failure) {
         var server = new CaptureServerConnection {
             BeginHandoff = (_, _) => failure switch {
                 "transport" => throw new InvalidOperationException("The 'InvokeCoreAsync' method cannot be called if the connection is not active"),
                 "hub"       => throw new HubException("Failed to invoke 'BeginHandoffTakeover' due to an error on the server."),
+                "dropped"   => throw new TaskCanceledException("Invocation canceled due to the underlying connection being closed."),
                 _           => null
             }
         };
 
         await Assert.That(await server.BeginHandoffTakeoverAsync("a", "b", CancellationToken.None)).IsTypeOf<HandoffBeginResult.Unreachable>();
+    }
+
+    [Test]
+    public async Task The_callers_cancellation_propagates() {
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        var server = new CaptureServerConnection { BeginHandoff = (_, _) => throw new OperationCanceledException(cts.Token) };
+
+        await Assert.That(async () => await server.BeginHandoffTakeoverAsync("a", "b", cts.Token)).Throws<OperationCanceledException>();
     }
 }
