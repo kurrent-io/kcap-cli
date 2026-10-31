@@ -646,6 +646,72 @@ public class ArtefactsTabViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task The_poll_stops_asking_a_server_that_cannot_list_pages() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Pages.Enqueue(SessionPagesRead.Of(SessionPlansReadKind.Unavailable));
+            await h.SwitchAsync(SessionA);
+            await Assert.That(h.Pages.Requested.Count).IsEqualTo(1);
+
+            h.Vm.PollPages();
+            await h.SettledAsync();
+            await Assert.That(h.Pages.Requested.Count).IsEqualTo(1);
+
+            h.PublishPage();
+            await h.SettledAsync();
+            await Assert.That(h.Pages.Requested.Count).IsEqualTo(2);
+
+            h.Vm.PollPages();
+            await h.SettledAsync();
+            await Assert.That(h.Pages.Requested.Count).IsEqualTo(3);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_session_switch_reads_pages_after_an_unavailable_answer() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Pages.Enqueue(SessionPagesRead.Of(SessionPlansReadKind.Unavailable));
+            await h.SwitchAsync(SessionA);
+
+            await h.SwitchAsync(SessionB);
+            h.Vm.PollPages();
+            await h.SettledAsync();
+
+            await Assert.That(h.Pages.Requested).IsEquivalentTo(new[] { SessionA, SessionB, SessionB }, CollectionOrdering.Matching);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task With_pages_the_reader_prompt_names_pages() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(Ready(Doc("1", "plan", "docs/p.md")));
+            h.Pages.Enqueue(PagesReady(Page("a")));
+            await h.SwitchAsync(SessionA);
+            await Assert.That(h.Vm.EmptyReaderNote).IsEqualTo("Select a document or page.");
+            await h.Vm.TeardownAsync();
+
+            var docsOnly = new Harness();
+            docsOnly.Source.Enqueue(Ready(Doc("1", "plan", "docs/p.md")));
+            await docsOnly.SwitchAsync(SessionA);
+            await Assert.That(docsOnly.Vm.EmptyReaderNote).IsEqualTo("Select a document to read it.");
+            await docsOnly.Vm.TeardownAsync();
+
+            var pagesOnly = new Harness();
+            pagesOnly.Pages.Enqueue(PagesReady(Page("a")));
+            await pagesOnly.SwitchAsync(SessionA);
+            await Assert.That(pagesOnly.Vm.EmptyReaderNote).IsEqualTo("Select a document or page.");
+            await pagesOnly.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Signed_out_clears_pages() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
