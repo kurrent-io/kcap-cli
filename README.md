@@ -512,7 +512,7 @@ If you run `kcap setup` outside any git working tree, it still completes — hoo
 
 ### Local server (`kcap local`)
 
-The server `kcap setup --local` installed runs as a per-user service (a launchd LaunchAgent on macOS) and starts at login. These commands manage it:
+The server `kcap setup --local` installed runs as a per-user service (a launchd LaunchAgent on macOS, a systemd user unit on Linux, a Scheduled Task named `kcap-local` on Windows, which needs no administrator rights) and starts at login. These commands manage it:
 
 ```bash
 kcap local status          # explain its state and what to do about it

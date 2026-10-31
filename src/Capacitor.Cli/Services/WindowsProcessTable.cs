@@ -26,6 +26,25 @@ static unsafe partial class WindowsProcessTable {
         return table;
     }
 
+    /// <summary>The path the process's image was opened by, a link in it unresolved; null when the process is gone or
+    /// not this user's to query.</summary>
+    public static string? ImagePath(int pid) {
+        var process = OpenProcess(QueryLimitedInformation, false, (uint)pid);
+        if (process == 0) return null;
+
+        try {
+            var buffer = new char[MaxPath];
+            var size   = (uint)buffer.Length;
+            fixed (char* chars = buffer)
+                return QueryFullProcessImageNameW(process, 0, chars, ref size) ? new string(chars, 0, (int)size) : null;
+        } finally {
+            CloseHandle(process);
+        }
+    }
+
+    const uint QueryLimitedInformation = 0x1000;
+    const int  MaxPath                 = 32768;
+
     const uint SnapProcess = 0x00000002;
     static readonly nint InvalidHandle = -1;
 
@@ -57,4 +76,11 @@ static unsafe partial class WindowsProcessTable {
     [LibraryImport("kernel32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool CloseHandle(nint handle);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    private static partial nint OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint processId);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool QueryFullProcessImageNameW(nint process, uint flags, char* buffer, ref uint size);
 }

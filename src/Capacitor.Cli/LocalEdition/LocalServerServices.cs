@@ -13,8 +13,9 @@ static class LocalServerServices {
             return (systemdRunning ?? ServiceManagerFactory.SystemdRunning)()
                 ? new LocalServerSystemdService(home, time)
                 : new LocalServerSystemdService(home, time, run: NoSystemd);
+        if (OperatingSystem.IsWindows()) return new LocalServerTaskService(home, time);
 
-        throw new PlatformNotSupportedException("The local edition runs on macOS and Linux.");
+        throw new PlatformNotSupportedException("The local edition runs on macOS, Linux and Windows.");
     }
 
     static (int ExitCode, string StdOut, string StdErr) NoSystemd(string file, string[] args) =>

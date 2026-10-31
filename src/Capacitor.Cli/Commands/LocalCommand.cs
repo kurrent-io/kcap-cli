@@ -28,6 +28,7 @@ sealed class LocalCommand(
             "open"         => await WithStack(OpenAsync),
             "uninstall"    => await UninstallAsync(args[2..]),
             "upgrade"      => await upgrade.HandleAsync(args),
+            LocalConsoleBreakCommand.Name => LocalConsoleBreakCommand.Run(args[2..]),
             _              => await Unknown(sub),
         };
     }
