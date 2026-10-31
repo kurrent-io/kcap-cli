@@ -850,7 +850,8 @@ switch (command) {
                 skipTitle:               skipTitle,
                 discoverOnly:            discoverOnly,
                 discoverJson:            discoverJson,
-                onFinished:              o => outcome = o);
+                onFinished:              o => outcome = o,
+                skip:                    resolveResult.Skip);
 
             return exit != 0 ? exit : outcome?.ExitCode ?? 0;
         } finally {

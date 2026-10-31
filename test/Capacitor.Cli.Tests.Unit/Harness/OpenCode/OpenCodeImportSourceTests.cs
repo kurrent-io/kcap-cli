@@ -205,6 +205,27 @@ public class OpenCodeImportSourceTests {
     }
 
     [Test]
+    public async Task classify_deleted_when_the_server_answers_410() {
+        using var fix = new OpenCodeDbFixture();
+        fix.AddSession("ses_x", null, "/w", "T", 100);
+        fix.AddMessageWithText("ses_x", "m1", "hello", 100);
+
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+              .RespondWith(Response.Create().WithStatusCode(410).WithBody("""{"error":"session_deleted"}"""));
+        using var client = new HttpClient();
+
+        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath, TimeProvider.System);
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(discovered,
+            new ClassifyContext(client, server.Url!, MinLines: 1, Home: Home),
+            CancellationToken.None);
+
+        await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.Deleted);
+        await Assert.That(classified[0].ProbeErrorReason).IsNull();
+    }
+
+    [Test]
     public async Task classify_too_short_for_structural_only_session() {
         using var fix = new OpenCodeDbFixture();
         fix.AddSession("ses_x", null, "/w", "T", 100);

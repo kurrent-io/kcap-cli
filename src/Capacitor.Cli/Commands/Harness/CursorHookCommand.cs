@@ -533,8 +533,9 @@ public sealed class CursorHookCommand(
                 return EmptyOrNull();
             }
 
-            var posted = await TryPostHookAsync(client, mapping.RouteSegment, normalized, ct);
-            if (!posted && mapping.SpoolOnFailure && sessionId is not null) {
+            var result = await TryPostHookAsync(client, mapping.RouteSegment, normalized, ct);
+            var posted = result == true;
+            if (result == false && mapping.SpoolOnFailure && sessionId is not null) {
                 spool.Append(sessionId, mapping.RouteSegment, normalized);
             }
             // Task 8: the ordering-sensitive beforeSubmitPrompt's own live POST just
@@ -804,8 +805,8 @@ public sealed class CursorHookCommand(
             return 0;
         }
 
-        var posted = await TryPostHookAsync(client, route, body!, ct);
-        if (!posted) {
+        var result = await TryPostHookAsync(client, route, body!, ct);
+        if (result != true) {
             // Task 12 — subagent-start POST failed (spooled): the child watcher must
             // NOT spawn here. Spawning now would let the watcher's own poll deliver child
             // transcript lines before SubagentStarted is ever appended (the server has no
@@ -814,7 +815,7 @@ public sealed class CursorHookCommand(
             // top-of-method spool drain (keyed on this same childSessionId) is what redelivers
             // this entry on a later hook invocation — see its "subagent-start" branch, which
             // performs the deferred spawn itself once that redelivery succeeds.
-            spool.Append(childSessionId, route, body!);
+            if (result == false) spool.Append(childSessionId, route, body!);
             return 0;
         }
 
@@ -971,7 +972,10 @@ public sealed class CursorHookCommand(
         } catch { }
     }
 
-    async Task<bool> TryPostHookAsync(
+    /// <summary>True when the server took the post, false when a later drain should retry it, and null
+    /// when the server refused it for good — a status <see cref="HookSpool.IsRetryable"/> rejects, such as
+    /// the 410 a session deleted on the server answers — so it is neither delivered nor spooled.</summary>
+    async Task<bool?> TryPostHookAsync(
             HttpClient        client,
             string            routeSegment,
             string            bodyJson,
@@ -991,7 +995,9 @@ public sealed class CursorHookCommand(
                     AuthRejectionNotice.VendorStderrLine("cursor-hook", routeSegment, 401));
             }
 
-            return resp.IsSuccessStatusCode;
+            if (resp.IsSuccessStatusCode) return true;
+
+            return HookSpool.IsRetryable((int)resp.StatusCode) ? false : null;
         } catch { return false; }
     }
 

@@ -810,6 +810,9 @@ class SessionMetadata {
     public string?         SessionId      { get; set; }
     public DateTimeOffset? FirstTimestamp { get; set; }
     public DateTimeOffset? LastTimestamp  { get; set; }
+
+    /// <summary>The branch the transcript itself recorded, or null when it recorded none.</summary>
+    public string?         GitBranch      { get; set; }
 }
 
 static partial class GitUrlParser {

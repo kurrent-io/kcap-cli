@@ -57,6 +57,25 @@ public class GeminiSubagentImportTests : IDisposable {
     }
 
     [Test]
+    public async Task A_session_the_server_deleted_is_counted_deleted_and_sent_nothing() {
+        WriteFixture();
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(410).WithBody("""{"error":"session_deleted"}"""));
+
+        using var client = new HttpClient();
+        var source = new GeminiImportSource(_tempDir, TimeProvider.System);
+
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(
+            discovered,
+            new ClassifyContext(client, _server.Url!, MinLines: 0, Home: Home),
+            CancellationToken.None);
+
+        await Assert.That(classified.Single().Status).IsEqualTo(ImportCommand.ClassificationStatus.Deleted);
+        await Assert.That(_server.LogEntries.Count(e => e.RequestMessage.Method == "POST")).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task ImportSession_imports_nested_subagent_with_canonical_id_and_resolved_type() {
         WriteFixture();
 

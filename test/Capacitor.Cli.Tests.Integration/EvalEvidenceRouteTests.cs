@@ -74,6 +74,14 @@ public class EvalEvidenceRouteTests : IDisposable {
 
     static string Prompt(string dir, int n) => File.ReadAllText(Path.Combine(dir, $"prompt-{n}.txt"));
     static string[] ArgsOf(string dir, int n) => File.ReadAllLines(Path.Combine(dir, $"args-{n}.txt"));
+
+    /// <summary>The arguments with the session id masked: every helper run takes a fresh one.</summary>
+    static string ComparableArgs(string dir, int n) {
+        var args = ArgsOf(dir, n);
+        var at = Array.IndexOf(args, "--session-id");
+        if (at >= 0 && at + 1 < args.Length) args[at + 1] = "<session-id>";
+        return string.Join("\n", args);
+    }
     static string After(string[] args, string flag) => args[Array.IndexOf(args, flag) + 1];
 
     void ServeCatalog(bool advertised = true) => _stub.Catalog(advertised ? Ad : null, "[]", CatalogQuestions);
@@ -743,7 +751,7 @@ public class EvalEvidenceRouteTests : IDisposable {
             await Assert.That(body).IsEqualTo(runs[0].Body);
             for (var n = 0; n < 3; n++) {
                 await Assert.That(Prompt(dir, n)).IsEqualTo(Prompt(runs[0].Dir, n));
-                await Assert.That(string.Join("\n", ArgsOf(dir, n))).IsEqualTo(string.Join("\n", ArgsOf(runs[0].Dir, n)));
+                await Assert.That(ComparableArgs(dir, n)).IsEqualTo(ComparableArgs(runs[0].Dir, n));
             }
         }
         var tools = ArgsOf(runs[0].Dir, 1);

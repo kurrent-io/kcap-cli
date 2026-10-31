@@ -8,6 +8,7 @@ using Capacitor.Cli.Tests.Unit.SessionStartMemory;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Core.Resume;
 using Microsoft.Extensions.Time.Testing;
@@ -69,6 +70,23 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root);
         await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"{{AbsentCwd(absent)}}"}""");
         await Assert.That(fx.RouteOrder).Contains("session-start");
+    }
+
+    /// <summary>kcap's own headless run is never captured, even when <c>KCAP_SKIP</c> did not reach the
+    /// hook: either mark is enough, and nothing is posted or spooled for it.</summary>
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task a_kcap_helper_run_is_not_captured(bool byId) {
+        var sid = byId ? ClaudeHelperRun.NewSessionId() : Guid.NewGuid().ToString();
+        var cwd = byId ? AbsentCwd(Tmp) : "/tmp/" + ClaudeHelperRun.WorkingDirName(Guid.NewGuid().ToString());
+        using var fx = new Fixture(Config.Root);
+
+        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{cwd}}"}""");
+
+        await Assert.That(fx.RouteOrder).IsEmpty();
+        await Assert.That(fx.ServerRequestCount).IsEqualTo(0);
+        await Assert.That(fx.Spool.HasBacklog(sid)).IsFalse();
     }
 
     /// <summary>Pins the seam's position: <c>PreToolUse</c> is decided before a client is ever built,

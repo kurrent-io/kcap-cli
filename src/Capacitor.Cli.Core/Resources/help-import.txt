@@ -48,6 +48,9 @@ Scope (one of, required for non-interactive use):
   --repo <owner/name>     Import only sessions from a specific repo. Repeatable:
                           pass it once per repo to select several
   --repo .                Import only sessions from the current cwd's repo
+  --folder <path>         Import only sessions that ran in <path>, as --discover
+                          names it under "couldn't match to a repository".
+                          Repeatable, and combines with --repo into one selection
 
 The org is the git-remote owner (GitHub org/user), independent of your profile
 name — so `--org` works the same under GitHub and WorkOS sign-in. A bare `--org`
@@ -58,22 +61,34 @@ Without a scope flag on an interactive terminal, an interactive picker is shown.
 Options:
   --discover              Report what is on disk and exit without importing:
                           sessions and last activity per repository, how many
-                          couldn't be matched to one, and totals for each --since
-                          window. Needs no scope flag — it is what you run to
+                          couldn't be matched to one and the folders they ran
+                          in, and totals for each --since window. Needs no scope flag — it is what you run to
                           decide which one to use
   --json                  With --discover: emit the report as JSON
-  --yes, -y               Skip the confirmation prompt
+  --yes, -y               Skip the confirmation prompt. Never includes an
+                          excluded session (see Exclusions below)
   --private               Mark every imported session as Only Visible to You
+  --skip-repo <owner/name>
+                          Leave this repository out of this run, whatever the
+                          scope. Repeatable. Saves nothing: recording and later
+                          imports are unchanged (use kcap ignore or
+                          excluded_repos to keep a repository out for good)
+  --skip-folder <path>    Leave the sessions that ran in <path> out of this
+                          run, as --discover names the folder. Repeatable;
+                          saves nothing, like --skip-repo
   --since YYYY-MM-DD      Only import sessions started on or after this date
   --cwd <path>            Filter by working directory (composes with scope)
   --session <id>          Import a specific session only (composes with scope)
   --min-lines <n>         Skip sessions shorter than n lines (default: 15)
   --skip-title            Don't generate titles for imported Claude and Codex
                           sessions. Titling shells out to your own `claude` /
-                          `codex`, once per session, on your subscription — the
-                          same opt-out `kcap watch` takes. Sessions are searchable
-                          without a title, and the other eight agents never title
-                          locally, so this changes nothing for them.
+                          `codex`, once per session, on your subscription, and
+                          sends the session's first message and the start of its
+                          reply to the model provider that agent uses, even with
+                          a local server — the same opt-out `kcap watch` takes.
+                          Sessions are searchable without a title, and the other
+                          agents never title locally, so this changes nothing
+                          for them.
   --generate-summaries    Also generate per-session what's-done summaries
   --repair-capture        Recover omitted file-tool records for one ended session
                           you own. Requires --session; Claude and Codex only.
@@ -86,7 +101,17 @@ Options:
                           --cwd/--session filters. No effect on other vendors.
 
 Re-running the same command is idempotent — a server-side watermark dedupes
-already-imported lines so nothing is double-loaded.
+already-imported lines so nothing is double-loaded. A session you deleted on the
+server is counted as Deleted, never sent again, and is not a failure.
+
+Claude and Codex sessions carry the git branch their transcript recorded, not
+the one checked out at import time; with none recorded the branch stays empty.
+
+Exclusions: sessions under a path or repo you excluded (kcap ignore,
+excluded_repos, or outside an allow list) stay out. At a terminal without --yes,
+import asks before including each excluded path or repo (default no); that answer
+is the only way to include one. With --yes, or without a terminal, every
+exclusion is kept and the skipped sessions are counted as Excluded.
 
 Exit codes: 0 = nothing failed (skipped and excluded sessions are not failures);
 1 = at least one session failed to land, whether some or all of them (including
