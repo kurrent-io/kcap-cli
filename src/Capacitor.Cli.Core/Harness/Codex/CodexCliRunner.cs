@@ -214,7 +214,8 @@ static class CodexCliRunner {
                 CostUsd: null,
                 NumTurns: Math.Max(1, events.CompletedTurns)
             ),
-            null
+            null,
+            usage
         );
     }
 
