@@ -225,6 +225,7 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
         if (Text(args, "edited_body") is { } editedBody) body["edited_body"] = editedBody;
         if (Text(args, "reason") is { } reason) body["reason"] = reason;
         if (McpToolArguments.OptionalString(args, "member_disposition") is { } disposition) body["member_disposition"] = disposition;
+        if (Flag(args, "confirm_private_sources") is { } confirm) body["confirm_private_sources"] = confirm;
         return body;
     }
 
@@ -268,6 +269,7 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
         if (Text(args, "target_scope_id") is { } scopeId) body["target_scope_id"] = scopeId;
         if (Flag(args, "preserve_audience") is { } preserveAudience) body["preserve_audience"] = preserveAudience;
         if (Flag(args, "preserve_decision") is { } preserveDecision) body["preserve_decision"] = preserveDecision;
+        if (Flag(args, "confirm_private_sources") is { } confirm) body["confirm_private_sources"] = confirm;
         return body;
     }
 
@@ -404,7 +406,7 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
                 ["expected_doc_revision"] = RevisionProperty,
             }, ["doc_id", "body", "operation_id", "expected_doc_revision"]), McpToolAnnotations.Destructive),
         new("transition_skill",
-            "Move a skill through its lifecycle; a status the action does not admit answers 409 invalid_transition. approve: a candidate or stale skill with a pending draft; targets is [\"skill\"], or [\"display\"] for a human_guidance skill, and anything else answers 422 invalid_targets; a skill restricted by session kind or flow role cannot be approved (422 invalid_targets); optional edited_body. approve answers 409 draft_basis_stale when members changed since the draft, 409 explicit_body_required after an exclude or include (pass an edited_body written without the excluded guidance), and 422 zero_effective_members when every member is excluded. reject: drop a stale skill's pending draft. dismiss: a candidate; optional reason. revoke: a curated or stale skill; member_disposition suppress | release is required. restore: a revoked skill; always back to forming, so approve a fresh draft to serve again.",
+            "Move a skill through its lifecycle; a status the action does not admit answers 409 invalid_transition. approve: a candidate or stale skill with a pending draft; targets is [\"skill\"], or [\"display\"] for a human_guidance skill, and anything else answers 422 invalid_targets; a skill restricted by session kind or flow role cannot be approved (422 invalid_targets); optional edited_body. approve answers 409 draft_basis_stale when members changed since the draft, 409 explicit_body_required after an exclude or include (pass an edited_body written without the excluded guidance), 422 zero_effective_members when every member is excluded, 409 draft_not_readable when the draft draws on facts you cannot see (approve an edited_body you wrote), and 409 private_sources_unconfirmed when every session the skill's facts came from is private: approving shows the body to the skill's whole audience, so resend with confirm_private_sources true only when that is intended. reject: drop a stale skill's pending draft. dismiss: a candidate; optional reason. revoke: a curated or stale skill; member_disposition suppress | release is required. restore: a revoked skill; always back to forming, so approve a fresh draft to serve again.",
             new("object", new() {
                 ["doc_id"]                = DocIdProperty,
                 ["action"]                = new("string", "approve | reject | dismiss | revoke | restore"),
@@ -414,6 +416,7 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
                 ["edited_body"]           = new("string", "approve: the body to approve instead of the pending draft."),
                 ["reason"]                = new("string", "dismiss: why (at most 500 characters)."),
                 ["member_disposition"]    = new("string", "revoke: suppress | release"),
+                ["confirm_private_sources"] = new("boolean", "approve: release a skill whose every source session is private."),
             }, ["doc_id", "action", "operation_id", "expected_doc_revision"]), McpToolAnnotations.Destructive),
         new("adjust_skill_members",
             "Change a skill's members, one action per call over 1-64 cluster_uids. exclude / include leave current members out of (or back in) the next draft and approval: immediate, reversible, require expected_doc_revision, and refuse a repeated uid (400 invalid_input); the serving snapshot is unchanged until the next approval. Either refuses the whole batch with 422 not_current_member when any uid is not a current member, and exclude answers 422 last_effective_member rather than exclude every member. Excluding members already excluded, or including ones that are not, is a no-op success that records nothing, not even its operation_id. add / remove / clear take no expected_doc_revision and accept repeated uids (each distinct uid answers once); they record assignment pins the topic sweep settles later, so the response gives each uid's recorded status and get_skill.assignment_pins shows the outcome. A pin operation_id is keyed across every skill: reusing one for any other doc, action or uids answers 409 operation_id_reused, so use a fresh UUID each time. To move a cluster out of a serving skill: exclude it, approve with edited_body, then remove it; then add it to the destination skill.",
@@ -425,7 +428,7 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
                 ["expected_doc_revision"] = RevisionProperty,
             }, ["doc_id", "action", "cluster_uids", "operation_id"]), McpToolAnnotations.Destructive),
         new("curate_fact_cluster",
-            "Curate a fact cluster by the curation_key a fact read or skill member returned. Always send audience_kind and audience_id (from the fact's curation). Each status admits only its own facets, and a stray one is refused 400: promoted requires curated_text and target_kinds and may carry the applies_to_* axes (omit = unset, [] = everywhere); dismissed takes only an optional reason; revoked takes no facet. Omitting status is an audience-only save or, with target_scope_kind/target_scope_id, a move: send no target_kinds, axes or reason; with preserve_decision the standing decision is rebuilt server-side and curated_text is the one facet it may carry, for a text edit. A fact's curation carries target_kinds (an empty list on a dismissed or revoked fact) and may carry axes whatever its status, so copy curated_text, target_kinds and the axes from it only when sending status promoted. Success is 204, or 202 pending_approval when the promotion was queued for a curator at the target scope. A skill member refuses decision, applicability or home changes with 409 cluster_topic_claimed naming its doc_id (remove-pin it first); curating a member's audience never changes the skill, but drifts the member out to another skill later.",
+            "Curate a fact cluster by the curation_key a fact read or skill member returned. Always send audience_kind and audience_id (from the fact's curation). Each status admits only its own facets, and a stray one is refused 400: promoted requires curated_text and target_kinds and may carry the applies_to_* axes (omit = unset, [] = everywhere); dismissed takes only an optional reason; revoked takes no facet. Omitting status is an audience-only save or, with target_scope_kind/target_scope_id, a move: send no target_kinds, axes or reason; with preserve_decision the standing decision is rebuilt server-side and curated_text is the one facet it may carry, for a text edit. A fact's curation carries target_kinds (an empty list on a dismissed or revoked fact) and may carry axes whatever its status, so copy curated_text, target_kinds and the axes from it only when sending status promoted. Success is 204, or 202 pending_approval when the promotion was queued for a curator at the target scope. Promoting a fact whose every source session is private answers 409 private_sources_unconfirmed, since the curated text then reaches the fact's whole audience; resend with confirm_private_sources true only when that is intended. A skill member refuses decision, applicability or home changes with 409 cluster_topic_claimed naming its doc_id (remove-pin it first); curating a member's audience never changes the skill, but drifts the member out to another skill later.",
             new("object", new() {
                 ["curation_key"]             = new("object", "{ source_repo_hash, category, cluster_id } exactly as a read returned it."),
                 ["operation_id"]             = CurateOperationIdProperty,
@@ -443,6 +446,7 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
                 ["target_scope_id"]          = new("string", "The target home's id; empty for org."),
                 ["preserve_audience"]        = new("boolean", "Keep the cluster's current audience rather than the one sent."),
                 ["preserve_decision"]        = new("boolean", "With status omitted: rebuild the standing decision for a move or text edit."),
+                ["confirm_private_sources"]  = new("boolean", "promoted: release a fact whose every source session is private."),
             }, ["curation_key", "operation_id", "audience_kind"]), McpToolAnnotations.Destructive),
     ];
 }
