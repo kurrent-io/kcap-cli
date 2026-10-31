@@ -91,10 +91,14 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
 
         var state = new RunState();
 
-        foreach (var (entry, body) in declares) {
+        // A write ordered before one an earlier run made would take primary, or the current plan, from it.
+        var lastHeld = declares.FindLastIndex(d => held.Contains(Str(d.Body["work_item_id"]) ?? ""));
+
+        for (var i = 0; i < declares.Count; i++) {
+            var (entry, body) = declares[i];
             if (state.Stopped(ct)) break;
-            if (held.Contains(Str(body["work_item_id"]) ?? "")) {
-                entry["attached"] = true;
+            if (i <= lastHeld) {
+                Settle(entry, held.Contains(Str(body["work_item_id"]) ?? ""), state);
                 continue;
             }
 
@@ -102,9 +106,16 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
         }
 
         string? currentPlan = null;
+        var lastJoined = adoptions.FindLastIndex(a => a.Joined);
 
-        foreach (var (planId, url, body, entry) in adoptions) {
+        for (var i = 0; i < adoptions.Count; i++) {
+            var (planId, url, body, entry, joined) = adoptions[i];
             if (state.Stopped(ct)) break;
+            if (i <= lastJoined) {
+                Settle(entry, joined, state);
+                continue;
+            }
+
             if (await WriteAsync(client, url, body, entry, state, ct)) currentPlan = planId;
         }
 
@@ -184,10 +195,10 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
         return (new JsonObject { ["status"] = "ok", ["items"] = attached }, declares);
     }
 
-    static async Task<List<(string PlanId, string Url, JsonObject Body, JsonObject Entry)>> ReadPlansAsync(
+    static async Task<List<(string PlanId, string Url, JsonObject Body, JsonObject Entry, bool Joined)>> ReadPlansAsync(
             string baseUrl, HttpResponseMessage? read, string? readError, string current, bool skipJoined, JsonObject outcome,
             CancellationToken ct) {
-        var adoptions = new List<(string, string, JsonObject, JsonObject)>();
+        var adoptions = new List<(string, string, JsonObject, JsonObject, bool)>();
         var adopted   = new JsonArray();
         var skipped   = new JsonArray();
         outcome["plans"]         = adopted;
@@ -242,17 +253,21 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
             var update = new JsonObject { ["session_id"] = current, ["status"] = status };
             if (task["note"] is JsonValue noteValue && noteValue.TryGetValue(out string? note) && note is not null) update["note"] = note;
 
-            adopted.Add((JsonNode?)entry);
-            if (skipJoined && Joined(plan, current)) {
-                entry["attached"] = true;
-                continue;
-            }
-
             var url = $"{baseUrl}/api/plans/{Uri.EscapeDataString(planId)}/tasks/{Uri.EscapeDataString(taskId)}";
-            adoptions.Add((planId, url, update, entry));
+            adoptions.Add((planId, url, update, entry, skipJoined && Joined(plan, current)));
+            adopted.Add((JsonNode?)entry);
         }
 
         return adoptions;
+    }
+
+    /// <summary>An entry an earlier run wrote is carried; one before it that it did not write failed then and is not retried.</summary>
+    static void Settle(JsonObject entry, bool written, RunState state) {
+        entry["attached"] = written;
+        if (written) return;
+
+        entry["error"] = "not_retried";
+        state.Failed++;
     }
 
     static bool Joined(JsonObject plan, string session) =>
