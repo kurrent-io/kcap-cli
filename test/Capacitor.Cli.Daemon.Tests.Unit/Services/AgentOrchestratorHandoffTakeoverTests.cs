@@ -541,14 +541,28 @@ public class AgentOrchestratorHandoffTakeoverTests : IDisposable {
     /// <summary>The successor's ledger entry names its source, so a restart before the takeover settles does not
     /// lose it.</summary>
     [Test]
-    public async Task A_handoff_launch_records_its_source_in_the_resume_ledger() {
-        ServeSource();
+    public async Task A_handoff_launch_records_its_source_in_the_resume_ledger_until_the_takeover_settles() {
+        using var release = new ManualResetEventSlim();
+        var arrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ServeSource(declare: (_, _) => {
+            arrived.TrySetResult();
+            release.Wait(TimeSpan.FromSeconds(30));
+
+            return null;
+        });
         await using var f = Build();
 
-        await f.Orch.HandleLaunchAgentForTest(Launch(f.Repo));
-        await SettledAsync(f);
+        try {
+            await f.Orch.HandleLaunchAgentForTest(Launch(f.Repo));
+            await WaitHarness.WaitBoundedAsync(arrived.Task, "the first write");
 
-        await Assert.That(f.Orch.ResumeLedger!.TryRead(AgentId)!.Launch.HandoffSource).IsEqualTo(SourceContext);
+            await Assert.That(f.Orch.ResumeLedger!.TryRead(AgentId)!.Launch.HandoffSource).IsEqualTo(SourceContext);
+        } finally {
+            release.Set();
+        }
+
+        await SettledAsync(f);
+        await WaitHarness.PollUntilAsync(() => f.Orch.ResumeLedger!.TryRead(AgentId)!.Launch.HandoffSource is null);
     }
 
     /// <summary>A restart cut the takeover short; the resumed successor finishes it under a fresh lease.</summary>
@@ -598,18 +612,19 @@ public class AgentOrchestratorHandoffTakeoverTests : IDisposable {
         await Assert.That(f.Server.HandoffBegins).IsEmpty();
     }
 
-    /// <summary>Only an interrupted outcome proves the earlier run never settled; one the store no longer holds may have.</summary>
+    /// <summary>A settled takeover leaves no source in the ledger, so one still there never settled, whether or not
+    /// it stored an outcome first.</summary>
     [Test]
-    public async Task A_recovered_successor_without_an_outcome_takes_over_nothing() {
+    public async Task A_recovered_successor_without_an_outcome_finishes_its_takeover() {
         ServeSource();
         await using var f = Build();
         WriteResumableEntry(f, SourceContext);
 
         await ResumeAsync(f);
-        await Task.Delay(200);
+        var outcome = await SettledAsync(f);
 
-        await Assert.That(await QueryAsync(f.Orch, Successor)).IsNull();
-        await Assert.That(f.Server.HandoffBegins).IsEmpty();
+        await Assert.That(outcome.State).IsEqualTo("done");
+        await Assert.That(f.Server.HandoffBegins.Select(b => b.Successor)).IsEquivalentTo([SuccessorWire]);
     }
 
     /// <summary>An entry written without the source has nothing to finish the takeover with.</summary>
