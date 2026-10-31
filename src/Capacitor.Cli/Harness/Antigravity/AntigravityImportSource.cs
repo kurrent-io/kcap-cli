@@ -188,6 +188,9 @@ internal sealed class AntigravityImportSource : IImportSource {
                 serverLastLine = await FetchServerLastLineAsync(ctx.HttpClient, ctx.BaseUrl, s.SessionId, agentId: null, ct);
             } catch (OperationCanceledException) {
                 throw;
+            } catch (SessionDeletedException) {
+                results.Add(Make(s, meta, ImportCommand.ClassificationStatus.Deleted, nonBlank));
+                continue;
             } catch {
                 results.Add(Make(s, meta, ImportCommand.ClassificationStatus.ProbeError, nonBlank, "watermark probe failed"));
                 continue;
@@ -628,6 +631,7 @@ internal sealed class AntigravityImportSource : IImportSource {
             HttpClient http, string baseUrl, string sessionId, string? agentId, CancellationToken ct) {
         var url = $"{baseUrl}/api/sessions/{sessionId}/last-line" + (agentId is not null ? $"?agentId={Uri.EscapeDataString(agentId)}" : "");
         using var resp = await http.GetWithRetryAsync(url, _time, ct: ct);
+        SessionDeletedException.ThrowIfDeleted(resp, sessionId);
         if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
         if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"watermark probe returned {(int)resp.StatusCode}");
         var body = await resp.Content.ReadAsStringAsync(ct);

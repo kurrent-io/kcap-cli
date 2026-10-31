@@ -131,11 +131,12 @@ public partial class LauncherPaneView : UserControl {
         };
 
         // Pill sits on the title row only (not vertically centered on title+path), so every
-        // repo's badge lines up with "No repository"'s badge.
+        // repo's badge lines up with "No repository"'s badge. No harness available, no badge.
         var pill = new Border {
             Background = this.Brush("KcapMutedBrush"), CornerRadius = new CornerRadius(999),
             Padding = new Thickness(8, 3), Margin = new Thickness(12, 0, 0, 0),
             VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            IsVisible = HomeViewModel.IsAvailable(vm.Harnesses, option.Vendor),
             Child = new TextBlock {
                 Text = HostedHarnessCatalog.LabelFor(vm.Harnesses, option.Vendor),
                 FontSize = 11, FontWeight = FontWeight.SemiBold,

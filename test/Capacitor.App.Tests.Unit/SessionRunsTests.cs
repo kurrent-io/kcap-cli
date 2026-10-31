@@ -1,5 +1,6 @@
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness.Claude;
 using Microsoft.Extensions.Time.Testing;
 using TUnit.Assertions.Enums;
 
@@ -237,6 +238,56 @@ public class SessionRunsTests {
 
         s.OpensSubagents = true;
         await Assert.That(Only(s).CanOpen).IsTrue();
+    }
+
+    /// <summary>An ended session (an import among them) whose records never tied the call to an agent keeps
+    /// the row shut and says why, even when a start record named an agent: the row had ended before it
+    /// arrived, so pairing them would be a guess.</summary>
+    [Test]
+    public async Task An_ended_row_with_no_recorded_agent_says_why_it_does_not_open() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Started("c1")));
+        s.Apply(Result("c1", at: T0.AddMinutes(1)));
+        s.Apply(Signals([.. TranscriptChat.SubagentStart("a1", "Explore", T0.AddMinutes(5), ClaudeChatRules.Instance)]));
+        s.SessionOver = true;
+
+        await Assert.That(Only(s).CanOpen).IsFalse();
+        await Assert.That(Only(s).StateWord).IsEqualTo("done");
+        await Assert.That(Only(s).UnopenableReason).Contains("no record of which subagent transcript this call started");
+    }
+
+    /// <summary>The call's own record names its agent, which opens the row after the session ended too.</summary>
+    [Test]
+    public async Task An_ended_row_named_by_its_call_opens_and_gives_no_reason() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Started("c1")));
+        s.Apply(Mixed([new AcpEventEnvelope(Kind: AcpEventKind.ToolResult, ToolCallId: "c1")], Identified("c1", "a1")));
+        s.SessionOver = true;
+
+        await Assert.That(Only(s).CanOpen).IsTrue();
+        await Assert.That(Only(s).UnopenableReason).IsNull();
+    }
+
+    [Test]
+    public async Task A_running_row_waiting_for_its_agent_says_it_will_open() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Started("c1")));
+
+        await Assert.That(Only(s).UnopenableReason).StartsWith("Opens once");
+
+        s.Apply(Signals(Identified("c1", "a1")));
+        await Assert.That(Only(s).UnopenableReason).IsNull();
+    }
+
+    [Test]
+    public async Task A_lane_that_cannot_read_subagents_says_so_and_a_command_gives_no_reason() {
+        var s = new SessionRuns(Clock()) { OpensSubagents = false };
+        s.Apply(Signals(Started("c1"), Identified("c1", "a1"), Shell("c2")));
+        s.Apply(Signals(Detached("c2", "b2")));
+
+        await Assert.That(s.Rows[0].UnopenableReason).IsEqualTo("Subagent transcripts can't be opened for this session.");
+        await Assert.That(s.Rows[1].IsShell).IsTrue();
+        await Assert.That(s.Rows[1].UnopenableReason).IsNull();
     }
 
     [Test]

@@ -17,9 +17,11 @@ public class AccountRefresherTests {
     static readonly TimeSpan Cooldown = TimeSpan.FromMinutes(10);
     static readonly TimeSpan Minute   = TimeSpan.FromMinutes(1);
 
+    static readonly DateTimeOffset Start = new(2026, 10, 26, 12, 0, 0, TimeSpan.Zero);
+
     [TempHome] public required TempHome Home { get; init; }
 
-    readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 10, 26, 12, 0, 0, TimeSpan.Zero));
+    readonly FakeTimeProvider _time = new(Start);
 
     AccountStore Store => field ??= Widened(new AccountStore(Home.PathTo("accounts")));
 
@@ -60,8 +62,38 @@ public class AccountRefresherTests {
         new(at, Fresh: true, [new UsageWindowDto("codex", 300, 100, at.AddHours(5), null)], null, null,
             [new LimitSignal("codex", null)], LimitReachedReported: true, LimitStateKnown: true);
 
-    AccountRefresher Refresher(IAccountProbe probe, AccountStore? store = null) =>
-        new(new DaemonConfig { Accounts = store ?? Store }, _ => probe, _time, NullLogger<AccountRefresher>.Instance);
+    AccountRefresher Refresher(IAccountProbe probe, AccountStore? store = null, bool periodic = false) =>
+        new(new DaemonConfig { Accounts = store ?? Store }, _ => probe, _time, NullLogger<AccountRefresher>.Instance) { Periodic = periodic };
+
+    AccountRefresher Ticking(IAccountProbe probe, AccountStore? store = null) => Refresher(probe, store, periodic: true);
+
+    /// <summary>Holds a periodic check until released; once released it lets every later check straight through.</summary>
+    sealed class Hold {
+        readonly TaskCompletionSource _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Entered => _entered.Task.WaitAsync(HangGuard);
+
+        public Task WaitAsync(CancellationToken ct) {
+            _entered.TrySetResult();
+            return _release.Task.WaitAsync(ct);
+        }
+
+        public void Release() => _release.TrySetResult();
+    }
+
+    /// <summary>Holds the check of <paramref name="id"/> once the clock reaches <paramref name="minute"/>.</summary>
+    Func<string, CancellationToken, Task> HoldingAt(Hold hold, string id, int minute) =>
+        (checkedId, ct) => checkedId == id && _time.GetUtcNow() >= Start + minute * Minute ? hold.WaitAsync(ct) : Task.CompletedTask;
+
+    /// <summary>Moves the clock a minute at a time to <paramref name="minute"/>, letting every refresher drain
+    /// what each minute's timers queued.</summary>
+    async Task AdvanceTo(int minute, params AccountRefresher[] refreshers) {
+        while (_time.GetUtcNow() < Start + minute * Minute) {
+            _time.Advance(Minute);
+            foreach (var refresher in refreshers) await Idle(refresher);
+        }
+    }
 
     AccountsPublisher Publisher(Action<string> requested) =>
         new(new DaemonConfig { Accounts = Store, DefaultDirectories = FrozenDictionary<HarnessId, string>.Empty },
@@ -69,12 +101,18 @@ public class AccountRefresherTests {
 
     /// <summary>A rollout or a menu scrape in another process, writing a block the way producers do.</summary>
     void ProducerBlocks(string id, DateTimeOffset at) {
-        if (!Store.Readings.TryRecord(id, 0, "session-1", f => f with { Reading = ReadingMerge.Apply(f.Reading, ReachedAt(at)) }))
+        if (!Store.Readings.TryRecord(id, (f, _) => f with { Reading = ReadingMerge.Apply(f.Reading, ReachedAt(at)) }))
             throw new InvalidOperationException("the block was not recorded");
     }
 
     static Task Until(AccountRefresher refresher, Func<bool> condition) =>
         refresher.WaitForAsync(condition, CancellationToken.None).WaitAsync(HangGuard);
+
+    /// <summary>The probe count moves outside the refresher's progress signal, so it is polled.</summary>
+    static async Task ProbeCount(CountingProbe probe, int total) {
+        using var guard = new CancellationTokenSource(HangGuard);
+        while (probe.Total < total) await Task.Delay(1, guard.Token);
+    }
 
     /// <summary>Fake time fires a due deferral inside <c>Advance</c>, so once this returns nothing more is coming
     /// until time moves again.</summary>
@@ -392,6 +430,343 @@ public class AccountRefresherTests {
             await Idle(refresher);
             await Assert.That(probe[Work]).IsEqualTo(2);
         } finally {
+            await refresher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task Every_registered_account_is_probed_again_once_due() {
+        Register(Work);
+        Register(Spare);
+        var probe = new CountingProbe(_time);
+        using var refresher = Ticking(probe);
+
+        await refresher.StartAsync(CancellationToken.None);
+        try {
+            await Until(refresher, () => refresher.Finished == 2);
+            await AdvanceTo(12, refresher);
+
+            await Assert.That(probe[Work]).IsEqualTo(2);
+            await Assert.That(probe[Spare]).IsEqualTo(2);
+        } finally {
+            await refresher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task A_home_not_yet_due_is_not_probed_by_the_tick() {
+        Register(Work);
+        Register(Spare);
+        var probe = new CountingProbe(_time);
+        using var refresher = Ticking(probe);
+
+        await refresher.StartAsync(CancellationToken.None);
+        try {
+            await Until(refresher, () => refresher.Finished == 2);
+            await AdvanceTo(8, refresher);
+
+            await Assert.That(probe.Total).IsEqualTo(2);
+        } finally {
+            await refresher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task Out_of_phase_daemons_probe_each_home_once_per_due_period() {
+        Register(Work);
+        Register(Spare);
+        var probe = new CountingProbe(_time);
+        using var refresherA = Ticking(probe);
+        using var refresherB = Ticking(probe, new AccountStore(Store.Directory));
+
+        await refresherA.StartAsync(CancellationToken.None);
+        try {
+            await Until(refresherA, () => refresherA.Finished == 2);
+            await AdvanceTo(3, refresherA);
+
+            await refresherB.StartAsync(CancellationToken.None);
+            await Until(refresherB, () => refresherB.Finished == 2);
+            await AdvanceTo(33, refresherA, refresherB);
+
+            await Assert.That(probe[Work] - 2).IsBetween(2, 3);
+            await Assert.That(probe[Spare] - 2).IsBetween(2, 3);
+        } finally {
+            await refresherA.StopAsync(CancellationToken.None);
+            await refresherB.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task Simultaneous_ticks_probe_a_due_home_once() {
+        Register(Work);
+        var probe = new CountingProbe(_time);
+        using var refresherA = Ticking(probe);
+        using var refresherB = Ticking(probe, new AccountStore(Store.Directory));
+
+        await refresherA.StartAsync(CancellationToken.None);
+        await refresherB.StartAsync(CancellationToken.None);
+        try {
+            await Until(refresherA, () => refresherA.Finished == 1);
+            await Until(refresherB, () => refresherB.Finished == 1);
+            await AdvanceTo(8, refresherA, refresherB);
+
+            probe.Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _time.Advance(2 * Minute);
+            // Only the check that stood down can drain while the other's probe is gated.
+            await Task.WhenAny(Idle(refresherA), Idle(refresherB)).Unwrap();
+            // The winner stamps the registry before its probe counts, so idle alone can come first.
+            await ProbeCount(probe, 3);
+            await Assert.That(probe.Total).IsEqualTo(3);
+
+            probe.Gate.SetResult();
+            await Idle(refresherA);
+            await Idle(refresherB);
+            await Assert.That(probe.Total).IsEqualTo(3);
+        } finally {
+            probe.Gate?.TrySetResult();
+            await refresherA.StopAsync(CancellationToken.None);
+            await refresherB.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task An_account_added_after_start_is_probed_on_the_next_tick() {
+        Register(Work);
+        var probe = new CountingProbe(_time);
+        using var refresher = Ticking(probe);
+
+        await refresher.StartAsync(CancellationToken.None);
+        try {
+            await Until(refresher, () => refresher.Finished == 1);
+            Register(Spare);
+            await AdvanceTo(2, refresher);
+
+            await Assert.That(probe[Spare]).IsEqualTo(1);
+            await Assert.That(probe[Work]).IsEqualTo(1);
+        } finally {
+            await refresher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task A_removed_account_is_not_probed_by_the_tick() {
+        Register(Work);
+        Register(Spare);
+        var probe = new CountingProbe(_time);
+        using var refresher = Ticking(probe);
+
+        await refresher.StartAsync(CancellationToken.None);
+        try {
+            await Until(refresher, () => refresher.Finished == 2);
+            Store.Mutate(r => (r with { Accounts = [.. r.Accounts.Where(a => a.Id != Spare)] }, 0));
+            await AdvanceTo(12, refresher);
+
+            await Assert.That(probe[Work]).IsEqualTo(2);
+            await Assert.That(probe[Spare]).IsEqualTo(1);
+        } finally {
+            await refresher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task Dispose_stops_the_tick() {
+        Register(Work);
+        var probe = new CountingProbe(_time);
+        var refresher = Ticking(probe);
+
+        await refresher.StartAsync(CancellationToken.None);
+        await Until(refresher, () => refresher.Finished == 1);
+        await refresher.StopAsync(CancellationToken.None);
+        refresher.Dispose();
+
+        _time.Advance(12 * Minute);
+
+        await Assert.That(refresher.IsIdle).IsTrue();
+        await Assert.That(probe[Work]).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Periodic_work_keeps_the_refresher_busy_until_drained() {
+        Register(Work);
+        Register(Spare);
+        var probe = new CountingProbe(_time);
+        var hold  = new Hold();
+        using var refresher = Ticking(probe);
+        refresher.BeforePeriodicCheck = HoldingAt(hold, Work, 10);
+
+        await refresher.StartAsync(CancellationToken.None);
+        try {
+            await Until(refresher, () => refresher.Finished == 2);
+            await AdvanceTo(5, refresher);
+            refresher.RequestSoon(Spare);
+            await Until(refresher, () => refresher.Finished == 3);
+            await AdvanceTo(8, refresher);
+
+            _time.Advance(2 * Minute);
+            await hold.Entered;
+            await Assert.That(refresher.IsIdle).IsFalse();
+
+            refresher.Request(Spare);
+            var idle = Idle(refresher);
+            await Assert.That(refresher.IsIdle).IsFalse();
+            await Assert.That(idle.IsCompleted).IsFalse();
+
+            hold.Release();
+            await idle;
+
+            await Assert.That(probe[Work]).IsEqualTo(2);
+            await Assert.That(probe[Spare]).IsEqualTo(2);
+        } finally {
+            hold.Release();
+            await refresher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task A_tick_stands_down_for_a_home_with_a_deferred_request() {
+        Register(Work);
+        var probe   = new CountingProbe(_time);
+        var checks  = new ConcurrentQueue<(string Id, DateTimeOffset At)>();
+        using var refresher = Ticking(probe);
+        refresher.BeforePeriodicCheck = (id, _) => {
+            checks.Enqueue((id, _time.GetUtcNow()));
+            return Task.CompletedTask;
+        };
+
+        await refresher.StartAsync(CancellationToken.None);
+        try {
+            await Until(refresher, () => refresher.Finished == 1);
+            await AdvanceTo(1, refresher);
+            refresher.Request(Work);
+            await AdvanceTo(12, refresher);
+
+            await Assert.That(probe[Work]).IsEqualTo(2);
+            await Assert.That(Store.Load().Accounts.Single().RefreshedAt).IsEqualTo(Start + Cooldown);
+            await Assert.That(checks.Where(c => c.Id == Work && c.At < Start + Cooldown)).IsEmpty();
+        } finally {
+            await refresher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task A_deferred_request_expiring_behind_a_periodic_check_still_probes() {
+        Register(Work);
+        Register(Spare);
+        var probe = new CountingProbe(_time);
+        var hold  = new Hold();
+        using var refresher = Ticking(probe);
+        refresher.BeforePeriodicCheck = HoldingAt(hold, Spare, 8);
+
+        await refresher.StartAsync(CancellationToken.None);
+        try {
+            await Until(refresher, () => refresher.Finished == 2);
+            await AdvanceTo(1, refresher);
+            refresher.Request(Work);
+            await AdvanceTo(7, refresher);
+
+            _time.Advance(Minute);
+            await hold.Entered;
+            _time.Advance(2 * Minute);
+            Store.Mutate(r => (r with {
+                Accounts = [.. r.Accounts.Select(a => a.Id == Work ? a with { RefreshedAt = _time.GetUtcNow() } : a)],
+            }, 0));
+
+            hold.Release();
+            await Idle(refresher);
+
+            await Assert.That(probe[Work]).IsEqualTo(2);
+        } finally {
+            hold.Release();
+            await refresher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task A_skipped_check_spends_no_soon_budget() {
+        Register(Work);
+        var probe = new CountingProbe(_time);
+        using var refresher = Ticking(probe);
+
+        await refresher.StartAsync(CancellationToken.None);
+        try {
+            await Until(refresher, () => refresher.Finished == 1);
+            refresher.RequestSoon(Work);
+            await Until(refresher, () => refresher.Finished == 2);
+
+            await AdvanceTo(2, refresher);
+            refresher.RequestSoon(Work);
+            await AdvanceTo(9, refresher);
+            await Assert.That(probe[Work]).IsEqualTo(2);
+
+            await AdvanceTo(10, refresher);
+            await Assert.That(probe[Work]).IsEqualTo(3);
+
+            await AdvanceTo(12, refresher);
+            refresher.RequestSoon(Work);
+            await AdvanceTo(19, refresher);
+            await Assert.That(probe[Work]).IsEqualTo(3);
+
+            await AdvanceTo(20, refresher);
+            await Assert.That(probe[Work]).IsEqualTo(4);
+        } finally {
+            await refresher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task A_request_racing_a_not_due_check_waits_from_the_last_real_refresh() {
+        Register(Work);
+        var probe = new CountingProbe(_time);
+        var hold  = new Hold();
+        using var refresher = Ticking(probe);
+        refresher.BeforePeriodicCheck = HoldingAt(hold, Work, 4);
+
+        await refresher.StartAsync(CancellationToken.None);
+        try {
+            await Until(refresher, () => refresher.Finished == 1);
+            await AdvanceTo(2, refresher);
+
+            _time.Advance(2 * Minute);
+            await hold.Entered;
+            refresher.Request(Work);
+            hold.Release();
+            await Idle(refresher);
+            await Assert.That(probe[Work]).IsEqualTo(1);
+
+            await AdvanceTo(9, refresher);
+            await Assert.That(probe[Work]).IsEqualTo(1);
+
+            await AdvanceTo(10, refresher);
+            await Assert.That(probe[Work]).IsEqualTo(2);
+        } finally {
+            hold.Release();
+            await refresher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task A_soon_request_racing_a_not_due_check_runs_at_once() {
+        Register(Work);
+        var probe = new CountingProbe(_time);
+        var hold  = new Hold();
+        using var refresher = Ticking(probe);
+        refresher.BeforePeriodicCheck = HoldingAt(hold, Work, 4);
+
+        await refresher.StartAsync(CancellationToken.None);
+        try {
+            await Until(refresher, () => refresher.Finished == 1);
+            await AdvanceTo(2, refresher);
+
+            _time.Advance(2 * Minute);
+            await hold.Entered;
+            refresher.RequestSoon(Work);
+            hold.Release();
+            await Until(refresher, () => refresher.Finished == 2);
+
+            await Assert.That(probe[Work]).IsEqualTo(2);
+            await Assert.That(Store.Load().Accounts.Single().RefreshedAt).IsEqualTo(Start + 4 * Minute);
+        } finally {
+            hold.Release();
             await refresher.StopAsync(CancellationToken.None);
         }
     }

@@ -150,15 +150,25 @@ internal static partial class PiModelCatalogProbe {
             if (root.Bool("success") != true || root.Obj("data")?.Arr("models") is not { } models)
                 return new(true, null);
 
-            var list = new List<VendorModelOption>();
+            var entries = new List<(string Id, string Provider, string Name, bool Alias)>();
             foreach (var m in models.EnumerateArray()) {
                 var id = m.Str("id");
                 var provider = m.Str("provider");
                 if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(provider)) continue;
                 var name = m.Str("name") is { Length: > 0 } n ? n : id;
-                list.Add(new($"{provider}/{id}", $"{name} · {provider}"));
+                var alias = name.EndsWith(LatestSuffix, StringComparison.OrdinalIgnoreCase);
+                entries.Add((id, provider, alias ? name[..^LatestSuffix.Length].TrimEnd() : name, alias));
+            }
+            var list = new List<VendorModelOption>(entries.Count);
+            foreach (var e in entries) {
+                // Pi's registry keeps "(latest)" on aliases long after newer models ship. The alias id
+                // stays selectable; it reads as its id where a pinned sibling already has its name.
+                var shadowed = e.Alias && entries.Any(o => !o.Alias && o.Provider == e.Provider && o.Name == e.Name);
+                list.Add(new($"{e.Provider}/{e.Id}", $"{(shadowed || e.Name.Length == 0 ? e.Id : e.Name)} · {e.Provider}"));
             }
             return new(true, list);
         }
     }
+
+    const string LatestSuffix = "(latest)";
 }

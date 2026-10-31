@@ -15,11 +15,11 @@ public sealed class EditionStepViewModel : ReactiveObject, IWizardStep {
         "Keep your sessions on this machine for your own use. The local edition is free. No account is needed.";
     public const string CloudTitle = "Create a cloud workspace";
     public const string CloudDetail =
-        "Share sessions with your team in a workspace hosted on kcap.ai. Start with a 60-day free trial of the Team plan.";
+        "Share sessions with your team in a workspace kcap hosts for you. Start with a 60-day free trial of the Team plan.";
     public const string ExistingTitle = "Sign in to a workspace";
     public const string ExistingDetail =
         "Connect to a workspace you created or one your team invited you to.";
-    public const string UnsupportedPlatform = "The local edition isn't available on this platform yet.";
+    public const string UnsupportedPlatform = "The local edition runs only on Apple silicon Macs for now, so it isn't available on this machine.";
     public const string CloudProfilePresent =
         "This machine is set up for a cloud workspace. Switching to local setup isn't supported yet.";
 

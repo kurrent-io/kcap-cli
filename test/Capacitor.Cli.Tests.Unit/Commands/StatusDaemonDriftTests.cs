@@ -4,7 +4,8 @@ using Capacitor.Cli.Services;
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
 /// <summary>`kcap status` names the version each daemon runs, and warns about a daemon `kcap update`
-/// does not reach: one on another version than the CLI, or one whose service runs another install.</summary>
+/// does not reach: one on another version than the CLI, or one whose service runs another install. A
+/// daemon newer than this CLI is never advised a replace without being told it is a downgrade.</summary>
 internal sealed class StatusDaemonDriftTests {
     const string Cli    = "1.3.0-beta.9+822bc79";
     const string Ours   = "/home/u/.local/share/kcap/current/bin/kcap-daemon";
@@ -23,15 +24,20 @@ internal sealed class StatusDaemonDriftTests {
         yield return () => ("in step", [Live("1.3.0-beta.9+other")], [("tony", Ours)], true, null);
         yield return () => ("unit binary unreadable", [Live("1.3.0-beta.9")], [("tony", null)], true, null);
         yield return () => ("older daemon, service on another install", [Live("1.3.0-beta.7")], [("tony", NpmBin)], true,
-            $"⚠ daemon 'tony' runs 1.3.0-beta.7, but this kcap is 1.3.0-beta.9; its service runs {NpmBin}, outside this kcap's install, so `kcap update` does not reach it. "
-          + "Run `kcap daemon service install --replace --verify --name tony`.");
+            $"⚠ daemon 'tony' runs 1.3.0-beta.7, older than this kcap's 1.3.0-beta.9; its service runs {NpmBin}, outside this kcap's install, so `kcap update` does not reach it. "
+          + "Run `kcap daemon service install --replace --verify --name tony` to upgrade it to 1.3.0-beta.9.");
         yield return () => ("stopped service on another install", [], [("tony", NpmBin)], true,
             $"⚠ service 'tony' runs {NpmBin}, outside this kcap's install, so `kcap update` does not reach it. "
           + "Run `kcap daemon service install --replace --verify --name tony`.");
         yield return () => ("older daemon on systemd", [Live("1.3.0-beta.7")], [("tony", Ours)], false,
-            "⚠ daemon 'tony' runs 1.3.0-beta.7, but this kcap is 1.3.0-beta.9. Run `kcap daemon service install --name tony`.");
+            "⚠ daemon 'tony' runs 1.3.0-beta.7, older than this kcap's 1.3.0-beta.9. Run `kcap daemon service install --name tony` to upgrade it to 1.3.0-beta.9.");
         yield return () => ("older daemon without a service", [Live("1.3.0-beta.7")], [], true,
-            "⚠ daemon 'tony' runs 1.3.0-beta.7, but this kcap is 1.3.0-beta.9. Run `kcap daemon stop --name tony`, then `kcap daemon start --name tony`.");
+            "⚠ daemon 'tony' runs 1.3.0-beta.7, older than this kcap's 1.3.0-beta.9. Run `kcap daemon stop --name tony`, then `kcap daemon start --name tony` to upgrade it to 1.3.0-beta.9.");
+        yield return () => ("newer daemon", [Live("1.3.0+abc")], [("tony", Ours)], true,
+            "⚠ daemon 'tony' runs 1.3.0, newer than this kcap's 1.3.0-beta.9. Update this kcap to 1.3.0 or later; "
+          + "`kcap daemon service install --replace --verify --name tony` from this kcap would downgrade the daemon to 1.3.0-beta.9.");
+        yield return () => ("unordered version", [Live("dev-build")], [("tony", Ours)], true,
+            "⚠ daemon 'tony' runs dev-build, but this kcap is 1.3.0-beta.9. Run `kcap daemon service install --replace --verify --name tony`.");
     }
 
     [Test]

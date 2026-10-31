@@ -207,13 +207,17 @@ public sealed partial class WorkContextViewModel {
             this.RaisePropertyChanged(nameof(VisibleSeparateIssues));
         }
     }
-    bool _sessionExpanded;
+    readonly WorkContextLayout _layout;
+    /// Shared by every session's pane, so switching sessions keeps what the reader opened.
     public bool SessionExpanded {
-        get => _sessionExpanded;
-        private set {
-            this.RaiseAndSetIfChanged(ref _sessionExpanded, value);
-            this.RaisePropertyChanged(nameof(SessionToggleText));
-        }
+        get => _layout.SessionExpanded;
+        private set => _layout.SessionExpanded = value;
+    }
+
+    void OnLayoutChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) {
+        if (e.PropertyName != nameof(WorkContextLayout.SessionExpanded)) return;
+        this.RaisePropertyChanged(nameof(SessionExpanded));
+        this.RaisePropertyChanged(nameof(SessionToggleText));
     }
     public string SessionToggleText => SessionExpanded ? "Less" : "More";
     bool _runsExpanded;
@@ -234,7 +238,10 @@ public sealed partial class WorkContextViewModel {
                 LinkPolicy.Open(_opener, issue.Url);
         });
         ToggleSessionCommand = Toggle(() => SessionExpanded = !SessionExpanded);
+        _layout.PropertyChanged += OnLayoutChanged;
+        _disposables.Add(System.Reactive.Disposables.Disposable.Create(() => _layout.PropertyChanged -= OnLayoutChanged));
         ToggleRunsCommand = Toggle(() => RunsExpanded = !RunsExpanded);
+        WatchOwnWorktree();
     }
 
     ReactiveCommand<Unit, Unit> Toggle(Action flip) {
@@ -388,6 +395,13 @@ public sealed partial class WorkContextViewModel {
         ContextUse = SessionFactText.Context(summary?.Stats);
         SessionSharing = summary is null ? SessionFactText.Unknown : SessionFactText.SessionSharing(summary);
         AgentSharing = SessionFactText.AgentSharing(summary?.AgentVisibility);
+        _storedBranch = FirstNonBlank(summary?.RepoBranch, summary?.Repositories.FirstOrDefault(r => r.IsPrimary)?.Branch);
+        _storedRepository = FirstNonBlank(summary?.Repositories.FirstOrDefault(r => r.IsPrimary)?.RepoName, summary?.RepoName);
+        if (_isRemote) {
+            ResolveBranch();
+            if (_dto is not null) ResolveRepository(_dto.RepoPath);
+        }
+        this.RaisePropertyChanged(nameof(PhaseNote));
     }
 
     static bool Same(string a, string? b) => string.Equals(a, b, StringComparison.Ordinal);

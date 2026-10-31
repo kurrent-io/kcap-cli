@@ -389,7 +389,6 @@ public class CodexHostedAgentRuntimeFactoryTests {
                 await Task.Delay(10);
             }
 
-            await Assert.That(account.Generation).IsEqualTo(2L);
             await Assert.That(file.Reading.Generation).IsEqualTo(2L);
             await Assert.That(file.Reading.Windows.Single().UsedPercent).IsEqualTo(42.0);
             await Assert.That(store.Readings.LoadAll().ContainsKey(defaultId)).IsFalse();

@@ -1,4 +1,3 @@
-using Avalonia.Controls;
 using Capacitor.App.Views;
 
 namespace Capacitor.App.Services;
@@ -6,11 +5,19 @@ namespace Capacitor.App.Services;
 /// Retains the main window across hide-to-tray cycles. Avalonia cannot show a window after a
 /// real close, so only that path discards the instance.
 /// <param name="releaseWorkspace">
-/// Releases the workspace on hide and close: an invisible terminal must not keep clamping the
-/// PTY for other viewers. The callback must tolerate a workspace that has already been released.
+/// Releases the workspace on a real close. The callback must tolerate a workspace that has already
+/// been released.
 /// </param>
-public sealed class MainWindowCoordinator(Func<MainWindow> windowFactory, Action<MainWindow>? releaseWorkspace = null) {
+/// <param name="parkWorkspace">
+/// Releases the workspace on hide-to-tray, remembering what was open: an invisible terminal must
+/// not keep clamping the PTY for other viewers. Falls back to releaseWorkspace.
+/// </param>
+/// <param name="restoreWorkspace">Reopens what the last hide parked, before the window reappears.</param>
+public sealed class MainWindowCoordinator(
+        Func<MainWindow> windowFactory, Action<MainWindow>? releaseWorkspace = null,
+        Action<MainWindow>? parkWorkspace = null, Action<MainWindow>? restoreWorkspace = null) {
     MainWindow? _window;
+    WindowRestore _placement = new();
 
     /// Prevents reopening and lets window teardown complete during deferred shutdown.
     public bool QuitInProgress { get; set; }
@@ -22,18 +29,26 @@ public sealed class MainWindowCoordinator(Func<MainWindow> windowFactory, Action
     /// raises this instead: a launch finishing an update keeps its progress in front until that settles.
     public Action? ShowInstead { get; set; }
 
-    public void ShowMainWindow() {
+    public void ShowMainWindow() => ShowMainWindow(navigate: null);
+
+    /// `navigate` runs before the window reappears, so a hidden window opens straight onto where the
+    /// caller is going instead of first rebuilding what it was showing when it hid.
+    public void ShowMainWindow(Action<MainWindow>? navigate) {
         if (QuitInProgress) return;
         if (ShowInstead is { } instead) {
             instead();
+            if (_window is not null) navigate?.Invoke(_window);
             return;
         }
 
         Prepare();
 
-        if (_window!.WindowState == WindowState.Minimized) _window.WindowState = WindowState.Normal;
-        _window.Show();
-        _window.Activate();
+        var window = _window!;
+        navigate?.Invoke(window);
+        if (!window.IsVisible) restoreWorkspace?.Invoke(window);
+        _placement.BeforeShow(window);
+        window.Show();
+        window.Activate();
     }
 
     /// Builds the window without showing it, for a launch that has something to finish first.
@@ -49,6 +64,8 @@ public sealed class MainWindowCoordinator(Func<MainWindow> windowFactory, Action
                 if (ReferenceEquals(_window, window)) _window = null;
             };
             _window = window;
+            _placement = new WindowRestore();
+            _placement.Track(window);
         }
     }
 
@@ -56,8 +73,10 @@ public sealed class MainWindowCoordinator(Func<MainWindow> windowFactory, Action
     public bool OnWindowClosing() {
         if (QuitInProgress) return false;
 
-        if (_window is not null) releaseWorkspace?.Invoke(_window);
-        _window?.Hide();
+        if (_window is not null) {
+            (parkWorkspace ?? releaseWorkspace)?.Invoke(_window);
+            _placement.Hide(_window);
+        }
         return true;
     }
 }

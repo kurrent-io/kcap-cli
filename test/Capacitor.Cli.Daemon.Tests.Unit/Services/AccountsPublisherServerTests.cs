@@ -174,7 +174,7 @@ public class AccountsPublisherServerTests {
         publisher.SendToServer         = connection.AccountsChangedAsync;
 
         connection.DuringConnect = async () => {
-            var recorded = store.Readings.TryRecord(id, 0, null, f => f with {
+            var recorded = store.Readings.TryRecord(id, (f, _) => f with {
                 Reading = f.Reading with { Windows = [new UsageWindowDto("five_hour", 300, 42, null, null)] },
             });
             if (!recorded) throw new InvalidOperationException("reading not recorded");

@@ -31,7 +31,7 @@ The command outputs these sections:
 - **`## Tasks`** — the task list declared through the `kcap-plans` MCP tools, one line per task as `ordinal. [status] title (source)` with a progress line above it; absent when no tasks were declared
 - **`## What's Done`** — two sub-sections:
   - **Summary** — AI-generated summary of what was accomplished (from `WhatsDoneGenerated` events, if available)
-  - **Details** — list of files created (`Write`) and modified (`Edit`) during the session
+  - **Details** — list of files created (`Write`), modified (`Edit`) and deleted (`Delete`) during the session; a change marked `(failed)` was attempted but its tool call failed, so it is not done
 - **`## Instructions`** — asks you to compare the plan against the summary and file list
 
 ## What To Do With The Output

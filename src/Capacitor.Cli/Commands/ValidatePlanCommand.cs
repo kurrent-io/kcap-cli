@@ -71,8 +71,7 @@ class ValidatePlanCommand(ISessionsApi sessionsApi) {
 
         var entries = ((RecapResult.Found)recapResult).Entries;
 
-        // Work done: only from the current session being validated (matches the legacy filter).
-        var work      = entries.Where(e => e.Type is "write" or "edit" && e.SessionId == sessionId).ToList();
+        var work      = await ReadWorkAsync(sessionsApi, sessionId, entries);
         var summaries = entries.Where(e => e.Type == "whats_done").ToList();
 
         // The declared plan document leads: it is the one the agent said it executes, whatever
@@ -211,9 +210,27 @@ class ValidatePlanCommand(ISessionsApi sessionsApi) {
         await Console.Out.WriteLineAsync();
     }
 
+    /// <summary>The validated session's own file changes, failed ones marked. The changes listed stand without the
+    /// failures: a server that cannot answer for them leaves the list unmarked and says so, never empties it.</summary>
+    static async Task<(IReadOnlyList<PlanWorkRow> Rows, bool FailuresUnread)> ReadWorkAsync(ISessionsApi sessionsApi, string sessionId, IReadOnlyList<RecapEntry> entries) {
+        IReadOnlyList<ErrorEntry> failures = [];
+        var failuresUnread = false;
+
+        try {
+            if (await sessionsApi.GetErrorsAsync(sessionId, chain: true) is ErrorsResult.Found found) failures = found.Errors;
+            else failuresUnread = true;
+        } catch (Exception ex) when (ex is CapacitorApiException or HttpRequestException or System.Text.Json.JsonException) {
+            failuresUnread = true;
+        }
+
+        return (PlanWorkEvidence.Collect(entries, failures, sessionId), failuresUnread);
+    }
+
     /// <summary>Shared "## What's Done" + "## Instructions" rendering, used by both the
     /// plan-artifacts path and the legacy recap-only path so the two stay in sync.</summary>
-    static async Task RenderWhatsDoneAndInstructions(List<RecapEntry> summaries, List<RecapEntry> work, bool withTasks = false) {
+    static async Task RenderWhatsDoneAndInstructions(List<RecapEntry> summaries, (IReadOnlyList<PlanWorkRow> Rows, bool FailuresUnread) evidence, bool withTasks = false) {
+        var work = evidence.Rows;
+
         await Console.Out.WriteLineAsync("## What's Done");
         await Console.Out.WriteLineAsync();
 
@@ -234,10 +251,19 @@ class ValidatePlanCommand(ISessionsApi sessionsApi) {
         if (work.Count == 0) {
             await Console.Out.WriteLineAsync("No file writes or edits recorded.");
         } else {
-            foreach (var entry in work) {
-                var label = entry.Type == "write" ? "Write" : "Edit";
-                var path  = entry.FilePath ?? "unknown";
-                await Console.Out.WriteLineAsync($"- {label}: {path}");
+            foreach (var row in work) {
+                var failed = row.Failed ? " (failed)" : "";
+                await Console.Out.WriteLineAsync($"- {row.Kind}{failed}: {row.Path ?? "unknown"}");
+            }
+
+            if (work.Any(r => r.Failed)) {
+                await Console.Out.WriteLineAsync();
+                await Console.Out.WriteLineAsync("A change marked (failed) is one whose tool call failed: it did not apply and is not done.");
+            }
+
+            if (evidence.FailuresUnread) {
+                await Console.Out.WriteLineAsync();
+                await Console.Out.WriteLineAsync("Tool failures could not be read, so a change listed here may not have applied.");
             }
         }
 
@@ -289,8 +315,6 @@ class ValidatePlanCommand(ISessionsApi sessionsApi) {
 
         // Plans can come from any session in the chain (continuation planContent or ExitPlanMode write)
         var plans = entries.Where(e => e.Type == "plan").ToList();
-        // Work done: only from the current session being validated
-        var work = entries.Where(e => e.Type is "write" or "edit" && e.SessionId == sessionId).ToList();
         // AI-generated summaries
         var summaries = entries.Where(e => e.Type == "whats_done").ToList();
 
@@ -299,6 +323,8 @@ class ValidatePlanCommand(ISessionsApi sessionsApi) {
 
             return 0;
         }
+
+        var work = await ReadWorkAsync(sessionsApi, sessionId, entries);
 
         // Output plan(s)
         await Console.Out.WriteLineAsync("## Plan");

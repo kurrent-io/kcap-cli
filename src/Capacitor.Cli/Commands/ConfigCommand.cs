@@ -42,7 +42,7 @@ public sealed class ConfigCommand(
         // Telemetry is machine-scoped (see TryApplyTelemetry), so it isn't part of the profile
         // JSON above. Reporting the Reason alongside the state is what lets a user with an
         // inherited DO_NOT_TRACK tell that apart from their own `config set telemetry off`.
-        var decision = TelemetrySettings.Resolve(TelemetryState.PersistedEnabled(config));
+        var decision = TelemetrySettings.Resolve(TelemetryState.PersistedEnabled(config), telemetry.Unsaved);
         await Console.Out.WriteLineAsync($"  Telemetry: {(decision.Enabled ? "on" : "off")} (source: {decision.Reason})");
 
         return 0;

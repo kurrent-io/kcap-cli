@@ -241,12 +241,15 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
         : null;
 
     /// Under the lock, after every cache change. The kept row rides along from the last read that
-    /// listed it once the current one does not, unless the pin already carries that session.
+    /// listed it once the current one does not, unless the pin already carries that session. A live
+    /// row the live listing has dropped rides along as ended: the server takes it out of the live
+    /// listing before the ended one carries it, and it must not read Running in between.
     void EmitSnapshot() {
         var ended = _ended.Items.ToList();
         if (_kept is { } kept) {
             if (Listed(kept) is { } current) _keptRow = current;
-            else if (_keptRow is { } retained && kept != _pinId) ended.Add(retained);
+            else if (_keptRow is { } retained && kept != _pinId)
+                ended.Add(retained.Status == "active" ? retained with { Status = "ended", EndedAt = retained.EndedAt ?? retained.LastActivityAt } : retained);
         }
         var unlisted = TrackPin();
         var pinned = _pinId is not null && !_pinListed && !_pinGone ? _pinRow : null;

@@ -113,7 +113,10 @@ public partial class App : Application {
 
     public App() {
         // A live facade creates the device id and the spool under the config root being removed.
-        _telemetry   = CliTelemetry.Start(DesktopTelemetry(_uninstallMode, _endpoints.SignupUrl), _config, _time);
+        _telemetry   = CliTelemetry.Start(
+            DesktopTelemetry(_uninstallMode, _endpoints.SignupUrl,
+                UsageDataEdition.ForDesktop(_config, _localRoot, OperatingSystem.IsMacOS() && RuntimeInformation.OSArchitecture == Architecture.Arm64)),
+            _config, _time);
         _usageNotice = new UsageDataNotice(_telemetry, _config);
         _foreignHttp = new ServiceCollection().AddAppForeignHttp(_config, _serverEnv).BuildValidated();
 #pragma warning disable RS0030 // the one store the ban points every other site at
@@ -123,8 +126,9 @@ public partial class App : Application {
         _betaUpdates = BetaUpdatesSetting.LoadAsync(_appState).GetAwaiter().GetResult();
     }
 
-    internal static TelemetryStartup DesktopTelemetry(UninstallMode? uninstall, string signupUrl) =>
-        TelemetryStartup.ForDesktopApp(serverUrl: null, signupUrl) with { Suppressed = uninstall is not null };
+    internal static TelemetryStartup DesktopTelemetry(
+            UninstallMode? uninstall, string signupUrl, UnsavedConsent unsaved = UnsavedConsent.Share) =>
+        TelemetryStartup.ForDesktopApp(serverUrl: null, signupUrl, unsaved) with { Suppressed = uninstall is not null };
 
     /// The authenticated lanes. They cannot join <see cref="_foreignHttp"/>: their handlers need a
     /// resolved server, and the app starts before a profile has named one. Process-lifetime for the
@@ -264,6 +268,7 @@ public partial class App : Application {
     SignInWindow? _signInWindow;
     SettingsWindow? _settingsWindow;
     readonly BehaviorSubject<Action?> _openSearchSettings = new(null);
+    readonly BehaviorSubject<Action?> _openHarnessesSettings = new(null);
     FeedbackWindow? _feedbackWindow;
     internal FeedbackWindow? FeedbackWindowForTests => _feedbackWindow;
     readonly AppMenu _appMenu = new(AppKitMenus.ShowAboutPanel);
@@ -1151,7 +1156,8 @@ public partial class App : Application {
         if (localStack is not null) stackOwnsStart = localStack.WhenAnyValue(x => x.SuppressesServerStart);
         var localServer = new LocalServerRecoveryViewModel(
             serverLane.Status, isLocalServer, lifecycleCli.LocalStartAsync, () => serverLane.RestartAsync(), _shutdown.Token,
-            busy: stackOwnsStart);
+            busy: stackOwnsStart, readCondition: ct => LocalServerConditions.ReadAsync(_localRoot, ct),
+            canStart: OperatingSystem.IsMacOS() || OperatingSystem.IsLinux());
         _localServer = localServer;
         var webWorkspace = new WebWorkspaceViewModel(profiles?.Resolution.ServerUrl, opener, notifier.Notify,
             _shutdown.Token, localServer);
@@ -1182,6 +1188,7 @@ public partial class App : Application {
         var workspaceOpener = new AgentLinkOpener(opener, profiles?.Resolution.ServerUrl,
             agentId => _coordinator?.Window?.DataContext is MainWindowViewModel vm && vm.OpenSession(agentId));
         var drafts = new ComposerDrafts();
+        var workContextLayout = new WorkContextLayout();
         var transcripts = new LocalTranscripts();
         var readings = new AccountReadings(accounts.Snapshot, remoteAgents.DrawableDaemonAccounts, UsageClock.Create(_time));
         _usageClock = readings.Clock;
@@ -1196,7 +1203,8 @@ public partial class App : Application {
             resumeLedger: id => ResumeLedgerStore.For(_daemonStore, service.DaemonName).TryRead(id),
             pullRequestSnapshots: pullRequestSnapshots, transcripts: transcripts,
             pullRequestLinksChanged: pullRequestTones.Refresh, readings: readings, senders: senders,
-            appSubject: appSubject, notifier: notifier, handoffOutcomes: handoffOutcomes);
+            appSubject: appSubject, notifier: notifier, serverLane: serverLane.Status, workContextLayout: workContextLayout,
+            handoffOutcomes: handoffOutcomes);
         // The origin lookup below and this call are two reads of a cache the directory's own
         // background recompute mutates, so the row can be gone by the time this runs: no row, no
         // host, and the click opens nothing.
@@ -1208,7 +1216,7 @@ public partial class App : Application {
                     signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts, inputSending: attention.ReplySending,
                     pullRequestSnapshots: pullRequestSnapshots, pullRequestLinksChanged: pullRequestTones.Refresh, readSubagent: readSubagent,
                     readings: readings, senders: senders, remoteAgents: remoteAgents, notifier: notifier, appSubject: appSubject,
-                    serverSessions: sessions, handoffOutcomes: handoffOutcomes)
+                    serverSessions: sessions, workContextLayout: workContextLayout, handoffOutcomes: handoffOutcomes)
                 : null;
         // One for the app's life: a failed hand-off's draft outlives the composer that sent it.
         var handoffDrafts = new HandoffDrafts(serverLane.LaunchFailures, directory, _time);
@@ -1242,7 +1250,7 @@ public partial class App : Application {
                     signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts, inputSending: attention.ReplySending,
                     pullRequestSnapshots: pullRequestSnapshots, pullRequestLinksChanged: pullRequestTones.Refresh, readSubagent: readSubagent,
                     readings: readings, remoteAgents: remoteAgents, notifier: notifier, appSubject: appSubject, serverSessions: sessions,
-                    handoff: BuildHandoff, handoffOutcomes: handoffOutcomes)
+                    workContextLayout: workContextLayout, handoff: BuildHandoff, handoffOutcomes: handoffOutcomes)
                 : null;
 
         _coordinator = new MainWindowCoordinator(
@@ -1278,10 +1286,11 @@ public partial class App : Application {
                 repairDaemon: lifecycle.RepairStaleMarkerAsync, repairOffer: lifecycle.RepairOffer,
                 localServer: localServer, localStack: localStack, uiScale: _uiScale, usageNotice: _usageNotice,
                 web: webWorkspace, openLaunchApprovals: launchApprovals.Show,
-                search: string.IsNullOrEmpty(profiles?.Resolution.ServerUrl) ? null : ServerSearchHttp.Search(sessionHttp, profiles))),
-            // Both close paths release the workspace: hide-to-tray keeps the window (and its
-            // attach) alive, a real close discards the window the next Show() would rebuild.
-            releaseWorkspace: window => (window.DataContext as MainWindowViewModel)?.CloseWorkspace());
+                search: string.IsNullOrEmpty(profiles?.Resolution.ServerUrl) ? null : ServerSearchHttp.Search(sessionHttp, profiles),
+                harnessesSettingsAction: _openHarnessesSettings)),
+            releaseWorkspace: window => (window.DataContext as MainWindowViewModel)?.CloseWorkspace(),
+            parkWorkspace: window => (window.DataContext as MainWindowViewModel)?.ParkWorkspace(),
+            restoreWorkspace: window => (window.DataContext as MainWindowViewModel)?.RestoreParkedWorkspace());
         // A shutdown that started before this continuation resumed already ran its first
         // pass against a null coordinator, so a window built now must never be
         // close-protected (BeginShutdownPass's rule 1 is the general defense; this is the
@@ -1341,20 +1350,20 @@ public partial class App : Application {
                 () => _shutdownStarted || desktop.Windows.Any(window => window.IsActive), _viewedAgent,
                 row => {
                     if (_shutdownStarted) return;
-                    _coordinator.ShowMainWindow();
-                    (_coordinator.Window?.DataContext as MainWindowViewModel)?.OpenSession(row.Id, row.Origin);
+                    _coordinator.ShowMainWindow(window => (window.DataContext as MainWindowViewModel)?.OpenSession(row.Id, row.Origin));
                 }, notifier, ReactiveUI.Reactive.RxSchedulers.MainThreadScheduler);
             _notificationSessions = new NotificationSessionSubscriptions(
                 directory.SessionAgents, sessionAccess.Acquire,
                 ReactiveUI.Reactive.RxSchedulers.MainThreadScheduler);
         }
 
-        Action<bool>? openSettingsOn = profiles?.Resolution is { ProfileName: { Length: > 0 } profileName, ServerUrl: { Length: > 0 } serverUrl }
-            ? showSearch => OpenSettings(desktop, new SettingsProfileStore(_config, profileName, serverUrl), service, ops, lane, notifier,
-                lifecycle.PhaseClosed, lifecycle.InstallWindowsServiceAsync, lifecycleCli.ServiceStatusAsync, showSearch)
+        Action<SettingsTab>? openSettingsOn = profiles?.Resolution is { ProfileName: { Length: > 0 } profileName, ServerUrl: { Length: > 0 } serverUrl }
+            ? page => OpenSettings(desktop, new SettingsProfileStore(_config, profileName, serverUrl), service, ops, lane, notifier,
+                lifecycle.PhaseClosed, lifecycle.InstallWindowsServiceAsync, lifecycleCli.ServiceStatusAsync, page, serverLane.Status)
             : null;
-        Action? openSettings = openSettingsOn is null ? null : () => openSettingsOn(false);
-        _openSearchSettings.OnNext(openSettingsOn is null ? null : () => openSettingsOn(true));
+        Action? openSettings = openSettingsOn is null ? null : () => openSettingsOn(SettingsTab.Default);
+        _openSearchSettings.OnNext(openSettingsOn is null ? null : () => openSettingsOn(SettingsTab.Search));
+        _openHarnessesSettings.OnNext(openSettingsOn is null ? null : () => openSettingsOn(SettingsTab.Harnesses));
         ConfigureSettingsMenu(openSettings);
         _appMenu.SetSetupAction(() => _ = RestartForSetupAsync(desktop));
         if (OperatingSystem.IsMacOS() && InstallLocation.BundleRoot(Environment.ProcessPath) is { } bundleRoot) {
@@ -1504,11 +1513,12 @@ public partial class App : Application {
     void OpenSettings(IClassicDesktopStyleApplicationLifetime desktop, SettingsProfileStore settings,
             IDaemonClientService service, ILocalControlOps ops, DaemonMutationLane lane, IAppNotifier notifier, Task startupSettled,
             Func<CancellationToken, Task<MutationOutcome?>> moveToWindowsService,
-            Func<CancellationToken, Task<ServiceSnapshot?>> serviceStatus, bool showSearch = false) {
+            Func<CancellationToken, Task<ServiceSnapshot?>> serviceStatus, SettingsTab page = SettingsTab.Default,
+            IObservable<ServerLaneStatus>? appLane = null) {
         if (_shutdownStarted) return;
         if (_settingsWindow is { } open) {
             if (open.WindowState == WindowState.Minimized) open.WindowState = WindowState.Normal;
-            if (showSearch) open.ShowSearch();
+            open.ShowPage(page);
             open.Activate();
             return;
         }
@@ -1526,7 +1536,7 @@ public partial class App : Application {
                 confirmRemove: (name, ct) => ShowLifecyclePromptDialogAsync(_settingsWindow,
                     new LifecyclePrompt(LifecyclePrompt.KindRemoveProfile, null, null, false,
                         ProfilesSettingsViewModel.RemovePrompt(name, LatestDaemonProfile(service))), ct),
-                appLifetime: _shutdown.Token);
+                appLifetime: _shutdown.Token, appLane: appLane, daemon: service);
 
             vm = new SettingsViewModel(settings, service, ops,
                 async (name, ct) => (await LocalControlProbe.ProbeAsync(_daemonStore, name, _time, OneShotProbeTimeout, ct)).Reachable,
@@ -1563,12 +1573,15 @@ public partial class App : Application {
         _settingsWindow = window;
         window.Closing += (_, e) => { if (vm.HasActiveOperation && !_shutdownStarted) e.Cancel = true; };
         window.Closed += (_, _) => { _settingsWindow = null; vm.Dispose(); };
-        // The list is re-read whenever the window regains focus, so a `kcap use` or `kcap profile
-        // add` made in a terminal shows up on return without a file watcher.
-        window.Activated += (_, _) => _ = profilesVm.RefreshAsync();
+        // Profiles and the saved audience are re-read whenever the window regains focus, so a `kcap use`,
+        // `kcap profile add` or `kcap config set` made in a terminal shows up on return without a file watcher.
+        window.Activated += (_, _) => {
+            _ = profilesVm.RefreshAsync();
+            _ = vm.Capture.ReloadSavedVisibilityAsync();
+        };
         _ = profilesVm.RefreshAsync();
         _ = vm.About?.LoadAsync();
-        if (showSearch) window.ShowSearch();
+        window.ShowPage(page);
         _ = vm.Harnesses!.RescanAsync();
         _ = vm.Capture.RefreshVisibilityOptionsAsync();
         window.Show();
@@ -1856,10 +1869,8 @@ public partial class App : Application {
     internal static MainWindow ShowWizardWindow(
             IClassicDesktopStyleApplicationLifetime desktop, OnboardingViewModel wizard,
             LocalInstallController? install = null, Func<bool>? shuttingDown = null, UiScaleSetting? uiScale = null) {
-        var window = new MainWindow {
-            Onboarding = wizard, ContentScale = uiScale,
-            Width = 760, Height = 760, WindowStartupLocation = WindowStartupLocation.CenterScreen,
-        };
+        var window = new MainWindow { Onboarding = wizard, ContentScale = uiScale };
+        window.PlaceOnboarding();
 
         // Detached once the flow has closed, so the main surface's own hide-on-close is the window's
         // only close behaviour after handover.
@@ -2105,7 +2116,8 @@ public partial class App : Application {
             Func<string, RemoteSessionViewModel?>? serverWorkspaceFactory = null, IServerSessionsService? sessions = null,
             RailPreferencesStore? railPreferences = null, AccountReadings? readings = null,
             Func<CancellationToken, Task>? repairDaemon = null, IObservable<string?>? repairOffer = null,
-            string? profileName = null, Func<SearchRequest, CancellationToken, Task<SearchFetch>>? search = null) {
+            string? profileName = null, Func<SearchRequest, CancellationToken, Task<SearchFetch>>? search = null,
+            IObservable<Action?>? harnessesSettingsAction = null) {
         // Notifier is set on the WINDOW (the toast overlay), not the ViewModel — the toast
         // is a View-level concern (WindowNotificationManager lives on MainWindow) independent of
         // the VM's WhenActivated-scoped projections.
@@ -2145,7 +2157,9 @@ public partial class App : Application {
             retryListing: remoteAgents is null ? null : remoteAgents.RefreshDaemonsAsync, readings: readings,
             launchFailed: agentId => vm?.CloseFailedLaunch(agentId)) { LocalStack = localStack, UsageNotice = usageNotice };
         if (localServer is not null) home.AttachLocalServerRecovery(localServer);
+        if (lane is ServerConnectionService serverLane) home.AttachServerRetry(() => serverLane.RestartAsync());
         if (repairDaemon is not null && repairOffer is not null) home.AttachServiceRepair(repairDaemon, repairOffer, shutdownToken);
+        if (harnessesSettingsAction is not null) home.AttachHarnessesSettings(harnessesSettingsAction);
         // Same knot as home above, over the SAME `service` instance — its callbacks close over
         // `vm`, not a local, so no two-step forward-declaration is needed.
         // Both rail actions route through the one call, each naming the lane of the row that was

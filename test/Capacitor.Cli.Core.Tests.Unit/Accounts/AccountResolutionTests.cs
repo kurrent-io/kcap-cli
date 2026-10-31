@@ -275,20 +275,4 @@ public class AccountResolutionTests {
 
         await Assert.That(outcome.Refusal!).StartsWith(AccountResolution.Unavailable);
     }
-
-    [Test]
-    public async Task Every_resolution_carries_the_entrys_current_generation() {
-        var registry = Registry() with {
-            Accounts = [.. Registry().Accounts.Select(a => a.Id == WorkId ? a with { Generation = 3 } : a)]
-        };
-
-        var byId     = AccountResolution.Resolve(registry, HarnessId.Claude, WorkId, Personal);
-        var byDir    = AccountResolution.Resolve(registry, HarnessId.Claude, null, Work);
-        var resumed  = AccountResolution.ResolveForResume(registry, HarnessId.Claude, WorkId, Work, Personal);
-        var argument = AccountResolution.ResolveArgument(registry, HarnessId.Claude, WorkId);
-        var other    = AccountResolution.Resolve(registry, HarnessId.Claude, PersId, Personal);
-
-        await Assert.That(new[] { byId, byDir, resumed, argument }.Select(o => o.Account!.Generation)).IsEquivalentTo([3L, 3L, 3L, 3L]);
-        await Assert.That(other.Account!.Generation).IsEqualTo(0L);
-    }
 }

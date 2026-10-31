@@ -68,11 +68,46 @@
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         </Style>
         <!-- Must stay after .toolLine: same specificity, so the later rule is the one that wins. -->
-        <Style Selector="SelectableTextBlock.toolLine.prose">
+        <Style Selector="SelectableTextBlock.toolLine.prose,
+                         TextBlock.toolLine.prose">
             <Setter Property="TextTrimming" Value="None" />
             <Setter Property="TextWrapping" Value="Wrap" />
         </Style>
-        <Style Selector="SelectableTextBlock.toolLine.labelled">
+        <Style Selector="SelectableTextBlock.toolLine.labelled,
+                         TextBlock.toolLine.labelled">
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        </Style>
+        <!-- A tool row is the toggle for what its call recorded, so it keeps the row's own height
+             rather than a summary header's. -->
+        <Style Selector="Button.toolSummary.toolRow">
+            <Setter Property="Padding" Value="8,1" />
+            <Setter Property="MinHeight" Value="20" />
+        </Style>
+        <Style Selector="Button.toolRow views|AppIcon.toolRowChevron">
+            <Setter Property="Opacity" Value="0" />
+        </Style>
+        <Style Selector="Button.toolRow:pointerover views|AppIcon.toolRowChevron,
+                         Button.toolRow:focus-visible views|AppIcon.toolRowChevron,
+                         Button.toolRow.expanded views|AppIcon.toolRowChevron">
+            <Setter Property="Opacity" Value="1" />
+        </Style>
+        <Style Selector="Border.toolInspection">
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="BorderThickness" Value="2,0,0,0" />
+            <Setter Property="Margin" Value="6,2,0,6" />
+            <Setter Property="Padding" Value="12,0,0,0" />
+        </Style>
+        <Style Selector="TextBlock.toolInspectionHeading">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        </Style>
+        <Style Selector="SelectableTextBlock.toolLine.missing">
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="FontStyle" Value="Italic" />
+        </Style>
+        <Style Selector="TextBlock.toolInspectionNote">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="TextWrapping" Value="Wrap" />
             <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
         </Style>
         <Style Selector="ContentControl.pendingCard">
@@ -285,49 +320,76 @@
                 </DataTemplate>
                 <DataTemplate x:DataType="vm:ToolCallItem">
                     <Panel>
-                        <Grid x:Name="ToolCallRow" Margin="0,0,0,4" MinHeight="18" HorizontalAlignment="Stretch" IsVisible="{Binding !HasCard}">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                            </Grid.RowDefinitions>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" MinWidth="0" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock x:Name="ToolRowLabel" Grid.Column="0" Classes="toolLine" Text="{Binding Label}"
-                                       Foreground="{StaticResource KcapTextBrush}" Margin="0,0,8,0"
-                                       IsVisible="{Binding HasLabel}" />
-                            <SelectableTextBlock Grid.Column="1" Classes="toolLine"
-                                       Classes.prose="{Binding DetailIsProse}"
-                                       Classes.labelled="{Binding HasLabel}"
-                                       Text="{Binding Detail}"
-                                       IsVisible="{Binding HasDetail}" />
-                            <!-- A bare name is fallback chrome only; a label already names the call, so the raw
-                                 identifier never shows beside one. -->
-                            <SelectableTextBlock Grid.Column="1" Classes="toolLine" Text="{Binding Name}"
-                                       Foreground="{StaticResource KcapMutedBrush}">
-                                <SelectableTextBlock.IsVisible>
-                                    <MultiBinding Converter="{x:Static BoolConverters.And}">
-                                        <Binding Path="!HasDetail" />
-                                        <Binding Path="!HasLabel" />
-                                    </MultiBinding>
-                                </SelectableTextBlock.IsVisible>
-                            </SelectableTextBlock>
-                            <Panel Grid.Column="2">
-                                <Border x:Name="ToolStatusPill" Classes="toolStatus" Width="8" Height="8"
-                                        CornerRadius="4" Margin="16,0,0,0" VerticalAlignment="Center"
-                                        IsVisible="{Binding IsSettled}"
-                                        Background="{Binding IsError, Converter={x:Static views:ToolOutcomeBrushConverter.Instance}}" />
-                                <Border Classes="toolRunning toolStatus" Width="8" Height="8"
-                                        CornerRadius="4" Margin="16,0,0,0" VerticalAlignment="Center"
-                                        IsVisible="{Binding IsRunning}" views:PulseClock.IsActive="{Binding IsRunning}"
-                                        Background="{StaticResource KcapWarningBrush}" />
-                                <views:AppIcon Kind="CircleQuestionMark" Size="14" Margin="16,0,0,0" VerticalAlignment="Center"
-                                               IsVisible="{Binding IsAwaitingPermission}"
-                                               Foreground="{Binding IsError, Converter={x:Static views:ToolOutcomeBrushConverter.Instance}}" />
-                            </Panel>
-                            <views:ToolImagePreview Grid.Row="1" Grid.ColumnSpan="3" Classes="toolBody kcapGhost" Margin="0,6,0,2" Path="{Binding PreviewPath}" />
+                        <Grid x:Name="ToolCallRow" Margin="0,0,0,4" MinHeight="18" HorizontalAlignment="Stretch" IsVisible="{Binding !HasCard}"
+                              RowDefinitions="Auto,Auto,Auto">
+                            <!-- The whole row opens what the call recorded. Its text is plain, not
+                                 selectable: a selectable block takes the press before the button sees it,
+                                 and the opened body below is where the text is copied from. -->
+                            <Button x:Name="ToolRowToggle" Classes="toolSummary toolRow" Classes.expanded="{Binding IsExpanded}"
+                                    Command="{Binding ToggleCommand}" Click="OnToolSummaryClick"
+                                    AutomationProperties.Name="{Binding ToggleAccessibleName}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" MinWidth="0" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="ToolRowLabel" Grid.Column="0" Classes="toolLine" Text="{Binding Label}"
+                                               Foreground="{StaticResource KcapTextBrush}" Margin="0,0,8,0"
+                                               IsVisible="{Binding HasLabel}" />
+                                    <TextBlock x:Name="ToolRowDetail" Grid.Column="1" Classes="toolLine"
+                                               Classes.prose="{Binding DetailIsProse}"
+                                               Classes.labelled="{Binding HasLabel}"
+                                               Text="{Binding Detail}"
+                                               IsVisible="{Binding HasDetail}" />
+                                    <!-- A bare name is fallback chrome only; a label already names the call, so the raw
+                                         identifier never shows beside one. -->
+                                    <TextBlock Grid.Column="1" Classes="toolLine" Text="{Binding Name}"
+                                               Foreground="{StaticResource KcapMutedBrush}">
+                                        <TextBlock.IsVisible>
+                                            <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                                <Binding Path="!HasDetail" />
+                                                <Binding Path="!HasLabel" />
+                                            </MultiBinding>
+                                        </TextBlock.IsVisible>
+                                    </TextBlock>
+                                    <Panel Grid.Column="2">
+                                        <Border x:Name="ToolStatusPill" Classes="toolStatus" Width="8" Height="8"
+                                                CornerRadius="4" Margin="16,0,0,0" VerticalAlignment="Center"
+                                                IsVisible="{Binding IsSettled}"
+                                                Background="{Binding IsError, Converter={x:Static views:ToolOutcomeBrushConverter.Instance}}" />
+                                        <Border Classes="toolRunning toolStatus" Width="8" Height="8"
+                                                CornerRadius="4" Margin="16,0,0,0" VerticalAlignment="Center"
+                                                IsVisible="{Binding IsRunning}" views:PulseClock.IsActive="{Binding IsRunning}"
+                                                Background="{StaticResource KcapWarningBrush}" />
+                                        <views:AppIcon Kind="CircleQuestionMark" Size="14" Margin="16,0,0,0" VerticalAlignment="Center"
+                                                       IsVisible="{Binding IsAwaitingPermission}"
+                                                       Foreground="{Binding IsError, Converter={x:Static views:ToolOutcomeBrushConverter.Instance}}" />
+                                    </Panel>
+                                    <Panel Grid.Column="3" Width="12" Height="12" Margin="8,0,0,0" VerticalAlignment="Center">
+                                        <views:AppIcon Classes="toolRowChevron" Kind="ChevronDown" Size="12" IsVisible="{Binding IsExpanded}"
+                                                       Foreground="{StaticResource KcapMutedBrush}" />
+                                        <views:AppIcon Classes="toolRowChevron" Kind="ChevronRight" Size="12" IsVisible="{Binding !IsExpanded}"
+                                                       Foreground="{StaticResource KcapMutedBrush}" />
+                                    </Panel>
+                                </Grid>
+                            </Button>
+                            <views:ToolImagePreview Grid.Row="1" Classes="toolBody kcapGhost" Margin="0,6,0,2" Path="{Binding PreviewPath}" />
+                            <Border x:Name="ToolInspection" Grid.Row="2" Classes="toolInspection" IsVisible="{Binding IsExpanded}">
+                                <ItemsControl ItemsSource="{Binding Inspection.Sections, FallbackValue={x:Null}}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:ToolInspectionSection">
+                                            <StackPanel Spacing="2" Margin="0,4,0,2">
+                                                <TextBlock Classes="toolInspectionHeading" Text="{Binding Heading}" />
+                                                <SelectableTextBlock Classes="toolLine prose" Classes.missing="{Binding IsMissing}"
+                                                                     Text="{Binding Text}" />
+                                                <TextBlock Classes="toolInspectionNote" Text="{Binding Note}" IsVisible="{Binding HasNote}" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </Border>
                         </Grid>
                         <Border x:Name="ToolCard" Classes="toolCard" IsVisible="{Binding HasCard}">
                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
@@ -513,7 +575,7 @@
                     <TextBlock Text="{Binding ReadOnlyNotice, StringFormat='Read-only: {0}'}"
                                Foreground="{StaticResource KcapWarningBrush}" TextWrapping="Wrap" />
                 </Border>
-                <TextBlock x:Name="EndedComposerHint" Grid.Row="3" Margin="14,0"
+                <TextBlock x:Name="EndedComposerHint" AutomationProperties.AutomationId="EndedComposerHint" Grid.Row="3" Margin="14,0"
                            Text="{Binding ComposerHint}" FontSize="12.5" Foreground="{StaticResource KcapFaintBrush}"
                            TextWrapping="Wrap">
                     <TextBlock.IsVisible>

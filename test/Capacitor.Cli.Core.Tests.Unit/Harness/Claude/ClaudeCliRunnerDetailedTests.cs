@@ -119,4 +119,30 @@ public class ClaudeCliRunnerDetailedTests {
         await Assert.That(outcome.Failure).IsEqualTo(ClaudeCliFailure.SpendBudget);
         await Assert.That(outcome.Subtype).IsEqualTo("error_max_budget_usd");
     }
+
+    /// <summary>Every run carries both ownership marks to the real process: a tagged session id and the
+    /// working directory named after it, which is what keeps its persisted transcript out of import.</summary>
+    [Test]
+    public async Task RunDetailedAsync_marks_the_run_with_a_helper_session_id_and_working_directory() {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+
+        using var fake = new FakeClaudeOnPath("""
+            #!/bin/sh
+            id=""
+            while [ $# -gt 0 ]; do
+              if [ "$1" = "--session-id" ]; then id="$2"; fi
+              shift
+            done
+            printf '{"result":"%s %s"}\n' "$id" "$(basename "$(pwd -P)")"
+            """);
+
+        var outcome = await ClaudeCliRunner.RunDetailedAsync(
+            "irrelevant", TimeSpan.FromSeconds(10), TimeProvider.System, _ => { }, null,
+            TestHarnesses.Under(Home, BinaryProbe.FromEnvironment()));
+
+        var parts = outcome.Result!.Result.Split(' ');
+        await Assert.That(ClaudeHelperRun.IsHelperSessionId(parts[0])).IsTrue();
+        await Assert.That(ClaudeHelperRun.IsHelperWorkingDir(parts[1])).IsTrue();
+        await Assert.That(parts[1]).IsEqualTo(ClaudeHelperRun.WorkingDirName(parts[0]));
+    }
 }

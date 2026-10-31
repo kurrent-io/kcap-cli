@@ -4,7 +4,7 @@ using System.Text;
 
 namespace Capacitor.Cli.Tests.Unit.SessionStartMemory;
 
-sealed class Handler(HttpStatusCode status, string body, TimeSpan? retryAfter = null) : HttpMessageHandler {
+sealed class Handler(HttpStatusCode status, string body, TimeSpan? retryAfter = null, string? header = null) : HttpMessageHandler {
     public int Calls;
     public string? Uri;
 
@@ -15,6 +15,7 @@ sealed class Handler(HttpStatusCode status, string body, TimeSpan? retryAfter = 
             Content = new StringContent(body, Encoding.UTF8, "application/json")
         };
         if (retryAfter is { } delay) response.Headers.RetryAfter = new RetryConditionHeaderValue(delay);
+        if (header is not null) response.Headers.TryAddWithoutValidation(header, "1");
         return Task.FromResult(response);
     }
 }

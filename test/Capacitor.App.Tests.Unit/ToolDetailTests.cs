@@ -70,6 +70,37 @@ public class ToolDetailTests {
         await Assert.That(ToolDetail.ForKey($$"""{"query":"{{long120}}"}""", "query").Length).IsLessThanOrEqualTo(80);
     }
 
+    /// A patch row names the files its headers name, never the envelope's own control line.
+    [Test]
+    [Arguments("""{"input":"*** Begin Patch\n*** Update File: /Users/me/dev/repo/src/Foo.cs\n@@\n-a\n+b\n*** End Patch\n"}""", "src/Foo.cs")]
+    [Arguments("""{"command":"*** Begin Patch\n*** Add File: docs/new.md\n+hello\n*** End Patch"}""", "docs/new.md")]
+    [Arguments("""{"input":"*** Begin Patch\n*** Delete File: old.txt\n*** End Patch"}""", "old.txt")]
+    [Arguments("""{"input":"*** Begin Patch\n*** Update File: a.cs\n@@\n-x\n+y\n*** Add File: b.cs\n+z\n*** Delete File: c.cs\n*** End Patch"}""", "a.cs, b.cs, c.cs")]
+    [Arguments("""{"input":"*** Begin Patch\n*** Update File: a.cs\n*** Move to: z.cs\n@@\n-x\n+y\n*** End Patch"}""", "a.cs")]
+    [Arguments("""{"input":"*** Begin Patch\n*** End Patch"}""", "")]
+    [Arguments("""{"input":"*** Begin Patch\n*** Update File:\n*** End Patch"}""", "")]
+    public async Task A_patch_reads_as_the_files_it_targets(string input, string expected) {
+        await Assert.That(ToolDetail.From(input, "/Users/me/dev/repo", ToolCategory.Edit)).IsEqualTo(expected);
+        await Assert.That(ToolDetail.From(input, "/Users/me/dev/repo")).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task A_patch_too_long_to_list_shows_its_first_file_and_a_count() {
+        var files = Enumerable.Range(1, 6).Select(i => $"*** Update File: src/Capacitor.App/ViewModels/File{i}.cs\n@@\n-a\n+b");
+        var patch = "*** Begin Patch\n" + string.Join("\n", files) + "\n*** End Patch";
+        var input = new System.Text.Json.Nodes.JsonObject { ["input"] = patch }.ToJsonString();
+
+        var detail = ToolDetail.From(input, null, ToolCategory.Edit);
+
+        await Assert.That(detail).IsEqualTo("src/Capacitor.App/ViewModels/File1.cs +5 more");
+    }
+
+    [Test]
+    public async Task A_live_file_change_reads_as_its_changed_paths() {
+        const string input = """{"changes":[{"path":"/Users/me/dev/repo/src/a.cs","kind":"update","diff":"@@"},{"path":"/Users/me/dev/repo/src/a.cs"}]}""";
+        await Assert.That(ToolDetail.From(input, "/Users/me/dev/repo", ToolCategory.Edit)).IsEqualTo("src/a.cs");
+    }
+
     [Test]
     public async Task FirstString_takes_the_first_non_empty_string_property() {
         await Assert.That(ToolDetail.FirstString("""{"n":1,"team":"","title":"Add tests","body":"long"}""")).IsEqualTo("Add tests");

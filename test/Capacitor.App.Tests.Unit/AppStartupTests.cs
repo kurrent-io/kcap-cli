@@ -156,14 +156,16 @@ public class AppStartupTests {
     /// BuildAndShowMainWindow's directory/remoteAgents/lane parameters must actually reach
     /// Home/Rail/the footer, not just compile — a fallback that silently rebuilt its own
     /// local-only AgentDirectory would leave the window looking identical for every LOCAL
-    /// assertion, so this pins two REMOTE-only signals: the lane's own diagnostic (ServerLaneTip)
-    /// and a remote-only row (never producible by the NoRemoteAgents/NoServerLane fallback)
+    /// assertion, so this pins two REMOTE-only signals: the lane's own diagnostic (the footer alert's
+    /// hover) and a remote-only row (never producible by the NoRemoteAgents/NoServerLane fallback)
     /// reaching the rail.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task BuildAndShowMainWindow_threads_the_injected_directory_and_lane_through() {
         var (tip, railRows) = await AvaloniaSession.DispatchAsync(() => {
             var service = new FakeDaemonClientService();
+            service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "connected"));
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
             var (actions, notifier) = NewActions(service);
             var remoteAgents = new FakeRemoteAgents();
             remoteAgents.Cache.AddOrUpdate(new AgentInstanceDto { AgentId = "r1", Status = "Running" });
@@ -179,7 +181,7 @@ public class AppStartupTests {
             Dispatcher.UIThread.RunJobs(); // ReactiveWindow<T>'s Loaded->Activator.Activate() wiring
 
             var vm = (MainWindowViewModel)window.DataContext!;
-            var result = (vm.ServerLaneTip, vm.Rail?.Groups.Sum(r => r.Sessions.Count));
+            var result = (vm.Alert?.Detail, vm.Rail?.Groups.Sum(r => r.Sessions.Count));
 
             window.Close();
             Dispatcher.UIThread.RunJobs();

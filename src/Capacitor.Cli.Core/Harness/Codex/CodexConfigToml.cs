@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
+using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.Mcp;
 using Tomlyn;
 using Tomlyn.Model;
@@ -13,17 +14,17 @@ namespace Capacitor.Cli.Core.Harness.Codex;
 
 /// <summary>
 /// Read-modify-write engine for <c>~/.codex/config.toml</c>. Owns the AOT-safe
-/// Tomlyn plumbing (load, atomic write, untyped-model type info) so both the
-/// daemon's per-worktree pre-trust (<see cref="TrustWorktree(string, string?)"/>) and the setup
-/// wizard's sandbox network-access opt-in (<see cref="EnableNetworkAccess"/>)
-/// share one code path.
+/// Tomlyn plumbing (load, atomic write, untyped-model type info) and the ownership
+/// ledger beside it, for the daemon's per-worktree pre-trust
+/// (<see cref="TrustWorktree(string, string?)"/>), the kcap MCP servers, and the sandbox
+/// network-access opt-in (<see cref="EnableNetworkAccess"/>).
 ///
 /// Tomlyn's TomlTable mode round-trips preserve all other top-level tables
 /// (model, mcp_servers, plugins, marketplaces, ad-hoc user keys) but DO NOT
 /// preserve comments or original formatting. Acceptable because the file is
 /// largely tool-managed and human edits are expected to be sparse.
 /// </summary>
-public static class CodexConfigToml {
+public static partial class CodexConfigToml {
     static readonly Lock              _writeLock    = new();
     static readonly TomlTableTypeInfo _tomlTypeInfo = new();
 
@@ -35,34 +36,6 @@ public static class CodexConfigToml {
         PreservedOwnershipUnknown,
         Failed
     }
-
-    /// <summary>
-    /// enable network access for Codex's <c>workspace-write</c> sandbox so
-    /// kcap skills (which shell out to <c>kcap …</c>) can reach the Capacitor server.
-    /// Codex blocks all sandbox network by default; a constrained
-    /// <c>network_proxy</c> allowlist keeps everything else closed.
-    ///
-    /// The change respects what the user already has (see the truth table below).
-    /// <paramref name="allowDomains"/> is the host allowlist to permit, e.g.
-    /// <c>["**.kcap.ai"]</c> for SaaS plus any self-hosted hosts — build it with
-    /// <see cref="BuildAllowDomains"/>. An empty allowlist is a no-op (enabling the
-    /// proxy with no <c>allow</c> rule would deny everything, breaking kcap too).
-    ///
-    /// <list type="bullet">
-    /// <item>Default config (no network) → set <c>network_access=true</c> +
-    ///   <c>network_proxy.enabled=true</c> + the allowlist. Only the allowlisted
-    ///   hosts become reachable; everything else stays blocked as before.</item>
-    /// <item><c>network_proxy.enabled=true</c> already → merge the allow entries into
-    ///   the user's <c>domains</c> (theirs preserved) and ensure
-    ///   <c>network_access=true</c>.</item>
-    /// <item><c>network_access=true</c>, no active proxy (fully open) → no-op; kcap
-    ///   already works and pinning a proxy would only narrow their access.</item>
-    /// </list>
-    /// </summary>
-    public static Change EnableNetworkAccess(IReadOnlyCollection<string> allowDomains, string configPath) =>
-        allowDomains.Count == 0
-            ? Change.Unchanged
-            : Update(configPath, root => MutateNetworkAccess(root, allowDomains), out _);
 
     /// <summary>
     /// Writes the per-worktree pre-trust entry, keyed in Codex's own normalised form (see
@@ -448,7 +421,7 @@ public static class CodexConfigToml {
 
         hosts.Sort(StringComparer.Ordinal);
 
-        if (includeKcapWildcard) hosts.Insert(0, "**.kcap.ai");
+        if (includeKcapWildcard) hosts.Insert(0, KcapWildcard);
 
         return hosts;
     }
@@ -551,56 +524,6 @@ public static class CodexConfigToml {
         return arr;
     }
 
-    static bool MutateNetworkAccess(TomlTable root, IReadOnlyCollection<string> allowDomains) {
-        // Inspect current state WITHOUT mutating, so the "fully open" branch can
-        // bail out without having created empty tables.
-        var sandbox   = root.TryGetValue("sandbox_workspace_write", out var sObj) ? sObj as TomlTable : null;
-        var networkOn = sandbox is not null && sandbox.TryGetValue("network_access", out var na) && na is true;
-
-        var features     = root.TryGetValue("features", out var fObj) ? fObj as TomlTable : null;
-        var proxy        = features is not null && features.TryGetValue("network_proxy", out var pObj) ? pObj as TomlTable : null;
-        var proxyEnabled = proxy is not null && proxy.TryGetValue("enabled", out var pe) && pe is true;
-
-        if (proxyEnabled) {
-            // The user runs an allowlist policy — extend it with our hosts and make
-            // sure network access is granted, preserving their existing entries.
-            var changed = MergeAllowDomains(GetOrAddTable(proxy!, "domains"), allowDomains);
-
-            if (!networkOn) {
-                GetOrAddTable(root, "sandbox_workspace_write")["network_access"] = true;
-                changed = true;
-            }
-
-            return changed;
-        }
-
-        // Fully open (network on, no active proxy): kcap already works; don't narrow it.
-        if (networkOn) return false;
-
-        // Default (network off, no active proxy): enable + tight kcap-only allowlist.
-        GetOrAddTable(root, "sandbox_workspace_write")["network_access"] = true;
-
-        var networkProxy = GetOrAddTable(GetOrAddTable(root, "features"), "network_proxy");
-        networkProxy["enabled"] = true;
-        MergeAllowDomains(GetOrAddTable(networkProxy, "domains"), allowDomains);
-
-        return true;
-    }
-
-    static bool MergeAllowDomains(TomlTable domains, IReadOnlyCollection<string> allowDomains) {
-        var changed = false;
-
-        foreach (var domain in allowDomains) {
-            if (domains.TryGetValue(domain, out var v) && v is string s && string.Equals(s, "allow", StringComparison.Ordinal))
-                continue;
-
-            domains[domain] = "allow";
-            changed         = true;
-        }
-
-        return changed;
-    }
-
     static TomlTable GetOrAddTable(TomlTable parent, string key) {
         if (parent.TryGetValue(key, out var existing) && existing is TomlTable table) return table;
 
@@ -614,6 +537,7 @@ public static class CodexConfigToml {
         var tmp = path + ".tmp-" + Environment.ProcessId + "-" + Guid.NewGuid().ToString("N");
         try {
             WriteOwnerOnlyTemp(tmp, TomlSerializer.Serialize(root, _tomlTypeInfo.TableInfo));
+            FaultPoints.Hit($"rename:{path}");
             File.Move(tmp, path, overwrite: true);
         } catch {
             try { File.Delete(tmp); } catch {

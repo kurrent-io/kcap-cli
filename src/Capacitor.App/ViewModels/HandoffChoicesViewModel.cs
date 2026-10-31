@@ -60,6 +60,9 @@ public sealed class HandoffChoicesViewModel : ReactiveObject, ILaunchChoices, ID
 
     public IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>> EffectiveModelCatalog => _catalog.Value;
 
+    public string? UnavailableHarnessTip(HarnessOption harness) =>
+        harness.Available ? null : HomeViewModel.HarnessUnavailableReason(harness.Label, null);
+
     public IReadOnlyList<ModelChoice> ModelChoicesFor(string vendor) =>
         EffectiveModelCatalog.TryGetValue(vendor, out var models) ? models : HostedHarnessCatalog.ModelChoicesFor(vendor);
 

@@ -6,16 +6,18 @@ namespace Capacitor.Cli.Core.Harness.Claude;
 /// <summary>Merges the <c>rate_limits</c> of a Claude status line payload into an account's reading.
 /// A payload is fresh only when <c>cost.total_api_duration_ms</c> exceeds the baseline recorded for its
 /// session: a session's first payload may replay a response from hours ago, so it only records the baseline. A
-/// counter below the baseline belongs to a restarted counter and is a first sighting too.</summary>
+/// counter below the baseline belongs to a restarted counter and is a first sighting too. After an account
+/// switch a payload that is not fresh merges no window at all, since a session idle through the switch
+/// replays the previous login's limits.</summary>
 public static class ClaudeStatusLineReading {
     public const string LimitId = "claude";
 
-    const int MaxSessions = 64;
+    const int MaxSessions = 256;
 
     static readonly (string Property, int Minutes)[] Windows = [("five_hour", 300), ("seven_day", 10080)];
 
     /// <summary>Null when the payload carries no usable window.</summary>
-    public static ReadingFile? Apply(ReadingFile held, JsonElement payload, DateTimeOffset now) {
+    public static ReadingFile? Apply(ReadingFile held, JsonElement payload, bool afterSwitch, DateTimeOffset now) {
         if (payload.Obj("rate_limits") is not { } limits) return null;
 
         var windows = new List<UsageWindowDto>(Windows.Length);
@@ -37,7 +39,7 @@ public static class ClaudeStatusLineReading {
         if (sessionId is not null && counter is not null && counter != baseline)
             sessions = [.. held.Sessions.Where(s => s.SessionId != sessionId).TakeLast(MaxSessions - 1), new ReadingSession(sessionId, counter)];
 
-        var observation = new ReadingObservation(now, fresh, windows, null, null, [], LimitReachedReported: false, LimitStateKnown: true);
+        var observation = new ReadingObservation(now, fresh, afterSwitch && !fresh ? [] : windows, null, null, [], LimitReachedReported: false, LimitStateKnown: true);
 
         return held with { Reading = ReadingMerge.Apply(held.Reading, observation), Sessions = sessions };
     }

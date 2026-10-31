@@ -199,7 +199,9 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             Func<string, ResumeLedgerEntry?>? resumeLedger = null, LastReads<PullRequestSnapshot>? pullRequestSnapshots = null,
             LocalTranscripts? transcripts = null, Action<string>? pullRequestLinksChanged = null, AccountReadings? readings = null,
             IMessageSenderSource? senders = null,
-            IObservable<string?>? appSubject = null, IAppNotifier? notifier = null, HandoffOutcomeReader? handoffOutcomes = null) {
+            IObservable<string?>? appSubject = null, IAppNotifier? notifier = null,
+            IObservable<ServerLaneStatus>? serverLane = null, WorkContextLayout? workContextLayout = null,
+            HandoffOutcomeReader? handoffOutcomes = null) {
         AgentId = agentId;
         _drafts = drafts;
         _opener = opener;
@@ -237,7 +239,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                 ShowsArtefactsTab = show;
                 if (!show && IsArtefactsActive) ActiveTab = WorkspaceTab.Chat;
             }).DisposeWith(_disposables);
-        WorkContext = new WorkContextViewModel(presence.Select(p => p.Dto), workContext, time, opener, runs, requestSignIn, signInCompleted, actions.OpenWorkItemInWeb, plans, planActivity, artefacts: Artefacts);
+        WorkContext = new WorkContextViewModel(presence.Select(p => p.Dto), workContext, time, opener, runs, requestSignIn, signInCompleted,
+            actions.OpenWorkItemInWeb, plans, planActivity, artefacts: Artefacts, serverLane: serverLane, layout: workContextLayout);
         WorkContext.RunOpened += OpenSubagent;
         _disposables.Add(Disposable.Create(() => WorkContext.RunOpened -= OpenSubagent));
         // An open subagent belongs to the transcript it was opened from.
@@ -256,6 +259,10 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                 }).DisposeWith(_disposables);
         daemon.Status.Select(status => status.State).DistinctUntilChanged().Skip(1)
             .Where(state => state == AttachState.Connected).ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(_ => PullRequests?.Reconnected()).DisposeWith(_disposables);
+        // The pull requests read the app's server, so its coming back is what clears a failed discovery.
+        serverLane?.Select(s => s.State).DistinctUntilChanged().Skip(1)
+            .Where(state => state == ServerLaneState.Connected).ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => PullRequests?.Reconnected()).DisposeWith(_disposables);
 
         presence.Select(p => p.Dto).Subscribe(dto => {

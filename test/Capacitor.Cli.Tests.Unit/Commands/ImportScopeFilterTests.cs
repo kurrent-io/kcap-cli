@@ -128,4 +128,34 @@ public class ImportScopeFilterTests {
         // caller meant the other is worse than a construction that fails.
         await Assert.That(() => new ImportScope.Repo([])).Throws<ArgumentException>();
     }
+
+    /// <summary>Unticking a project leaves it out of the run whatever the scope, including a session that
+    /// matched no repository and is known only by its folder.</summary>
+    [Test]
+    public async Task A_skip_leaves_its_repositories_and_folders_out_of_any_scope() {
+        var transcripts = new[] { T("a"), T("b"), T("c"), T("d") };
+        var resolver    = Resolver(new() { ["a"] = ("acme", "web"), ["b"] = ("Acme", "Secret"), ["c"] = null, ["d"] = null });
+        var folders     = new Dictionary<string, string> { ["c"] = "/w/scratch", ["d"] = "/w/notes" };
+        var skip        = new ImportSkip([("acme", "secret")], ["/w/scratch/"]);
+
+        var all = await ImportScopeFilter.Apply(transcripts, new ImportScope.All(), resolver,
+            folderOf: id => folders.GetValueOrDefault(id), skip: skip);
+        var org = await ImportScopeFilter.Apply(transcripts, new ImportScope.Org("acme"), resolver,
+            folderOf: id => folders.GetValueOrDefault(id), skip: skip);
+
+        await Assert.That(all.Select(x => x.SessionId).ToArray()).IsEquivalentTo(["a", "d"]);
+        await Assert.That(org.Select(x => x.SessionId).ToArray()).IsEquivalentTo(["a"]);
+    }
+
+    [Test]
+    public async Task A_folder_scope_keeps_the_sessions_that_ran_there_beside_its_repositories() {
+        var transcripts = new[] { T("a"), T("b"), T("c") };
+        var resolver    = Resolver(new() { ["a"] = ("acme", "web"), ["b"] = null, ["c"] = null });
+        var folders     = new Dictionary<string, string> { ["b"] = "/w/scratch", ["c"] = "/w/notes" };
+
+        var kept = await ImportScopeFilter.Apply(transcripts, new ImportScope.Repo([("acme", "web")], ["/w/scratch"]), resolver,
+            folderOf: id => folders.GetValueOrDefault(id));
+
+        await Assert.That(kept.Select(x => x.SessionId).ToArray()).IsEquivalentTo(["a", "b"]);
+    }
 }

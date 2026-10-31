@@ -164,9 +164,8 @@ public class AccountSnapshotBuilderTests {
     [Test]
     public async Task Published_view_never_contains_the_original_command() {
         var account = Identified(1) with {
-            StatusLine      = new StatusLineBackup("/usr/local/bin/statusline --token SECRET-MARKER-123"),
-            RetiredSessions = ["SECRET-MARKER-123-session"],
-            ProbeSeq        = 9, CommittedProbeSeq = 8, LabelSetByUser = true,
+            StatusLine = new StatusLineBackup("/usr/local/bin/statusline --token SECRET-MARKER-123"),
+            ProbeSeq   = 9, CommittedProbeSeq = 8, LabelSetByUser = true,
         };
         var snapshot = AccountSnapshotBuilder.Build(Registry(1, account), "host-1", new Dictionary<HarnessId, string>(), Home, Readings("x1", Reading(1)));
 

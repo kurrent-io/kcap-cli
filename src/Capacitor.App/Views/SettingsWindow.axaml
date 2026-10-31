@@ -45,7 +45,7 @@
             <TabItem x:Name="ProfilesTab" IsVisible="False">
                 <views:ProfilesSettingsView DataContext="{Binding Profiles}" />
             </TabItem>
-            <TabItem Classes="settingsNavHeader" Header="This profile" />
+            <views:SettingsSectionHeader Classes="settingsNavHeader" Header="This profile" />
 
             <TabItem x:Name="CaptureTab" Classes="settingsNav" AutomationProperties.Name="Privacy">
                 <TabItem.Header>
@@ -92,6 +92,35 @@
                                     </StackPanel>
                                 </Border>
                             </StackPanel>
+                        </StackPanel>
+
+                        <StackPanel Classes="settingsGroup">
+                            <TextBlock Classes="settingsGroupTitle" Text="Status" />
+                            <Border Classes="settingsCard">
+                                <StackPanel>
+                                    <Grid Classes="settingsRow" ColumnDefinitions="140,*" RowDefinitions="Auto,Auto">
+                                        <TextBlock Classes="kcapLabel" Text="Daemon" VerticalAlignment="Center" />
+                                        <SelectableTextBlock x:Name="DaemonStateText" Grid.Column="1" Text="{Binding DaemonState}"
+                                                             FontSize="12.5" TextWrapping="Wrap"
+                                                             Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                                        <TextBlock x:Name="DaemonStateHintText" Grid.Row="1" Grid.Column="1" Classes="kcapHint" Margin="0,4,0,0"
+                                                   Text="{Binding DaemonStateHint}" TextWrapping="Wrap"
+                                                   IsVisible="{Binding DaemonStateHint, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                    </Grid>
+                                    <StackPanel IsVisible="{Binding ServerState, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                        <Border Classes="settingsDivider" />
+                                        <Grid Classes="settingsRow" ColumnDefinitions="140,*" RowDefinitions="Auto,Auto">
+                                            <TextBlock Classes="kcapLabel" Text="Server connection" VerticalAlignment="Center" />
+                                            <SelectableTextBlock x:Name="ServerStateText" Grid.Column="1" Text="{Binding ServerState}"
+                                                                 FontSize="12.5" TextWrapping="Wrap"
+                                                                 Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                                            <TextBlock x:Name="ServerStateHintText" Grid.Row="1" Grid.Column="1" Classes="kcapHint" Margin="0,4,0,0"
+                                                       Text="{Binding ServerStateHint}" TextWrapping="Wrap"
+                                                       IsVisible="{Binding ServerStateHint, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                        </Grid>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
 
                         <StackPanel Classes="settingsGroup">
@@ -236,7 +265,7 @@
                 </ScrollViewer>
             </TabItem>
 
-            <TabItem Classes="settingsNavHeader" Header="This computer" />
+            <views:SettingsSectionHeader Classes="settingsNavHeader" Header="This computer" />
 
             <TabItem x:Name="AppearanceTab" Classes="settingsNav" AutomationProperties.Name="Appearance"
                      IsVisible="{Binding Appearance, Converter={x:Static ObjectConverters.IsNotNull}}">
@@ -516,6 +545,47 @@
                             </StackPanel>
                         </StackPanel>
 
+                        <StackPanel Classes="settingsGroup">
+                            <TextBlock Classes="settingsGroupTitle" Text="Status" />
+                            <Border Classes="settingsCard">
+                                <StackPanel>
+                                    <Grid Classes="settingsRow" ColumnDefinitions="140,*">
+                                        <TextBlock Classes="kcapLabel" Text="Daemon" VerticalAlignment="Center" />
+                                        <SelectableTextBlock x:Name="AboutDaemonStatusText" Grid.Column="1" Text="{Binding About.DaemonStatus, FallbackValue={x:Null}}"
+                                                             FontSize="12.5" TextWrapping="Wrap"
+                                                             Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                                    </Grid>
+                                    <StackPanel IsVisible="{Binding About.ServerConnection, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}">
+                                        <Border Classes="settingsDivider" />
+                                        <Grid Classes="settingsRow" ColumnDefinitions="140,*">
+                                            <TextBlock Classes="kcapLabel" Text="Server connection" VerticalAlignment="Center" />
+                                            <SelectableTextBlock x:Name="AboutServerConnectionText" Grid.Column="1" Text="{Binding About.ServerConnection, FallbackValue={x:Null}}"
+                                                                 FontSize="12.5" TextWrapping="Wrap"
+                                                                 Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                                        </Grid>
+                                    </StackPanel>
+                                    <StackPanel IsVisible="{Binding About.RunningAgents, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}">
+                                        <Border Classes="settingsDivider" />
+                                        <Grid Classes="settingsRow" ColumnDefinitions="140,*">
+                                            <TextBlock Classes="kcapLabel" Text="Hosted agents" VerticalAlignment="Center" />
+                                            <SelectableTextBlock x:Name="AboutRunningAgentsText" Grid.Column="1" Text="{Binding About.RunningAgents, FallbackValue={x:Null}}"
+                                                                 FontSize="12.5" TextWrapping="Wrap"
+                                                                 Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                                        </Grid>
+                                    </StackPanel>
+                                    <StackPanel IsVisible="{Binding About.LocalStack.StateText, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}">
+                                        <Border Classes="settingsDivider" />
+                                        <Grid Classes="settingsRow" ColumnDefinitions="140,*">
+                                            <TextBlock Classes="kcapLabel" Text="Local server" VerticalAlignment="Center" />
+                                            <SelectableTextBlock x:Name="AboutLocalStatusText" Grid.Column="1" Text="{Binding About.LocalStack.StateText, FallbackValue={x:Null}}"
+                                                                 FontSize="12.5" TextWrapping="Wrap"
+                                                                 Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                                        </Grid>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+
                         <StackPanel Classes="settingsGroup" IsVisible="{Binding About.BetaUpdatesVisible, FallbackValue=False}">
                             <TextBlock Classes="settingsGroupTitle" Text="Updates" />
                             <Border Classes="settingsCard">
@@ -558,9 +628,10 @@
         </TabControl>
         </LayoutTransformControl>
 
-        <!-- Outside the scale, so it stays the title bar's height at any text size. The client area extends under the title bar; this strip stands in for it. Nothing
-             interactive is drawn this high on any page. -->
-        <Border Height="40" VerticalAlignment="Top" Background="Transparent"
+        <!-- The client area extends under the title bar; this strip stands in for it. It sits outside the
+             scale and takes the scaled height of the header row beneath it, so the band that drags is the
+             band that looks like a title bar at any text size. Nothing interactive is drawn this high. -->
+        <Border x:Name="ChromeStrip" Height="40" VerticalAlignment="Top" Background="Transparent"
                 PointerPressed="OnChromePointerPressed" />
     </Panel>
 </Window>

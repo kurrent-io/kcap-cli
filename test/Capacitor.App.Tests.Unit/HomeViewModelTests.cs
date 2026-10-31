@@ -195,6 +195,29 @@ public class HomeViewModelTests {
         });
     }
 
+    /// Without Claude, a repository with no remembered harness is offered under the selected one,
+    /// and picking it keeps that one: the menu never badges a harness the pick would not use.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_repository_without_a_remembered_harness_is_badged_with_the_harness_its_pick_keeps() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var daemon = new FakeDaemonClientService();
+            using var vm = new HomeViewModel(daemon, new AppStateStore(Tmp.PathTo("app-state.json")), new RecordingLaunchClient(), Known(), TimeProvider.System);
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(supportedVendors: ["codex", "pi"]));
+            daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            await vm.SelectRepositoryAsync("/repo/a");
+            await vm.ChooseHarnessAsync("pi");
+            daemon.Agents.AddOrUpdate(Agent("x", "/repo/b"));
+
+            var repos = await vm.ListRepositoriesAsync();
+            await Assert.That(repos.Single(r => r.RepoPath == "/repo/a").Vendor).IsEqualTo("pi");
+            await Assert.That(repos.Single(r => r.RepoPath == "/repo/b").Vendor).IsEqualTo("pi");
+
+            await vm.SelectRepositoryAsync("/repo/b");
+            await Assert.That(vm.SelectedVendor).IsEqualTo("pi");
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_direct_start_with_no_harness_sends_nothing() {
@@ -961,6 +984,77 @@ public class HomeViewModelTests {
             daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(supportedVendors: ["codex"]));
             await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsTrue();
             await Assert.That(vm.ConnectionNotice).IsNull();
+        });
+    }
+
+    /// This machine's no-agent banner opens Settings → Harnesses, but only while it is the banner's line and
+    /// the app can open Settings. A remote machine's banner never offers it: local settings cannot configure it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_local_no_agent_banner_alone_offers_harnesses_settings() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var daemon = new FakeDaemonClientService();
+            Connect(daemon);
+            var remote = new FakeRemoteAgents();
+            remote.DaemonsSubject.OnNext([Box("u1") with { RepoPaths = ["/w/repo"], SupportedVendors = [] }]);
+            using var vm = new HomeViewModel(daemon, new AppStateStore(Tmp.PathTo("app-state.json")), new RecordingLaunchClient(),
+                Known(), TimeProvider.System, daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"),
+                laneStatus: Observable.Return(new ServerLaneStatus(ServerLaneState.Connected)));
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(supportedVendors: []));
+            await Assert.That(vm.BannerMessage).IsEqualTo(HomeViewModel.NoHarnessesNotice(null));
+            await Assert.That(vm.HarnessesSettingsVisible).IsFalse();
+
+            var opened = 0;
+            using var open = new BehaviorSubject<Action?>(() => opened++);
+            vm.AttachHarnessesSettings(open);
+            await Assert.That(vm.HarnessesSettingsVisible).IsTrue();
+            await Assert.That(vm.BannerActionsVisible).IsTrue();
+            await vm.OpenHarnessesSettingsCommand.Execute();
+            await Assert.That(opened).IsEqualTo(1);
+
+            await vm.SelectMachineAsync("box", isLocal: false);
+            await Assert.That(vm.BannerMessage).IsEqualTo(HomeViewModel.NoHarnessesNotice("box"));
+            await Assert.That(vm.HarnessesSettingsVisible).IsFalse();
+            await Assert.That(vm.BannerActionsVisible).IsFalse();
+
+            await vm.SelectMachineAsync(daemon.DaemonName, isLocal: true);
+            await Assert.That(vm.HarnessesSettingsVisible).IsTrue();
+            open.OnNext(null);
+            await Assert.That(vm.HarnessesSettingsVisible).IsFalse();
+            await Assert.That(await vm.OpenHarnessesSettingsCommand.CanExecute.FirstAsync()).IsFalse();
+
+            open.OnNext(() => opened++);
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(supportedVendors: ["codex"]));
+            await Assert.That(vm.HarnessesSettingsVisible).IsFalse();
+        });
+    }
+
+    /// An agent the selected machine does not advertise names that machine and the requirement it lacks, and
+    /// a refused launch says the same.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_unavailable_agent_says_which_machine_lacks_it_and_why() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var daemon = new FakeDaemonClientService();
+            Connect(daemon);
+            var remote = new FakeRemoteAgents();
+            remote.DaemonsSubject.OnNext([Box("u1") with { RepoPaths = ["/w/repo"], SupportedVendors = ["codex"] }]);
+            using var vm = new HomeViewModel(daemon, new AppStateStore(Tmp.PathTo("app-state.json")), new RecordingLaunchClient(),
+                Known(), TimeProvider.System, daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"),
+                laneStatus: Observable.Return(new ServerLaneStatus(ServerLaneState.Connected)));
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(supportedVendors: ["claude"]));
+
+            var local = vm.UnavailableHarnessTip(vm.Harnesses.Single(o => o.Vendor == "cursor"));
+            await Assert.That(vm.UnavailableHarnessTip(vm.Harnesses.Single(o => o.Vendor == "claude"))).IsNull();
+            await Assert.That(local).IsEqualTo(HomeViewModel.HarnessUnavailableReason("Cursor", null));
+            await Assert.That(local!).Contains("this machine");
+            await Assert.That(local).Contains("command");
+
+            await vm.SelectMachineAsync("box", isLocal: false);
+            var onBox = vm.UnavailableHarnessTip(vm.Harnesses.Single(o => o.Vendor == "cursor"));
+            await Assert.That(onBox).IsEqualTo(HomeViewModel.HarnessUnavailableReason("Cursor", "box"));
+            await Assert.That(onBox!).Contains("box");
+            await Assert.That(onBox).DoesNotContain("this machine");
         });
     }
 

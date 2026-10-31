@@ -4,6 +4,7 @@ using System.Reactive.Threading.Tasks;
 using ReactiveUI.Reactive;
 using Avalonia;
 using Avalonia.Automation;
+using Avalonia.Automation.Peers;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Input;
@@ -56,6 +57,9 @@ public class LauncherPaneViewSmokeTests {
                     .Single(icon => icon.Kind == LucideIconKind.LoaderCircle);
                 await Assert.That(failed.IsEffectivelyVisible).IsTrue();
                 await Assert.That(busy.IsEffectivelyVisible).IsFalse();
+                // The glyph is the banner's only statement of its state, so it carries that as its name.
+                await Assert.That(ControlAutomationPeer.CreatePeerForElement(failed).GetName()).IsEqualTo("Failed");
+                await Assert.That(ControlAutomationPeer.CreatePeerForElement(busy).GetName()).IsEqualTo("In progress");
 
                 var run = stack.StartCommand.Execute().ToTask();
                 Dispatcher.UIThread.RunJobs();
@@ -981,10 +985,10 @@ public class LauncherPaneViewSmokeTests {
             await Assert.That(disabled).IsNotEmpty();
             foreach (var tile in disabled) {
                 await Assert.That(ToolTip.GetShowOnDisabled(tile)).IsTrue();
-                await Assert.That(ToolTip.GetTip(tile) as string).Contains("not installed or not supported");
+                await Assert.That(ToolTip.GetTip(tile) as string).Contains("can't be launched on this machine");
             }
             var enabled = tiles.Single(t => t.IsEnabled);
-            await Assert.That(ToolTip.GetTip(enabled) as string).DoesNotContain("not installed");
+            await Assert.That(ToolTip.GetTip(enabled) as string).DoesNotContain("can't be launched");
             agent.Hide();
 
             window.Close();
@@ -1386,6 +1390,34 @@ public class LauncherPaneViewSmokeTests {
             Settle(window);
             window.Close();
             Dispatcher.UIThread.RunJobs();
+        });
+    }
+
+    /// A screen reader names each text field by its purpose instead of announcing a bare "edit".
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_goal_box_and_the_model_search_speak_their_names() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var (vm, _, _, tmp) = Build();
+            using var _tmp = tmp;
+            var view = new LauncherPaneView { DataContext = vm };
+            var window = new Window { Content = view, Width = 900, Height = 700 };
+            window.Show();
+            Settle(window);
+
+            var goal = Find<TextBox>(window, "GoalInput")!;
+            await Assert.That(ControlAutomationPeer.CreatePeerForElement(goal).GetName()).IsEqualTo("Session goal");
+
+            var (agent, _) = OpenMenu(window, view, "AgentChip");
+            Settle(window);
+            var search = ((Control)agent.Content!).GetVisualDescendants().OfType<TextBox>().Single(box => box.Name == "ModelSearchBox");
+            await Assert.That(ControlAutomationPeer.CreatePeerForElement(search).GetName()).IsEqualTo("Search models");
+
+            agent.Hide();
+            Settle(window);
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            vm.Dispose();
         });
     }
 }

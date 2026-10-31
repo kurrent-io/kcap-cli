@@ -86,11 +86,15 @@ public static partial class ImportScopePrompt {
     static string ScopeLabel(ImportScope scope) => scope switch {
         ImportScope.All    => "everything",
         ImportScope.Org o  => $"org repos only ({o.OrgLogin})",
-        ImportScope.Repo { Repos: [var only] } => $"repository {only.Owner}/{only.Name}",
+        ImportScope.Repo { Repos: [var only], Folders: [] } => $"repository {only.Owner}/{only.Name}",
+        ImportScope.Repo { Repos: [], Folders: [var folder] } => $"folder {folder}",
         // Named, not counted: the `repos:` line below lists what MATCHED, so a repo that was asked for
         // and found nothing appears nowhere else — and this is the text a --yes run leaves in CI logs.
-        ImportScope.Repo r                     =>
+        ImportScope.Repo { Folders: [] } r      =>
             $"{r.Repos.Count} repositories ({RepoLine([.. r.Repos.Select(x => $"{x.Owner}/{x.Name}")])})",
+        ImportScope.Repo r                     =>
+            $"{r.Repos.Count} repositor{(r.Repos.Count == 1 ? "y" : "ies")} and {r.Folders.Count} folder{(r.Folders.Count == 1 ? "" : "s")} "
+          + $"({RepoLine([.. r.Repos.Select(x => $"{x.Owner}/{x.Name}"), .. r.Folders])})",
         _                  => "?"
     };
 

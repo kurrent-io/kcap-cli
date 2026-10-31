@@ -15,6 +15,8 @@ public interface ILaunchChoices : INotifyPropertyChanged {
     IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>> EffectiveModelCatalog { get; }
     IReadOnlyList<ModelChoice> ModelChoicesFor(string vendor);
     Task ChooseHarnessAsync(string vendor);
+    /// The picker's hover text for a vendor the target daemon does not advertise; null for one it does.
+    string? UnavailableHarnessTip(HarnessOption harness);
 
     string? SelectedEffort { get; set; }
     string SelectedPermissionMode { get; set; }

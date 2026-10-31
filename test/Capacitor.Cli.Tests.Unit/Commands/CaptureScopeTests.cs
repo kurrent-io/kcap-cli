@@ -144,6 +144,22 @@ public class CaptureScopeTests {
     }
 
     [Test]
+    public async Task A_session_that_reaches_nothing_is_not_stamped() {
+        using var tmp = new TempDir();
+        var       dir = tmp.CreateDir("secret");
+
+        var result = await Scope(excludedPaths: [dir]).ApplyAsync(
+            [
+                Session("short", dir.PathTo("project"), ImportCommand.ClassificationStatus.TooShort),
+                Session("internal", dir.PathTo("project"), ImportCommand.ClassificationStatus.InternalSubSession),
+            ],
+            NoResolved);
+
+        await Assert.That(result[0].ExcludedPathKey).IsNull();
+        await Assert.That(result[1].ExcludedPathKey).IsNull();
+    }
+
+    [Test]
     public async Task A_cwd_outside_allowed_paths_is_outside_the_allowlist() {
         using var tmp     = new TempDir();
         var       allowed = tmp.CreateDir("dev");

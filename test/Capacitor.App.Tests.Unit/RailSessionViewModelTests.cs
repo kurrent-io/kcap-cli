@@ -461,6 +461,33 @@ public class RailSessionViewModelTests {
         });
     }
 
+    /// A stamp that arrives as local time is the same instant as its UTC form, so the age does not
+    /// move by the machine's UTC offset.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_local_time_stamp_ages_from_the_same_instant_as_its_utc_form() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var local = ServerRow() with { CreatedAt = Started.ToLocalTime(), EndedAt = Ended.ToLocalTime() };
+            using var row = new RailSessionViewModel(local, new BehaviorSubject<string?>(null), NoPending, NotStale,
+                _ => { }, _ => { }, At(Ended.AddDays(3).AddMinutes(30)));
+
+            await Assert.That(row.Meta).IsEqualTo("3d ago · 3h 52m");
+        });
+    }
+
+    /// Ended on the 22nd's afternoon and read on the 25th's morning: only 2d 16h, but three dates
+    /// back, where the day groups file it, so the row reads "3d ago" rather than "2d ago".
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_ended_row_ages_in_calendar_days_like_the_day_groups() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var row = new RailSessionViewModel(ServerRow(), new BehaviorSubject<string?>(null), NoPending, NotStale,
+                _ => { }, _ => { }, At(new DateTime(2026, 10, 25, 9, 0, 0, DateTimeKind.Utc)));
+
+            await Assert.That(row.Meta).IsEqualTo("3d ago · 3h 52m");
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_live_terminal_row_carries_the_chip_and_ages() {

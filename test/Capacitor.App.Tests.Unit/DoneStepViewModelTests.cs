@@ -42,8 +42,29 @@ public class DoneStepViewModelTests {
 
         await Assert.That(imported).IsEqualTo("Your work so far");
         await Assert.That(remembering).IsEqualTo("From now on, your agents remember");
-        await Assert.That(nothing).IsEqualTo("No new agents connected");
-        await Assert.That(blocked).IsEqualTo("No new agents connected");
+        await Assert.That(nothing).IsEqualTo("No new coding tools connected");
+        await Assert.That(blocked).IsEqualTo("No new coding tools connected");
+    }
+
+    /// A setup that connected nothing names Settings → Harnesses once, in the lede when nothing was imported
+    /// and under the empty capture list when history was.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(false, false)]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    public async Task Connecting_later_points_at_harnesses_settings_once(bool local, bool imported) {
+        var (lede, line) = await AvaloniaSession.DispatchAsync(async () => {
+            var run = imported ? await FinishedRun(30, 0) : null;
+            var facts = (local ? LocalFacts(import: run) : Facts(import: run)) with { Recording = [] };
+            var vm = new DoneStepViewModel(() => facts);
+            await vm.OnEnterAsync(CancellationToken.None);
+            return (vm.Lede, vm.NoAgentsLine);
+        });
+
+        const string settings = "Settings → Harnesses";
+        await Assert.That(lede.Contains(settings, StringComparison.Ordinal) ^ line.Contains(settings, StringComparison.Ordinal)).IsTrue();
+        await Assert.That(line.Contains(settings, StringComparison.Ordinal)).IsEqualTo(imported);
     }
 
     [Test]
@@ -301,7 +322,7 @@ public class DoneStepViewModelTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_restart_line_shows_only_when_new_hooks_need_one() {
-        var (remote, local, nothing, blocked) = await AvaloniaSession.DispatchAsync(async () => {
+        var (remote, local, nothing, blocked, pathAdded) = await AvaloniaSession.DispatchAsync(async () => {
             async Task<string?> LineFor(DoneFacts facts) {
                 var vm = new DoneStepViewModel(() => facts);
                 await vm.OnEnterAsync(CancellationToken.None);
@@ -309,10 +330,14 @@ public class DoneStepViewModelTests {
             }
 
             return (await LineFor(Facts()), await LineFor(Facts() with { Local = true }),
-                await LineFor(Facts(recording: [])), await LineFor(Facts(hazard: true)));
+                await LineFor(Facts(recording: [])), await LineFor(Facts(hazard: true)),
+                await LineFor(Facts() with { PathAdded = true }));
         });
 
         await Assert.That(remote).IsEqualTo("Agents already open will start storing sessions the next time you launch them");
+        // A terminal open before setup changed PATH still cannot run the hooks.
+        await Assert.That(pathAdded).IsEqualTo(
+            "Agents already open will start storing sessions once you launch them again from a new terminal");
         await Assert.That(local).IsEqualTo(remote);
         await Assert.That(nothing).IsNull();
         await Assert.That(blocked).IsNull();

@@ -1,8 +1,11 @@
 using System.Reactive.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.Pages;
 using Capacitor.Cli.Core.Plans;
 using Microsoft.Extensions.Time.Testing;
 using TUnit.Assertions.Enums;
@@ -24,23 +27,36 @@ public class ArtefactsTabViewModelTests {
         public FakeTimeProvider Time { get; } = new();
         public PlanActivity Activity { get; } = new();
         public Dictionary<string, byte[]> Disk { get; } = new(StringComparer.Ordinal);
+        public RecordingOpener Opener { get; } = new();
         public ArtefactsTabViewModel Vm { get; }
 
-        public Harness(bool realFiles = false) => Vm = new ArtefactsTabViewModel(Source, Activity, Time,
-            realFiles ? null : path => Disk.TryGetValue(path.Replace('\\', '/'), out var bytes) ? new MemoryStream(bytes) : null);
+        public Harness(bool realFiles = false, IPageViewer? pageViewer = null) => Vm = new ArtefactsTabViewModel(Source, Activity, Time,
+            realFiles ? null : path => Disk.TryGetValue(path.Replace('\\', '/'), out var bytes) ? new MemoryStream(bytes) : null,
+            Opener, pageViewer);
 
         public async Task SwitchAsync(string? sessionId, string? root = "/repo") {
             Vm.SwitchSession(sessionId, root);
             await SettledAsync();
         }
 
-        public Task SettledAsync() => Vm.PendingReadForTesting ?? Task.CompletedTask;
+        public Task SettledAsync() =>
+            Task.WhenAll(Vm.PendingReadForTesting ?? Task.CompletedTask, Vm.PendingPagesForTesting ?? Task.CompletedTask);
 
         public void WritePlan(string callId = "c1") => Activity.Apply([new ChatProjectionResult([
             new AcpEventEnvelope(Kind: AcpEventKind.ToolCall, ToolCallId: callId, ToolName: PlanToolNames.DeclareDocument),
             new AcpEventEnvelope(Kind: AcpEventKind.ToolResult, ToolCallId: callId),
         ], [], [])]);
+
+        public void PublishPage(string callId = "p1") => Activity.Apply([new ChatProjectionResult([
+            new AcpEventEnvelope(Kind: AcpEventKind.ToolCall, ToolCallId: callId, ToolName: "mcp__plugin_kcap_kcap-pages__publish_page"),
+            new AcpEventEnvelope(Kind: AcpEventKind.ToolResult, ToolCallId: callId),
+        ], [], [])]);
     }
+
+    static ArtefactDto Page(string id, string title, DateTimeOffset updatedAt, string? url = null) =>
+        new(id, title, "u1", "org", 1, updatedAt, true, url ?? $"https://kcap.test/pages/{id}");
+
+    static SessionPagesRead Pages(params ArtefactDto[] pages) => new(SessionPlansReadKind.Ready, pages);
 
     static string Sha(string text) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
 
@@ -574,6 +590,234 @@ public class ArtefactsTabViewModelTests {
 
             await h.Vm.PendingDriftForTesting!;
             await Assert.That(h.Vm.Reader!.HasNotice).IsFalse();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Pages_the_server_lists_show_beside_the_documents_in_its_order_and_open_at_their_own_url() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var now = h.Time.GetUtcNow();
+            h.Source.Enqueue(Ready(Doc("1", "plan", "docs/p.md")));
+            h.Source.EnqueuePages(Pages(
+                Page("new", "Findings", now - TimeSpan.FromHours(3)),
+                Page("old", "Draft", now - TimeSpan.FromDays(2), url: "https://elsewhere.test/pages/old")));
+            await h.SwitchAsync(SessionA);
+
+            await Assert.That(h.Source.RequestedPages).IsEquivalentTo(new[] { SessionA });
+            await Assert.That(h.Vm.Documents.Count).IsEqualTo(1);
+            await Assert.That(h.Vm.Pages.Select(p => p.Title)).IsEquivalentTo(new[] { "Findings", "Draft" }, CollectionOrdering.Matching);
+            await Assert.That(h.Vm.Pages[0].UpdatedLabel).IsEqualTo("Updated 3h ago");
+            await Assert.That(h.Vm.HasPagesNote).IsFalse();
+
+            await h.Vm.OpenPageCommand.Execute(h.Vm.Pages[1]);
+            await Assert.That(h.Opener.Opened).IsEquivalentTo(new[] { "https://elsewhere.test/pages/old" });
+            await Assert.That(h.Vm.Selected).IsNull();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// A page row opens through the page viewer it was given, with the page's id and listed URL, and never
+    /// through the browser: an in-app viewer replaces the browser whole.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_given_page_viewer_opens_pages_instead_of_the_browser() {
+        await RunOnUiAsync(async () => {
+            var viewer = new RecordingPageViewer();
+            var h = new Harness(pageViewer: viewer);
+            h.Source.EnqueuePages(Pages(Page("p", "Report", h.Time.GetUtcNow(), url: "https://kcap.test/pages/p")));
+            await h.SwitchAsync(SessionA);
+
+            await h.Vm.OpenPageCommand.Execute(h.Vm.Pages[0]);
+            await Assert.That(viewer.Opened).IsEquivalentTo(new[] { ("p", "https://kcap.test/pages/p") });
+            await Assert.That(h.Opener.Opened).IsEmpty();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    sealed class RecordingPageViewer : IPageViewer {
+        public List<(string PageId, string Url)> Opened { get; } = [];
+        public void Open(string pageId, string url) => Opened.Add((pageId, url));
+    }
+
+    /// The tab shows for a session whose only artefact is a page, and the reader says where pages open.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_session_with_only_pages_has_artefacts() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.EnqueuePages(Pages(Page("p", "Report", h.Time.GetUtcNow())));
+            await h.SwitchAsync(SessionA);
+
+            await Assert.That(h.Vm.HasDocuments).IsFalse();
+            await Assert.That(h.Vm.HasAny).IsTrue();
+            await Assert.That(h.Vm.EmptyReaderNote).IsEqualTo("Pages open in your browser.");
+            await Assert.That(h.Vm.OpenDocument("docs/missing.md")).IsFalse();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Pages_are_loading_until_their_read_settles() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var gate = h.Source.GatePages();
+            h.Vm.SwitchSession(SessionA, "/repo");
+
+            await Assert.That(h.Vm.ShowsPagesSection).IsTrue();
+            await Assert.That(h.Vm.IsLoadingPages).IsTrue();
+            await Assert.That(h.Vm.PagesNote).IsEqualTo("Loading pages…");
+
+            gate.SetResult(Pages());
+            await h.SettledAsync();
+
+            await Assert.That(h.Vm.IsLoadingPages).IsFalse();
+            await Assert.That(h.Vm.PagesNote).IsEqualTo("No pages published from this session.");
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// A refused read (a session this viewer may not see, or a server without the route) and a
+    /// signed-out one each say so, never "no pages", and list nothing.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(SessionPlansReadKind.Unavailable, "Pages aren't available for this session.")]
+    [Arguments(SessionPlansReadKind.SignedOut, "Sign in to see this session's pages.")]
+    [Arguments(SessionPlansReadKind.Unreachable, "Couldn't reach the server to list pages.")]
+    public async Task A_read_that_is_not_ready_is_told_apart_from_an_empty_list(SessionPlansReadKind kind, string note) {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.EnqueuePages(SessionPagesRead.Of(kind));
+            await h.SwitchAsync(SessionA);
+
+            await Assert.That(h.Vm.Pages).IsEmpty();
+            await Assert.That(h.Vm.PagesNote).IsEqualTo(note);
+            await Assert.That(h.Vm.LastReadFailed).IsEqualTo(kind == SessionPlansReadKind.Unreachable);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// Losing access ends the list: a page the server stops returning is gone at the next read.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_refused_read_after_a_listing_clears_the_pages() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.EnqueuePages(Pages(Page("p", "Report", h.Time.GetUtcNow())));
+            await h.SwitchAsync(SessionA);
+            await Assert.That(h.Vm.HasPages).IsTrue();
+
+            h.Source.EnqueuePages(SessionPagesRead.Of(SessionPlansReadKind.Unavailable));
+            h.Vm.Refresh();
+            await h.SettledAsync();
+
+            await Assert.That(h.Vm.Pages).IsEmpty();
+            await Assert.That(h.Vm.HasAny).IsFalse();
+            await Assert.That(h.Vm.PagesNote).IsEqualTo("Pages aren't available for this session.");
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_unreachable_read_keeps_the_listed_pages_and_is_retried_until_one_lands() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.EnqueuePages(Pages(Page("p", "Report", h.Time.GetUtcNow())));
+            await h.SwitchAsync(SessionA);
+
+            h.Source.EnqueuePages(SessionPagesRead.Of(SessionPlansReadKind.Unreachable));
+            h.Vm.Refresh();
+            await h.SettledAsync();
+            await Assert.That(h.Vm.Pages.Single().Title).IsEqualTo("Report");
+            await Assert.That(h.Vm.LastReadFailed).IsTrue();
+
+            h.Vm.Refresh();
+            await h.SettledAsync();
+            await Assert.That(h.Vm.LastReadFailed).IsFalse();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_entry_without_a_web_link_is_not_listed_and_no_link_is_made_for_it() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var now = h.Time.GetUtcNow();
+            h.Source.EnqueuePages(Pages(
+                Page("a", "Script", now, url: "javascript:alert(1)"),
+                Page("b", "Mail", now, url: "mailto:someone@example.com"),
+                Page("c", "Nothing", now, url: ""),
+                Page("d", "Kept", now),
+                Page("d", "Kept again", now)));
+            await h.SwitchAsync(SessionA);
+
+            await Assert.That(h.Vm.Pages.Select(p => p.Id)).IsEquivalentTo(new[] { "d" });
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Publishing_a_page_in_the_transcript_reads_the_pages_at_once_and_again_after_the_settle_delay() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            await h.SwitchAsync(SessionA);
+            await Assert.That(h.Source.RequestedPages.Count).IsEqualTo(1);
+
+            h.Source.EnqueuePages(Pages(Page("p", "Fresh", h.Time.GetUtcNow())));
+            h.PublishPage();
+            await h.SettledAsync();
+            await Assert.That(h.Source.RequestedPages.Count).IsEqualTo(2);
+            await Assert.That(h.Vm.Pages.Single().Title).IsEqualTo("Fresh");
+
+            h.Time.Advance(PlanSectionViewModel.SettleDelay);
+            await WaitUntilAsync(() => h.Source.RequestedPages.Count == 3, what: "the settle re-read");
+            await h.SettledAsync();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_stale_pages_read_never_applies_after_a_session_switch_and_a_null_session_hides_the_section() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var gate = h.Source.GatePages(ignoreCancellation: true);
+            h.Vm.SwitchSession(SessionA, "/repo");
+            var stale = h.Vm.PendingPagesForTesting!;
+
+            await h.SwitchAsync(SessionB);
+            gate.SetResult(Pages(Page("a", "Only A", h.Time.GetUtcNow())));
+            await stale;
+
+            await Assert.That(h.Vm.Pages).IsEmpty();
+            await Assert.That(h.Vm.PagesNote).IsEqualTo("No pages published from this session.");
+
+            await h.SwitchAsync(null);
+            await Assert.That(h.Vm.ShowsPagesSection).IsFalse();
+            await Assert.That(h.Vm.HasPagesNote).IsFalse();
+            await Assert.That(h.Source.RequestedPages).IsEquivalentTo(new[] { SessionA, SessionB }, CollectionOrdering.Matching);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_new_root_for_the_same_session_keeps_its_pages_without_reading_them_again() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.EnqueuePages(Pages(Page("p", "Report", h.Time.GetUtcNow())));
+            await h.SwitchAsync(SessionA, root: "/repo");
+
+            await h.SwitchAsync(SessionA, root: "/repo-worktree");
+
+            await Assert.That(h.Vm.Pages.Single().Title).IsEqualTo("Report");
+            await Assert.That(h.Source.RequestedPages.Count).IsEqualTo(1);
             await h.Vm.TeardownAsync();
         });
     }

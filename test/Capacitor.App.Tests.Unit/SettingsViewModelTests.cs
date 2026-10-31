@@ -324,6 +324,31 @@ public class SettingsViewModelTests {
         await Assert.That(vm.StatusShowsAgents).IsFalse();
     });
 
+    /// The Daemon page shows the daemon running apart from its server connection: off its server it is still
+    /// running, signed out is named as such, and a daemon the app cannot reach has no server line at all.
+    [Test]
+    public Task The_daemon_page_reports_the_process_and_the_server_connection_apart() => AvaloniaSession.RunOnUiAsync(async () => {
+        var service = Connected();
+        using var vm = Make(Seed(), service);
+        await Assert.That(vm.DaemonState).IsEqualTo("running · daemon-a");
+        await Assert.That(vm.ServerState).IsEqualTo("connected · http://localhost:9999");
+        await Assert.That(vm.ServerStateHint).IsNull();
+
+        service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "reconnecting"));
+        await Assert.That(vm.DaemonState).IsEqualTo("running · daemon-a");
+        await Assert.That(vm.ServerState).IsEqualTo("reconnecting · http://localhost:9999");
+        await Assert.That(vm.ServerStateHint!).Contains("keeps retrying");
+
+        service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected", credential: "signed_out"));
+        await Assert.That(vm.ServerState).IsEqualTo("signed out · http://localhost:9999");
+        await Assert.That(vm.ServerStateHint!).Contains("Profiles");
+
+        service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+        await Assert.That(vm.DaemonState).IsEqualTo("not running");
+        await Assert.That(vm.DaemonStateHint!).Contains("kcap daemon start");
+        await Assert.That(vm.ServerState).IsNull();
+    });
+
     [Test]
     public Task Rename_is_unavailable_off_macOS() => AvaloniaSession.RunOnUiAsync(async () => {
         using var vm = Make(Seed(), Connected(), mac: false);

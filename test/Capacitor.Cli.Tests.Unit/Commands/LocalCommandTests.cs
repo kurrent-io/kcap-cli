@@ -9,6 +9,8 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 [NotInParallel]
 public class LocalCommandTests {
     sealed class NoStack : ILocalStackFactory {
+        public Core.LocalEdition.LocalRoot Root => throw new InvalidOperationException("The command read the root without a platform refusal.");
+
         public LocalStack Create() => throw new InvalidOperationException("The command reached the installation.");
 
         public LocalBundleStager Stager() => throw new InvalidOperationException("The command reached the bundles.");

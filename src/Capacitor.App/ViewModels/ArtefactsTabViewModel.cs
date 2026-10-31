@@ -4,18 +4,20 @@ using System.Security.Cryptography;
 using Avalonia.Collections;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Pages;
 using Capacitor.Cli.Core.Plans;
 using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
 
 /// The Artefacts tab: the documents a session declared or wrote, read from plan-artifacts with
-/// their bodies, and the one that is open. The session id is the read's identity; a lease owns one
-/// id, its root, its cancellation and its pending read, a result applies only for the current lease,
-/// and every lease transition happens on the UI thread.
+/// their bodies, the one that is open, and the published pages citing the session. The session id is
+/// each read's identity; a lease owns one id, its cancellation and its pending read, a result applies
+/// only for the current lease, and every lease transition happens on the UI thread.
 public sealed class ArtefactsTabViewModel : ReactiveObject {
     readonly IPlanArtifactSource? _source;
     readonly SingleFlightReader<(string SessionId, string? Root), PlanArtifactsRead> _reads;
+    readonly SingleFlightReader<string, SessionPagesRead> _pageReads;
     sealed record DriftRead(DriftState State);
     readonly SingleFlightReader<(DocumentRow Row, string? Root), DriftRead> _driftReads;
     readonly PlanActivity _activity;
@@ -24,20 +26,44 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
 
     readonly Func<string, Stream?> _openWorkingCopy;
     readonly AvaloniaList<DocumentRow> _documents = [];
+    readonly AvaloniaList<PageRow> _pages = [];
     readonly ITimer _settle;
     bool _tornDown;
     string? _pendingPath;
+    bool _documentsFailed;
+    bool _pagesFailed;
+    /// The kind of the last pages answer this lease applied; null until one lands.
+    SessionPlansReadKind? _pagesKind;
 
     public IAvaloniaReadOnlyList<DocumentRow> Documents => _documents;
-    /// The last applied read was not a Ready one, so the pane's poll retries it even with the tab hidden.
-    internal bool LastReadFailed { get; private set; }
-    public bool HasAny => _documents.Count > 0;
+    public IAvaloniaReadOnlyList<PageRow> Pages => _pages;
+    /// The last applied read of either list could not reach the server, so the pane's poll retries it
+    /// even with the tab hidden.
+    internal bool LastReadFailed => _documentsFailed || _pagesFailed;
+    public bool HasDocuments => _documents.Count > 0;
+    public bool HasPages => _pages.Count > 0;
+    public bool HasAny => HasDocuments || HasPages;
     /// True while a session lease is open and has not yet applied a result — distinct from a settled empty list.
     public bool IsLoading => _reads.IsLoading;
+    public bool IsLoadingPages => _pageReads.IsLoading;
     /// Right-pane prompt when nothing is open: loading, settled empty, or pick a row.
     public string EmptyReaderNote => IsLoading ? "Loading documents…"
-        : HasAny ? "Select a document to read it."
+        : HasDocuments ? "Select a document to read it."
+        : HasPages ? "Pages open in your browser."
         : "No documents yet.";
+
+    public bool ShowsPagesSection => _pageReads.HasCurrent;
+    /// Why the pages list is empty. A server that cannot answer for this session is not a session
+    /// with no pages, so the two never share a note.
+    public string PagesNote => HasPages || !_pageReads.HasCurrent ? ""
+        : _pagesKind switch {
+            null => "Loading pages…",
+            SessionPlansReadKind.Ready => "No pages published from this session.",
+            SessionPlansReadKind.SignedOut => "Sign in to see this session's pages.",
+            SessionPlansReadKind.Unreachable => "Couldn't reach the server to list pages.",
+            _ => "Pages aren't available for this session.",
+        };
+    public bool HasPagesNote => PagesNote.Length > 0;
 
     (string Path, string? Hash, DriftState State)? _lastDrift;
     DocumentRow? _selected;
@@ -52,15 +78,17 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
 
     public ReactiveCommand<DocumentRow, Unit> SelectCommand { get; }
     public ReactiveCommand<string, Unit> OpenLinkCommand { get; }
+    public ReactiveCommand<PageRow, Unit> OpenPageCommand { get; }
     /// Something asked for the tab: a card's Open, a pane row, the pane summary.
     public event Action? OpenRequested;
 
     /// Test-only seam: the current lease's read, or the last one started.
     internal Task? PendingReadForTesting => _reads.PendingReadForTesting;
+    internal Task? PendingPagesForTesting => _pageReads.PendingReadForTesting;
     internal Task? PendingDriftForTesting => _driftReads.PendingReadForTesting;
 
     public ArtefactsTabViewModel(IPlanArtifactSource? source, PlanActivity activity, TimeProvider time, Func<string, Stream?>? openWorkingCopy = null,
-            IUrlOpener? opener = null) {
+            IUrlOpener? opener = null, IPageViewer? pageViewer = null) {
         _source = source;
         _reads = new SingleFlightReader<(string SessionId, string? Root), PlanArtifactsRead>(
             (state, ct) => _source!.ReadAsync(state.SessionId, ct),
@@ -72,6 +100,16 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
             "artefacts tab",
             onSettled: RaiseLoading,
             cached: state => _source?.Cached(state.SessionId));
+        _pageReads = new SingleFlightReader<string, SessionPagesRead>(
+            (sessionId, ct) => _source!.ReadPagesAsync(sessionId, ct),
+            ex => {
+                Console.Error.WriteLine($"kcap: artefacts tab pages: {ex.Message}");
+                return SessionPagesRead.Of(SessionPlansReadKind.Unreachable);
+            },
+            ApplyPages,
+            "artefacts tab pages",
+            onSettled: RaisePages,
+            cached: sessionId => _source?.CachedPages(sessionId));
         _activity = activity;
         _time = time;
         _openWorkingCopy = openWorkingCopy ?? OpenFile;
@@ -82,30 +120,38 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
             "document drift");
         SelectCommand = ReactiveCommand.Create<DocumentRow>(Select);
         OpenLinkCommand = ReactiveCommand.Create<string>(url => { if (opener is not null) LinkPolicy.Open(opener, url); });
+        pageViewer ??= opener is null ? null : new BrowserPageViewer(opener);
+        OpenPageCommand = ReactiveCommand.Create<PageRow>(row => pageViewer?.Open(row.Id, row.Url));
         _settle = time.CreateTimer(_ => RxSchedulers.MainThreadScheduler.Schedule(Refresh), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-        _activity.PlanWritten += OnPlanWritten;
+        _activity.PlanWritten += OnArtefactWritten;
+        _activity.PagePublished += OnArtefactWritten;
     }
 
     public void SwitchSession(string? sessionId, string? root) {
         if (_tornDown || _source is null) return;
         _pendingPath = null;
-        LastReadFailed = false;
+        _documentsFailed = false;
         if (string.IsNullOrEmpty(sessionId)) {
             _reads.ClearCurrent(() => {
                 RaiseLoading();
                 Clear();
             });
+            _pageReads.ClearCurrent(ResetPages);
         } else {
             _reads.Switch((sessionId, root), () => {
                 RaiseLoading();
                 Clear();
             });
+            // Pages do not depend on the checkout, so a new root for the same session keeps them.
+            if (!_pageReads.HasCurrent || _pageReads.CurrentState != sessionId) _pageReads.Switch(sessionId, ResetPages);
         }
     }
 
     /// Reads now, or queues one follow-up behind the read in flight.
     public void Refresh() {
-        if (!_tornDown) _reads.Refresh();
+        if (_tornDown) return;
+        _reads.Refresh();
+        _pageReads.Refresh();
     }
 
     public void RequestOpen() => OpenRequested?.Invoke();
@@ -117,7 +163,7 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
         if (row is null) {
             if (_reads.HasCurrent && !_reads.IsCurrentSettled) _pendingPath = path;
             else return false;
-            if (!HasAny) return false;
+            if (!HasDocuments) return false;
             RequestOpen();
             return true;
         }
@@ -168,7 +214,7 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
         Reader?.UpdateDrift(row, read.State);
     }
 
-    void OnPlanWritten() {
+    void OnArtefactWritten() {
         if (_tornDown) return;
         Refresh();
         _settle.Change(PlanSectionViewModel.SettleDelay, Timeout.InfiniteTimeSpan);
@@ -178,7 +224,7 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
     /// what sign-in and the next plan write repair, and polling it would cost a body-carrying request
     /// per workspace per tick for nothing.
     void Apply(PlanArtifactsRead read) {
-        LastReadFailed = read.Kind == SessionPlansReadKind.Unreachable;
+        _documentsFailed = read.Kind == SessionPlansReadKind.Unreachable;
         switch (read.Kind) {
             case SessionPlansReadKind.Ready:
                 Show(read.Body?.Artifacts ?? []);
@@ -239,14 +285,52 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
         RaiseShape();
     }
 
+    /// An unreachable answer keeps the list it had, as the documents do; one with nothing before it
+    /// says the server could not be reached rather than reading as empty.
+    void ApplyPages(SessionPagesRead read) {
+        _pagesFailed = read.Kind == SessionPlansReadKind.Unreachable;
+        if (_pagesFailed && _pagesKind is not null) return;
+        _pagesKind = read.Kind;
+        var now = _time.GetUtcNow();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        List<PageRow> rows = read.Kind == SessionPlansReadKind.Ready
+            ? read.Pages.Where(dto => dto is not null).Select(dto => PageRow.From(dto, now)).OfType<PageRow>().Where(row => seen.Add(row.Id)).ToList()
+            : [];
+        if (rows.Count == 0 && _pages.Count == 0) return;
+        _pages.Clear();
+        _pages.AddRange(rows);
+        RaiseShape();
+    }
+
+    void ResetPages() {
+        _pagesFailed = false;
+        _pagesKind = null;
+        if (_pages.Count > 0) {
+            _pages.Clear();
+            RaiseShape();
+        }
+        RaisePages();
+    }
+
     void RaiseShape() {
+        this.RaisePropertyChanged(nameof(HasDocuments));
+        this.RaisePropertyChanged(nameof(HasPages));
         this.RaisePropertyChanged(nameof(HasAny));
         this.RaisePropertyChanged(nameof(EmptyReaderNote));
+        this.RaisePropertyChanged(nameof(PagesNote));
+        this.RaisePropertyChanged(nameof(HasPagesNote));
     }
 
     void RaiseLoading() {
         this.RaisePropertyChanged(nameof(IsLoading));
         this.RaisePropertyChanged(nameof(EmptyReaderNote));
+    }
+
+    void RaisePages() {
+        this.RaisePropertyChanged(nameof(IsLoadingPages));
+        this.RaisePropertyChanged(nameof(ShowsPagesSection));
+        this.RaisePropertyChanged(nameof(PagesNote));
+        this.RaisePropertyChanged(nameof(HasPagesNote));
     }
 
     /// Shared-read so an agent still writing the file on Windows is not refused.
@@ -256,11 +340,14 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
     public async Task TeardownAsync() {
         if (_tornDown) return;
         _tornDown = true;
-        _activity.PlanWritten -= OnPlanWritten;
+        _activity.PlanWritten -= OnArtefactWritten;
+        _activity.PagePublished -= OnArtefactWritten;
         _settle.Dispose();
         SelectCommand.Dispose();
         OpenLinkCommand.Dispose();
+        OpenPageCommand.Dispose();
         await _reads.TeardownAsync();
+        await _pageReads.TeardownAsync();
         await _driftReads.TeardownAsync(waitForPending: false);
     }
 }

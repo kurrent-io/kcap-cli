@@ -133,6 +133,8 @@
                     </Button>
                 </WrapPanel>
                 <TextBlock Classes="settingsFootnote"
+                           Text="Rescan updates this list only. Which agents you can start from kcap depends on the daemon finding each one's command." />
+                <TextBlock Classes="settingsFootnote"
                            Text="To record less for one profile, use its repository and folder rules in Privacy." />
             </StackPanel>
             <TextBlock Classes="kcapHint" Text="{Binding Message}" TextWrapping="Wrap"

@@ -28,9 +28,11 @@ public sealed class CliTelemetry {
     readonly ITelemetrySink _sink;
     readonly TimeProvider   _time;
     readonly string         _command;
-    readonly string?        _deviceId;
+    // Null while the run waits on a usage-data choice: minting it would save telemetry state nobody consented to.
+    volatile string?        _deviceId;
     // Whether the id came off disk: an in-memory fallback id has no file to be replaced.
-    readonly bool           _deviceIdSaved;
+    bool                    _deviceIdSaved;
+    readonly object         _deviceIdGate = new();
     readonly string?        _orgGroup;
     readonly bool           _debug;
     readonly bool           _desktop;
@@ -38,6 +40,14 @@ public sealed class CliTelemetry {
     /// <summary>Set for the desktop app only, which outlives the commands run beside it: an opt-out a
     /// command saves must stop it too, so it re-reads the saved choice before it queues or ships.</summary>
     readonly ConfigRoot?    _config;
+
+    /// <summary>Where a choice saved while this run waits is read from.</summary>
+    readonly ConfigRoot?    _root;
+
+    volatile UnsavedConsent _unsaved;
+
+    /// <summary>No choice was saved when the run began and none has been made in it, so the local edition still asks.</summary>
+    volatile bool           _choiceOpen;
 
     /// <summary>
     /// Guards <see cref="_shared"/>, which is written after construction as well as during it: the
@@ -54,14 +64,18 @@ public sealed class CliTelemetry {
 
     CliTelemetry(
             ITelemetrySink sink, string command, bool enabled, string? deviceId, string? orgGroup,
-            bool debug, string signupUrl, JsonObject shared, TimeProvider time, ConfigRoot? desktopConfig = null) {
+            bool debug, string signupUrl, JsonObject shared, TimeProvider time, ConfigRoot? desktopConfig = null,
+            UnsavedConsent unsaved = UnsavedConsent.Share, ConfigRoot? root = null) {
         _desktop  = desktopConfig is not null;
         _config   = desktopConfig;
+        _root     = root;
+        _unsaved  = unsaved;
+        _choiceOpen = unsaved == UnsavedConsent.Pending;
         _sink     = sink;
         _time     = time;
         _command  = command;
-        _deviceId = deviceId;
         _deviceIdSaved = desktopConfig is not null && deviceId is not null && TelemetryDeviceId.ReadPersisted(desktopConfig) == deviceId;
+        _deviceId = deviceId;
         _orgGroup = orgGroup;
         _debug    = debug;
         _shared   = shared;
@@ -72,6 +86,12 @@ public sealed class CliTelemetry {
 
     public bool Enabled { get; private set; }
 
+    /// <summary>What this run makes of a choice nobody saved.</summary>
+    public UnsavedConsent Unsaved => _unsaved;
+
+    /// <summary>Live but holding what it captures, unsent, until a choice is saved or the cloud edition is chosen.</summary>
+    public bool AwaitingChoice => Enabled && _unsaved == UnsavedConsent.Pending;
+
     /// <summary>The correlation key for this run, minted for the interactive auth commands.</summary>
     public SetupJoin Join { get; }
 
@@ -79,12 +99,15 @@ public sealed class CliTelemetry {
     public SetupFunnel Funnel { get; }
 
     /// <summary>A facade that is off: nothing resolved, nothing minted, nothing captured.</summary>
-    public static CliTelemetry Disabled(TimeProvider time) =>
+    /// <param name="unsaved">The run's policy, for a caller that reports it; one that is off holds nothing for later,
+    /// so a pending run reads as withheld.</param>
+    public static CliTelemetry Disabled(TimeProvider time, UnsavedConsent unsaved = UnsavedConsent.Share) =>
         new(new NullTelemetrySink(), command: "", enabled: false, deviceId: null, orgGroup: null,
-            debug: false, AuthEndpoints.DefaultSignupUrl, new JsonObject(), time);
+            debug: false, AuthEndpoints.DefaultSignupUrl, new JsonObject(), time,
+            unsaved: unsaved == UnsavedConsent.Pending ? UnsavedConsent.Withhold : unsaved);
 
     /// <summary>
-    /// Resolves the opt-out decision, mints the device id and builds the shared property bag,
+    /// Resolves the opt-out decision, mints the device id unless the run waits on a choice, and builds the shared property bag,
     /// returning a facade that is either live or <see cref="Disabled"/>.
     ///
     /// <para>Reaches no console and captures nothing: the one-time privacy notice and
@@ -111,23 +134,20 @@ public sealed class CliTelemetry {
             TelemetryStartup startup, ConfigRoot config, TimeProvider time, Func<ITelemetrySink> sink) {
         try {
             // An app-spawned child: no notice, no device id, no events.
-            if (startup.Suppressed) return Disabled(time);
+            if (startup.Suppressed) return Disabled(time, startup.Unsaved);
 
-            var enabled = TelemetrySettings.Resolve(TelemetryState.PersistedEnabled(config)).Enabled
-                       && CommandEvents.IsReportable(startup.Command);
-            if (!enabled) return Disabled(time);
+            var decision = TelemetrySettings.Resolve(TelemetryState.PersistedEnabled(config), startup.Unsaved);
+            var waiting  = decision.Reason == TelemetrySettings.NotChosenReason;
+            var enabled  = (decision.Enabled || waiting) && CommandEvents.IsReportable(startup.Command);
+            if (!enabled) return Disabled(time, startup.Unsaved);
 
             var version = Version();
 
-            // A device id that can't be persisted still gets an in-memory-only id for this
-            // process, rather than disabling telemetry outright: silently going dark on a disk
-            // hiccup costs more in data quality than a marginally inflated unique-device count in
-            // this rare fallback case.
             var telemetry = new CliTelemetry(
                 sink(),
                 startup.Command,
                 enabled: true,
-                TelemetryDeviceId.GetOrCreate(config) ?? Guid.NewGuid().ToString("N"),
+                waiting ? null : MintDeviceId(config),
                 PostHogPayload.OrgGroup(startup.ServerUrl),
                 startup.Debug,
                 startup.SignupUrl,
@@ -142,7 +162,10 @@ public sealed class CliTelemetry {
                     ["has_server"]    = startup.ServerUrl is not null,
                 },
                 time,
-                desktopConfig: startup.Source == TelemetryStartup.DesktopSource ? config : null);
+                desktopConfig: startup.Source == TelemetryStartup.DesktopSource ? config : null,
+                // Live without waiting: a saved choice, an environment variable or the cloud default decided.
+                unsaved: waiting ? UnsavedConsent.Pending : UnsavedConsent.Share,
+                root: config);
 
             // Minted here rather than in Announce so the key is in the shared bag before ANY event
             // can be captured — cli_first_run included, which is once per device and unrepairable by
@@ -254,10 +277,79 @@ public sealed class CliTelemetry {
 
     public async Task FlushAndClose() {
         try {
-            if (!StillEnabled() || _deviceId is null) return;
+            if (!StillEnabled() || StillWaiting() || DeviceId() is not { } deviceId) return;
 
-            await _sink.FlushAsync(_deviceId, _orgGroup, FlushBudget);
+            await _sink.FlushAsync(deviceId, _orgGroup, FlushBudget);
         } catch { }
+    }
+
+    /// <summary>The id to send under, minted on the first flush after a wait ends.</summary>
+    string? DeviceId() {
+        if (_deviceId is { } id) return id;
+        if (_root is not { } root) return null;
+
+        lock (_deviceIdGate) {
+            if (_deviceId is null) {
+                var minted = MintDeviceId(root);
+                _deviceIdSaved = _config is not null && TelemetryDeviceId.ReadPersisted(_config) == minted;
+                _deviceId      = minted;
+            }
+            return _deviceId;
+        }
+    }
+
+    // An id that cannot be saved still gets an in-memory one rather than turning telemetry off: going dark
+    // on a disk hiccup costs more than a slightly inflated unique-device count.
+    static string MintDeviceId(ConfigRoot config) =>
+        TelemetryDeviceId.GetOrCreate(config) ?? Guid.NewGuid().ToString("N");
+
+    /// <summary>
+    /// The run settled its edition. The cloud edition ends the wait: the notice is due, and what was held goes with
+    /// the next flush. The local edition goes back to waiting, unless a choice was saved or made in this run.
+    /// </summary>
+    public void SettleEdition(bool local) {
+        try {
+            if (!Enabled) return;
+
+            if (local) {
+                if (_choiceOpen) _unsaved = UnsavedConsent.Pending;
+                return;
+            }
+
+            if (_unsaved != UnsavedConsent.Pending) return;
+
+            _unsaved = UnsavedConsent.Share;
+            if (_root is { } root) Announce(root);
+        } catch { }
+    }
+
+    /// <summary>The caller saved an opt-in: the wait ends, and what was held goes with the next flush.</summary>
+    public void OptedIn(ConfigRoot config) {
+        try {
+            _choiceOpen = false;
+            if (!Enabled || _unsaved != UnsavedConsent.Pending) return;
+
+            _unsaved = UnsavedConsent.Share;
+            Announce(config);
+        } catch { }
+    }
+
+    /// <summary>A choice saved since the wait began, by this process or another, ends it.</summary>
+    bool StillWaiting() {
+        if (_unsaved != UnsavedConsent.Pending) return false;
+
+        switch (_root is null ? null : TelemetryState.TryRead(_root)?.Enabled) {
+            case true:
+                _choiceOpen = false;
+                _unsaved    = UnsavedConsent.Share;
+                return false;
+            case false:
+                _choiceOpen = false;
+                DiscardAndDisable();
+                return true;
+            default:
+                return true;
+        }
     }
 
     bool StillEnabled() {
@@ -296,6 +388,7 @@ public sealed class CliTelemetry {
     /// </summary>
     public void DiscardAndDisable() {
         try {
+            _choiceOpen = false;
             _sink.Discard();
             Enabled = false;
         } catch { }
@@ -318,7 +411,7 @@ public sealed class CliTelemetry {
     public void Announce(ConfigRoot config) {
         try {
             // The desktop app's stderr reaches no one; it shows the notice on screen instead.
-            if (!Enabled || _command == "mcp-server" || _desktop) return;
+            if (!Enabled || _command == "mcp-server" || _desktop || _unsaved == UnsavedConsent.Pending) return;
             if (TelemetryState.TryRead(config) is not { NoticeShown: false }) return;
 
             Console.Error.WriteLine(
@@ -337,7 +430,7 @@ public sealed class CliTelemetry {
     /// <summary>Whether the desktop app still owes this device the one-time disclosure.</summary>
     public bool NoticeDue(ConfigRoot config) {
         try {
-            return Enabled && TelemetryState.TryRead(config) is { NoticeShown: false };
+            return Enabled && _unsaved != UnsavedConsent.Pending && TelemetryState.TryRead(config) is { NoticeShown: false };
         } catch {
             return false;
         }
