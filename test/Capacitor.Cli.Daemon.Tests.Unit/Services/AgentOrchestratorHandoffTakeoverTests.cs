@@ -612,6 +612,35 @@ public class AgentOrchestratorHandoffTakeoverTests : IDisposable {
         await Assert.That(f.Server.HandoffBegins).IsEmpty();
     }
 
+    /// <summary>A restart reads the stored <c>running</c> as interrupted, which only the source left in the entry can
+    /// finish.</summary>
+    [Test]
+    public async Task A_takeover_whose_outcome_cannot_be_saved_keeps_its_source() {
+        using var release = new ManualResetEventSlim();
+        var arrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ServeSource(declare: (_, _) => {
+            arrived.TrySetResult();
+            release.Wait(TimeSpan.FromSeconds(30));
+
+            return null;
+        });
+        await using var f = Build();
+        var outcomes = Path.Combine(f.Config.Store.StateDirectory(f.Config.Name), "handoff-outcomes.json");
+
+        try {
+            await f.Orch.HandleLaunchAgentForTest(Launch(f.Repo));
+            await WaitHarness.WaitBoundedAsync(arrived.Task, "the first write");
+            File.Delete(outcomes);
+            Directory.CreateDirectory(outcomes);
+        } finally {
+            release.Set();
+        }
+
+        await Assert.That((await SettledAsync(f)).State).IsEqualTo("done");
+        await Task.Delay(200);
+        await Assert.That(f.Orch.ResumeLedger!.TryRead(AgentId)!.Launch.HandoffSource).IsEqualTo(SourceContext);
+    }
+
     /// <summary>A settled takeover leaves no source in the ledger, so one still there never settled, whether or not
     /// it stored an outcome first.</summary>
     [Test]
