@@ -538,6 +538,26 @@ public class AgentOrchestratorHandoffTakeoverTests : IDisposable {
         await Assert.That(Declares()).IsEqualTo(1);
     }
 
+    /// <summary>A rerun leaves out what the first run attached, so it cannot take primary back from an item the
+    /// successor chose since.</summary>
+    [Test]
+    public async Task A_recovered_successor_does_not_redeclare_what_it_already_holds() {
+        ServeSource(workItems: 2);
+        _server.Given(Request.Create().WithPath($"/api/work-items/session/{SuccessorWire}").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""[{"work_item_id":"w1","label":"#1 — Item 1"}]"""));
+        await using var f = Build(beforeStart: c => PutOutcome(c, HandoffOutcomeDto.Running(Source, "Wire the widget")));
+        WriteResumableEntry(f, SourceContext);
+
+        await ResumeAsync(f);
+        var outcome = await SettledAsync(f);
+
+        await Assert.That(outcome.State).IsEqualTo("done");
+        await Assert.That(Writes().Where(e => e.RequestMessage.Path == Declare)
+                .Select(e => JsonNode.Parse(e.RequestMessage.Body!)!["work_item_id"]!.GetValue<string>()))
+            .IsEquivalentTo(["w2"]);
+        await Assert.That(outcome.Items.Select(i => i.Result)).IsEquivalentTo(["carried", "carried"]);
+    }
+
     /// <summary>A takeover that settled before the restart is not run again.</summary>
     [Test]
     public async Task A_recovered_successor_whose_takeover_settled_takes_over_nothing() {
