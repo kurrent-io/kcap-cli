@@ -18,8 +18,10 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
     /// <summary>The plans endpoint returns at most this many, the most recently touched, with no paging.</summary>
     public const int PlansReadCap = 20;
 
-    /// <param name="skipAttached">Leaves out every work item the current session already holds: a declare makes its
-    /// item primary over one an agent chose, so a rerun must not re-declare what an earlier run attached.</param>
+    /// <param name="skipAttached">Leaves out every work item the current session already holds and every plan it already
+    /// works on: a declare or an adoption makes its item primary or its plan current over one the agent chose, so a
+    /// rerun must not repeat what an earlier run wrote. When the current session's items cannot be read, nothing is
+    /// written.</param>
     public async Task<TakeoverResult> RunAsync(
             HttpClient client, string baseUrl, string previous, string current, TakeoverAdmission admission,
             bool skipAttached = false, CancellationToken ct = default) {
@@ -68,7 +70,7 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
 
         var itemsRead = ReadAsync(client, $"{baseUrl}/api/work-items/session/{escaped}", ct);
         var plansRead = ReadAsync(client, $"{baseUrl}/api/sessions/{escaped}/plans", ct);
-        var heldRead  = skipAttached ? ReadHeldWorkItemsAsync(client, baseUrl, currentWire, ct) : Task.FromResult(new HashSet<string>());
+        var heldRead  = skipAttached ? ReadHeldWorkItemsAsync(client, baseUrl, currentWire, ct) : Task.FromResult<HashSet<string>?>([]);
         var (items, itemsError) = await itemsRead;
         var (plans, plansError) = await plansRead;
         var held = await heldRead;
@@ -78,10 +80,13 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
         if (items?.StatusCode == HttpStatusCode.Unauthorized || plans?.StatusCode == HttpStatusCode.Unauthorized)
             return new TakeoverResult.Unauthorized();
 
+        if (held is null)
+            return new TakeoverResult.Failed($"Reading the work items session {currentWire} holds failed.", TakeoverResult.Failed.SuccessorUnreadable);
+
         // Every entry is listed before the first write, so an interrupted run still names what it never reached.
         var (workItems, declares) = await ReadWorkItemsAsync(items, itemsError, currentWire, ct);
         outcome["work_items"] = workItems;
-        var adoptions = await ReadPlansAsync(baseUrl, plans, plansError, currentWire, outcome, ct);
+        var adoptions = await ReadPlansAsync(baseUrl, plans, plansError, currentWire, skipAttached, outcome, ct);
         outcome["loose_end_claims"] = Unknown();
 
         var state = new RunState();
@@ -180,7 +185,8 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
     }
 
     static async Task<List<(string PlanId, string Url, JsonObject Body, JsonObject Entry)>> ReadPlansAsync(
-            string baseUrl, HttpResponseMessage? read, string? readError, string current, JsonObject outcome, CancellationToken ct) {
+            string baseUrl, HttpResponseMessage? read, string? readError, string current, bool skipJoined, JsonObject outcome,
+            CancellationToken ct) {
         var adoptions = new List<(string, string, JsonObject, JsonObject)>();
         var adopted   = new JsonArray();
         var skipped   = new JsonArray();
@@ -236,13 +242,21 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
             var update = new JsonObject { ["session_id"] = current, ["status"] = status };
             if (task["note"] is JsonValue noteValue && noteValue.TryGetValue(out string? note) && note is not null) update["note"] = note;
 
+            adopted.Add((JsonNode?)entry);
+            if (skipJoined && Joined(plan, current)) {
+                entry["attached"] = true;
+                continue;
+            }
+
             var url = $"{baseUrl}/api/plans/{Uri.EscapeDataString(planId)}/tasks/{Uri.EscapeDataString(taskId)}";
             adoptions.Add((planId, url, update, entry));
-            adopted.Add((JsonNode?)entry);
         }
 
         return adoptions;
     }
+
+    static bool Joined(JsonObject plan, string session) =>
+        plan["sessions"] is JsonArray sessions && sessions.Any(s => WorkContextIds.CanonicalSessionId(Str(s)) == session);
 
     static async Task<JsonObject> AdoptClaimsAsync(
             HttpClient client, string baseUrl, string previous, string current, RunState writes, CancellationToken ct) {
@@ -340,16 +354,15 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
         return false;
     }
 
-    /// <summary>The work items the session holds, or none when they cannot be read: declaring again is what the run
-    /// would do without knowing.</summary>
-    static async Task<HashSet<string>> ReadHeldWorkItemsAsync(HttpClient client, string baseUrl, string sessionWire, CancellationToken ct) {
+    /// <summary>The work items the session holds, or null when they cannot be read.</summary>
+    static async Task<HashSet<string>?> ReadHeldWorkItemsAsync(HttpClient client, string baseUrl, string sessionWire, CancellationToken ct) {
         var (read, _) = await ReadAsync(client, $"{baseUrl}/api/work-items/session/{Uri.EscapeDataString(sessionWire)}", ct);
         using var response = read;
-        if (response is not { IsSuccessStatusCode: true }) return [];
+        if (response is not { IsSuccessStatusCode: true }) return null;
 
         return ParseArray(await response.Content.ReadAsStringAsync(ct)) is { } list
             ? [.. list.Select(i => Str(i?["work_item_id"])).OfType<string>()]
-            : [];
+            : null;
     }
 
     static async Task<(HttpResponseMessage? Response, string? Error)> ReadAsync(HttpClient client, string url, CancellationToken ct) {

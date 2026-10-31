@@ -17,8 +17,8 @@ public class SessionTakeoverTests {
     static string Active(TimeSpan ago) =>
         $$"""{"session_id":"{{Previous}}","status":"active","started_at":"{{DateTimeOffset.UtcNow.AddHours(-5):O}}","last_event_at":"{{DateTimeOffset.UtcNow - ago:O}}"}""";
 
-    static string Plan(string id, bool current, string tasksJson, bool finished = false) =>
-        $$"""{"plan_id":"{{id}}","is_current":{{(current ? "true" : "false")}},"is_complete":true,"progress":{"completed":0,"total":2,"total_known":true,"finished":{{(finished ? "true" : "false")}}},"tasks":{{tasksJson}}}""";
+    static string Plan(string id, bool current, string tasksJson, bool finished = false, string sessions = "[]") =>
+        $$"""{"plan_id":"{{id}}","is_current":{{(current ? "true" : "false")}},"is_complete":true,"progress":{"completed":0,"total":2,"total_known":true,"finished":{{(finished ? "true" : "false")}}},"sessions":{{sessions}},"tasks":{{tasksJson}}}""";
 
     static string Task(string id, int ordinal, string status, string source = "mcp", string? note = null, bool partial = false) =>
         $$"""{"task_id":"{{id}}","ordinal":{{ordinal}},"title":"T{{ordinal}}","status":"{{status}}","source":"{{source}}","note":{{(note is null ? "null" : $"\"{note}\"")}}{{(partial ? ",\"status_partial\":true" : "")}}}""";
@@ -179,16 +179,37 @@ public class SessionTakeoverTests {
             .IsEquivalentTo(new (string?, bool)[] { ("w1", true), ("w2", true) });
     }
 
-    /// <summary>Not knowing what the current session holds, the run declares everything, as it would without the option.</summary>
+    /// <summary>Not knowing what the current session holds, any declare could take primary from an item it chose.</summary>
     [Test]
-    public async Task Skipping_attached_items_declares_everything_when_the_current_session_cannot_be_read() {
-        var routes = Server(Ended(), items: """[{"work_item_id":"w1","label":"One","is_primary":true}]""");
+    public async Task Skipping_attached_items_writes_nothing_when_the_current_session_cannot_be_read() {
+        var routes = Server(Ended(), items: """[{"work_item_id":"w1","label":"One","is_primary":true}]""",
+            plans: $"[{Plan("p1", true, $"[{Task("t1", 1, "in_progress")}]")}]");
         routes.Get($"/api/work-items/session/{Current}", 500, "");
         routes.Post("/api/work-items/declare", 200, "{}");
+        routes.Post("/api/plans/p1/tasks/t1", 200, "{}");
 
-        await Run(routes, skipAttached: true);
+        var r = await Run(routes, skipAttached: true);
 
-        await Assert.That(routes.Posts.Count(p => p.Path == "/api/work-items/declare")).IsEqualTo(1);
+        await Assert.That(r).IsTypeOf<TakeoverResult.Failed>();
+        await Assert.That(((TakeoverResult.Failed)r).Code).IsEqualTo(TakeoverResult.Failed.SuccessorUnreadable);
+        await Assert.That(routes.Posts).IsEmpty();
+    }
+
+    /// <summary>An adoption makes its plan current here, over one the agent switched to after the earlier run.</summary>
+    [Test]
+    public async Task Skipping_attached_items_leaves_out_plans_the_current_session_already_works_on() {
+        var plans = $"[{Plan("p1", false, $"[{Task("t1", 1, "pending")}]", sessions: $"[\"{Previous}\",\"{Current}\"]")},{Plan("p2", true, $"[{Task("t2", 1, "in_progress")}]")}]";
+        var routes = Server(Ended(), plans: plans);
+        routes.Get($"/api/work-items/session/{Current}", 200, "[]");
+        routes.Post("/api/plans/p1/tasks/t1", 200, "{}");
+        routes.Post("/api/plans/p2/tasks/t2", 200, "{}");
+
+        var o = Outcome(await Run(routes, skipAttached: true));
+
+        await Assert.That(routes.Posts.Select(p => p.Path).Where(p => p.StartsWith("/api/plans/", StringComparison.Ordinal)).ToList()).IsEquivalentTo(new[] { "/api/plans/p2/tasks/t2" });
+        await Assert.That(o["current_plan_id"]!.GetValue<string>()).IsEqualTo("p2");
+        await Assert.That(o["plans"]!.AsArray().Select(e => (Str(e!["plan_id"]), e!["attached"]!.GetValue<bool>())))
+            .IsEquivalentTo(new (string?, bool)[] { ("p1", true), ("p2", true) });
     }
 
     static string? Str(JsonNode? node) => node?.GetValue<string>();

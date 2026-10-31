@@ -17,9 +17,10 @@ public abstract record TakeoverResult {
 
     public sealed record Unauthorized : TakeoverResult;
 
-    /// <summary>The previous session could not be read, so nothing was attempted.</summary>
+    /// <summary>The previous session, or what the current one holds, could not be read, so nothing was attempted.</summary>
     public sealed record Failed(string Reason, string Code = Failed.SourceUnreadable) : TakeoverResult {
-        public const string SourceUnreadable = "source_unreadable";
+        public const string SourceUnreadable    = "source_unreadable";
+        public const string SuccessorUnreadable = "successor_unreadable";
     }
 
     /// <summary><paramref name="Unsuccessful"/>: work items, plans or claims were not fully carried over.
