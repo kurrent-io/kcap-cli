@@ -1,6 +1,8 @@
+using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.Pages;
 using Capacitor.Cli.Core.Plans;
@@ -10,12 +12,18 @@ namespace Capacitor.App.Services;
 public sealed class ServerPageSource : IPageSource, IAsyncDisposable {
     readonly AuthenticatedServerReads<PagesClient> _reads;
     readonly LastReads<SessionPagesRead> _last = new(capacity: 32);
+    readonly Func<CancellationToken, Task<string?>>? _viewerName;
 
     public ServerPageSource(ConfigRoot config, ProfileContext? profiles, ProfileOverrides env,
             MachineAuth machine, AuthenticatedServerReads<PagesClient>.ClientFactory? factory = null,
-            LocalRoot? localRoot = null) {
+            LocalRoot? localRoot = null, Func<CancellationToken, Task<string?>>? viewerName = null) {
         _reads = new(config, profiles, env, machine, (http, url) => new PagesClient(http, url), factory, localRoot: localRoot);
+        _viewerName = viewerName;
     }
+
+    /// The name the stored sign-in carries for this profile, which is the one the app shows.
+    public static Func<CancellationToken, Task<string?>> StoredSignInName(TokenStore tokens, ProfileContext? profiles) =>
+        async ct => profiles is null ? null : (await tokens.LoadForProfileAsync(profiles.Name, ct).ConfigureAwait(false))?.GitHubUsername;
 
     public async Task<SessionPagesRead> ReadAsync(string sessionId, CancellationToken ct) {
         var read = await _last.RecordAsync(sessionId, () => _reads.ReadAsync(
@@ -25,6 +33,42 @@ public sealed class ServerPageSource : IPageSource, IAsyncDisposable {
         // A lapsed credential ends what every session's cache may still show.
         if (read.Kind == SessionPlansReadKind.SignedOut) _last.Clear();
         return read;
+    }
+
+    public Task<PageContentRead> ReadContentAsync(string artefactId, int? version, CancellationToken ct) =>
+        Uncached((channel, token) => channel.ReadContentAsync(artefactId, version, token), read => read is PageContentRead.SignedOut,
+            new PageContentRead.SignedOut(), new PageContentRead.Unreachable(), ct);
+
+    public Task<PageBridgeReply> SubmitAsync(string artefactId, int version, JsonElement payload, CancellationToken ct) =>
+        Bridge((channel, token) => channel.SubmitAsync(artefactId, version, payload, token), ct);
+
+    public Task<PageBridgeReply> MineAsync(string artefactId, int version, CancellationToken ct) =>
+        Bridge((channel, token) => channel.MineAsync(artefactId, version, token), ct);
+
+    public Task<PageBridgeReply> ResultsAsync(string artefactId, int version, CancellationToken ct) =>
+        Bridge((channel, token) => channel.ResultsAsync(artefactId, version, token), ct);
+
+    public Task<PageResultsAccess> ResultsAccessAsync(string artefactId, ArtefactDto page, CancellationToken ct) =>
+        Uncached((channel, token) => channel.ResultsAccessAsync(artefactId, page, token), access => access == PageResultsAccess.SignedOut,
+            PageResultsAccess.SignedOut, PageResultsAccess.Unknown, ct);
+
+    public async Task<string> ViewerNameAsync(CancellationToken ct) {
+        if (_viewerName is null) return "";
+        try {
+            return await _viewerName(ct).ConfigureAwait(false) ?? "";
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            Console.Error.WriteLine($"kcap: could not read the signed-in name: {ex.Message}");
+            return "";
+        }
+    }
+
+    Task<PageBridgeReply> Bridge(Func<PagesClient, CancellationToken, Task<PageBridgeReply>> call, CancellationToken ct) =>
+        Uncached(call, reply => reply.Status == 401, new PageBridgeReply(401, null), new PageBridgeReply(0, null), ct);
+
+    async Task<T> Uncached<T>(Func<PagesClient, CancellationToken, Task<T>> call, Func<T, bool> signedOut, T noAuth, T disposed, CancellationToken ct) {
+        var result = await _reads.ReadAsync(call, signedOut, noAuth, disposed, ct).ConfigureAwait(false);
+        if (signedOut(result)) _last.Clear();
+        return result;
     }
 
     public SessionPagesRead? Cached(string sessionId) => _last.Get(sessionId);

@@ -107,6 +107,8 @@ When the agent declares a plan through the `kcap-plans` tools, the work-context 
 
 The **Pages** tab appears in the centre switch when the session has a plan, spec or design document, declared or reconstructed from the transcript, or a published page; a remote session gets the same tab in its own switch. It lists them on the left and renders the chosen one on the right as the agent declared or published it, with a chip when the server holds only a truncated body or none; for a local session the document reader says when the working copy has moved on from the declared text.
 
+Pages linked to the session (see [Pages](#pages)) are listed in that tab too. On macOS, choosing one opens it in an in-app viewer, where an interactive page can be answered without leaving the app; on Windows and Linux it opens in your system browser for now. A link inside a page asks before it opens the browser, and every viewer keeps **Open in browser**.
+
 Calls to the `kcap-*` MCP tools read in plain words in the chat ("Attached work item · AI-3084", "Saved memory · …", "Searched sessions · …") instead of the raw tool name, grouped and folded as other tool calls are. A call that produced something you can open becomes a card once its result lands: a published page carries Copy link and Open, a declared document carries Open into the Pages tab. Tools from other MCP servers read as "Server · tool name" with their first argument.
 
 The app must run from the Applications folder — launched from the disk image or from Downloads it offers to move itself there first, because the terminal link and the background service point at its location.
