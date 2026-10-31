@@ -371,6 +371,9 @@ internal sealed class CursorImportSource : IImportSource {
             int? serverLastLine;
             try {
                 serverLastLine = await FetchServerLastLineAsync(ctx.HttpClient, ctx.BaseUrl, s.SessionId, ct);
+            } catch (SessionDeletedException) {
+                results.Add(MakeClassification(s, meta, ImportCommand.ClassificationStatus.Deleted, totalLines: nonBlankCount));
+                continue;
             } catch {
                 results.Add(MakeClassification(s, meta, ImportCommand.ClassificationStatus.ProbeError, totalLines: nonBlankCount,
                                                probeErrorReason: "watermark probe failed"));
@@ -1022,6 +1025,7 @@ internal sealed class CursorImportSource : IImportSource {
             : $"{baseUrl}/api/sessions/{sessionId}/last-line?agentId={Uri.EscapeDataString(agentId)}";
         using var resp = await http.GetWithRetryAsync(url, _time, ct: ct);
 
+        SessionDeletedException.ThrowIfDeleted(resp, sessionId);
         if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
         // Construct via the (string?, Exception?, HttpStatusCode?) overload so .StatusCode is
         // inspectable by FetchServerLastLineWithCappedRetryAsync's status check, rather than

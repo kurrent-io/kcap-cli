@@ -243,6 +243,7 @@ internal sealed class MuseImportSource(MusePaths paths, WatcherPaths watchers, T
 
             int? serverLastLine;
             try { serverLastLine = await FetchServerLastLineAsync(ctx.HttpClient, ctx.BaseUrl, s.SessionId, ct); }
+            catch (SessionDeletedException) { results.Add(Classify(s, meta, ImportCommand.ClassificationStatus.Deleted, nonBlank, lastIdx)); continue; }
             catch { results.Add(Classify(s, meta, ImportCommand.ClassificationStatus.ProbeError, nonBlank, lastIdx, "watermark probe failed")); continue; }
 
             meta.LastTimestamp = endedAt ?? TryGetLastWriteUtc(log);
@@ -425,6 +426,7 @@ internal sealed class MuseImportSource(MusePaths paths, WatcherPaths watchers, T
 
     async Task<int?> FetchServerLastLineAsync(HttpClient http, string baseUrl, string sessionId, CancellationToken ct) {
         using var resp = await http.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/last-line", time, ct: ct);
+        SessionDeletedException.ThrowIfDeleted(resp, sessionId);
         if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
         if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"watermark probe returned {(int)resp.StatusCode}");
 

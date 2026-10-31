@@ -626,6 +626,23 @@ public class KcapCliTests {
     }
 
     [Test]
+    public async Task ImportAsync_names_each_repository_and_folder_in_one_selection() {
+        var runner      = new FakeProcessRunner();
+        var cli         = MakeCli(runner);
+        var withRepos   = new ImportRequest(ImportScopeChoice.Repo, null, [], ["a/one", "b/two"], Folders: ["/w/scratch"]);
+        var foldersOnly = new ImportRequest(ImportScopeChoice.Repo, null, [], [], Folders: ["/w/scratch"]);
+
+        await cli.ImportAsync(withRepos, _ => { }, CancellationToken.None);
+        var both = runner.SeenArgs;
+        await cli.ImportAsync(foldersOnly, _ => { }, CancellationToken.None);
+
+        await Assert.That(both).IsEquivalentTo(
+            ["import", "--repo", "a/one", "--repo", "b/two", "--folder", "/w/scratch", "--yes"], CollectionOrdering.Matching);
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(
+            ["import", "--folder", "/w/scratch", "--yes"], CollectionOrdering.Matching);
+    }
+
+    [Test]
     public async Task ImportAsync_env_overlay_carries_profile_and_no_telemetry_but_not_mutation_keys() {
         var runner = new FakeProcessRunner();
         var cli = MakeCli(runner);

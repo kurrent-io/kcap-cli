@@ -27,14 +27,32 @@ public class HistoryStepViewModelTests {
         Repo("solo", "notes", 3, 3, 0, 25),
     ], unmatched, [new(D30, 6), new(D90, 27), new(null, 53)]);
 
+    /// One harness's share of a repository, its windows in the report's order.
+    static ImportDiscoveryVendor Share(string vendor, int all, int d90, int d30, int day) =>
+        new(vendor, all, new DateTimeOffset(2026, 9, day, 9, 0, 0, TimeSpan.Zero), [new(D30, d30), new(D90, d90), new(null, all)]);
+
+    static ImportDiscoveryRepo Split(string owner, string name, params ImportDiscoveryVendor[] shares) =>
+        new(owner, name, shares.Sum(s => s.Sessions), shares.Max(s => s.LastSessionAt),
+            [.. shares[0].Windows!.Select((w, i) => new ImportDiscoveryWindow(w.Since, shares.Sum(s => s.Windows![i].Sessions)))],
+            shares);
+
+    /// A machine whose Claude Code and Codex have written history and whose Pi has not: what a setup that
+    /// turns recording on for Pi alone finds.
+    static ImportDiscoveryReport OlderClaudeAndCodexHistory() => new([
+        Split("acme", "web", Share("claude", 30, 15, 4, 30), Share("codex", 10, 5, 1, 28)),
+        Split("acme", "api", Share("codex", 6, 2, 0, 20)),
+        Split("solo", "notes", Share("claude", 3, 3, 0, 25)),
+    ], 0, [new(D30, 5), new(D90, 25), new(null, 49)]);
+
     sealed class Harness {
         public readonly FakeKcapCli Cli = new();
-        public IReadOnlyList<HarnessId> Scope = [HarnessId.Claude, HarnessId.Cursor];
+        public bool Local;
         public readonly HistoryStepViewModel Vm;
 
         public Harness(ImportDiscoveryReport? report, bool onLocalPath = false) {
             Cli.DiscoverBehavior = _ => Task.FromResult(report);
-            Vm = new HistoryStepViewModel(Cli, () => Scope, action => action(), "test-mac", TimeProvider.System, () => onLocalPath);
+            Local = onLocalPath;
+            Vm = new HistoryStepViewModel(Cli, action => action(), "test-mac", TimeProvider.System, () => Local);
         }
 
         public async Task EnterAsync() {
@@ -45,15 +63,142 @@ public class HistoryStepViewModelTests {
         public HistoryRepoRow Repo(string slug) => Vm.Groups.SelectMany(g => g.Repos).Single(r => r.Slug == slug);
     }
 
+    /// No vendor flag, so the CLI reads every harness on the machine; coming back to the page keeps
+    /// what it found and the choices made on it.
     [Test]
-    public async Task Discovery_asks_for_the_harnesses_in_scope_and_groups_owners_by_recent_activity() {
+    public async Task Discovery_asks_every_harness_once_and_groups_owners_by_recent_activity() {
+        var h = new Harness(Report());
+        await h.EnterAsync();
+        await h.EnterAsync();
+
+        await Assert.That(h.Cli.DiscoverCalls.Single()).IsEmpty();
+        await Assert.That(h.Vm.State).IsEqualTo(HistoryState.Repos);
+        await Assert.That(h.Vm.Groups.Select(g => g.Owner)).IsEquivalentTo(["acme", "solo"], CollectionOrdering.Matching);
+    }
+
+    /// A Pi-only setup still offers the Claude Code and Codex history already on disk, each harness its
+    /// own checked choice, and importing it touches neither harness's recording or tools.
+    [Test]
+    public async Task A_new_Pi_setup_is_offered_older_Claude_and_Codex_history() {
+        var h = new Harness(OlderClaudeAndCodexHistory());
+        await h.EnterAsync();
+
+        var offered = h.Vm.Sources.Select(s => (s.Label, s.Sessions, s.IsSelected)).ToList();
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await h.Vm.Run!.Completion;
+
+        await Assert.That(offered).IsEquivalentTo([("Claude Code", 33, true), ("Codex", 16, true)], CollectionOrdering.Matching);
+        await Assert.That(h.Vm.SourcesVisible).IsTrue();
+        await Assert.That(h.Vm.FoundLine).IsEqualTo("Found 49 sessions in 3 repositories on test-mac");
+        await Assert.That(h.Vm.TitlingOffered).IsTrue();
+        await Assert.That(h.Cli.ImportRequests.Single().VendorFlags).IsEquivalentTo(["--claude", "--codex"], CollectionOrdering.Matching);
+        await Assert.That(h.Cli.ImportRequests.Single().Repos!).IsEquivalentTo(["acme/web", "acme/api", "solo/notes"], CollectionOrdering.Matching);
+        await Assert.That(h.Cli.PluginInstallCallCount).IsEqualTo(0);
+        await Assert.That(h.Cli.AccountsCalls).IsEmpty();
+    }
+
+    /// An unchecked harness leaves the import and every count; a repository only it wrote to leaves the
+    /// list, and the ones that stay keep the choices made on them.
+    [Test]
+    public async Task An_unchecked_harness_is_neither_counted_nor_imported() {
+        var h = new Harness(OlderClaudeAndCodexHistory());
+        await h.EnterAsync();
+        h.Repo("solo/notes").OnlyMe = true;
+
+        h.Vm.Sources.Single(s => s.Id == HarnessId.Codex).IsSelected = false;
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await h.Vm.Run!.Completion;
+
+        await Assert.That(h.Vm.Groups.SelectMany(g => g.Repos).Select(r => r.Slug)).IsEquivalentTo(["acme/web", "solo/notes"], CollectionOrdering.Matching);
+        await Assert.That(h.Repo("acme/web").Sessions).IsEqualTo(30);
+        await Assert.That(h.Repo("solo/notes").Level).IsEqualTo(ImportLevel.OnlyMe);
+        await Assert.That(h.Vm.Windows.Select(w => w.CountLabel ?? "").ToList())
+            .IsEquivalentTo(["4 sessions", "18 sessions", "33 sessions"], CollectionOrdering.Matching);
+        await Assert.That(h.Vm.FoundLine).IsEqualTo("Found 49 sessions in 3 repositories on test-mac");
+        await Assert.That(h.Cli.ImportRequests.All(r => r.VendorFlags.SequenceEqual(["--claude"]))).IsTrue();
+        await Assert.That(h.Cli.ImportRequests.SelectMany(r => r.Repos!)).IsEquivalentTo(["acme/web", "solo/notes"]);
+    }
+
+    [Test]
+    public async Task With_every_harness_unchecked_nothing_imports() {
+        var h = new Harness(OlderClaudeAndCodexHistory());
+        await h.EnterAsync();
+
+        foreach (var source in h.Vm.Sources) source.IsSelected = false;
+        var left = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+
+        await Assert.That(left).IsTrue();
+        await Assert.That(h.Vm.HasRepos).IsTrue();
+        await Assert.That(h.Vm.SourcesVisible).IsTrue();
+        await Assert.That(h.Vm.ImportLine).IsEqualTo("Nothing is selected to import");
+        await Assert.That(h.Vm.NextLabel).IsEqualTo("Continue");
+        await Assert.That(h.Vm.TitlingOffered).IsFalse();
+        await Assert.That(h.Cli.ImportCallCount).IsEqualTo(0);
+    }
+
+    /// A folder pass carries no harness of its own, so with no harness left it would read every one.
+    [Test]
+    public async Task With_every_harness_unchecked_a_checked_folder_imports_nothing() {
+        var h = new Harness(OlderClaudeAndCodexHistory() with {
+            UnmatchedSessions = 3, UnmatchedFolders = [new("/w/scratch", 3, [new(D30, 1), new(D90, 2), new(null, 3)])],
+        });
+        await h.EnterAsync();
+
+        h.Vm.Folders.Single().Included = true;
+        foreach (var source in h.Vm.Sources) source.IsSelected = false;
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+
+        await Assert.That(h.Vm.SelectedFolderCount).IsEqualTo(0);
+        await Assert.That(h.Vm.ImportLine).IsEqualTo("Nothing is selected to import");
+        await Assert.That(h.Vm.NextLabel).IsEqualTo("Continue");
+        await Assert.That(h.Cli.ImportCallCount).IsEqualTo(0);
+    }
+
+    /// A repository that leaves the list with its harness comes back with the choices made on it.
+    [Test]
+    public async Task A_repository_keeps_its_choices_when_its_harness_is_unchecked_and_checked_again() {
+        var h = new Harness(OlderClaudeAndCodexHistory());
+        await h.EnterAsync();
+        h.Repo("solo/notes").OnlyMe = true;
+        h.Repo("acme/api").Included = false;
+
+        foreach (var source in h.Vm.Sources) source.IsSelected = false;
+        foreach (var source in h.Vm.Sources) source.IsSelected = true;
+
+        await Assert.That(h.Repo("solo/notes").Level).IsEqualTo(ImportLevel.OnlyMe);
+        await Assert.That(h.Repo("acme/api").Level).IsEqualTo(ImportLevel.Skip);
+        await Assert.That(h.Repo("acme/web").Level).IsEqualTo(ImportLevel.Shared);
+    }
+
+    /// A report that does not split repositories by harness offers no harness choice and imports with no
+    /// vendor flag, the same every-harness scope it counted.
+    [Test]
+    public async Task A_report_without_harness_shares_imports_what_it_counted() {
         var h = new Harness(Report());
         await h.EnterAsync();
 
-        await Assert.That(h.Cli.DiscoverCalls.Single()).IsEquivalentTo(["--claude", "--cursor"], CollectionOrdering.Matching);
-        await Assert.That(h.Vm.State).IsEqualTo(HistoryState.Repos);
-        await Assert.That(h.Vm.Groups.Select(g => g.Owner)).IsEquivalentTo(["acme", "solo"], CollectionOrdering.Matching);
-        await Assert.That(h.Vm.FromLabels).IsEquivalentTo(["Claude Code", "Cursor"], CollectionOrdering.Matching);
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await h.Vm.Run!.Completion;
+
+        await Assert.That(h.Vm.Sources).IsEmpty();
+        await Assert.That(h.Vm.SourcesVisible).IsFalse();
+        await Assert.That(h.Cli.ImportRequests.Single().VendorFlags).IsEmpty();
+    }
+
+    /// The CLI reports a harness that has never run, or a machine with no harness at all, as an empty
+    /// report: no history, never unreadable.
+    [Test]
+    public async Task An_empty_machine_has_no_history_to_import() {
+        var h = new Harness(new ImportDiscoveryReport([], 0, [new(D30, 0), new(D90, 0), new(null, 0)]));
+        await h.EnterAsync();
+
+        var left = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+
+        await Assert.That(h.Vm.State).IsEqualTo(HistoryState.NoHistory);
+        await Assert.That(h.Vm.EmptyMessage).IsEqualTo("No history on test-mac to import. New sessions will be stored as they happen.");
+        await Assert.That(h.Vm.Sources).IsEmpty();
+        await Assert.That(left).IsTrue();
+        await Assert.That(h.Cli.ImportCallCount).IsEqualTo(0);
     }
 
     [Test]
@@ -302,6 +447,180 @@ public class HistoryStepViewModelTests {
         await Assert.That(h.Vm.Run!.Expected).IsEqualTo(0);
     }
 
+    /// The same three repositories, plus four sessions that matched none: three in a folder discovery can
+    /// name and one with no folder recorded.
+    static ImportDiscoveryReport ReportWithFolders() => Report(unmatched: 4) with {
+        UnmatchedFolders = [new("/w/scratch", 3, [new(D30, 1), new(D90, 2), new(null, 3)]), new(null, 1)],
+    };
+
+    /// Every repository starts checked, so an untouched page imports every repository and no folder
+    /// outside one, which waits unchecked under Customize.
+    [Test]
+    public async Task By_default_every_repository_imports_and_no_folder_outside_one_does() {
+        var h = new Harness(ReportWithFolders());
+        await h.EnterAsync();
+        var hiddenUntilCustomizing = h.Vm.FoldersVisible;
+
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await h.Vm.Run!.Completion;
+
+        await Assert.That(h.Vm.Groups.SelectMany(g => g.Repos).All(r => r.Included)).IsTrue();
+        await Assert.That(h.Vm.Folders.Select(f => (f.Path, f.Included))).IsEquivalentTo([("/w/scratch", false)]);
+        await Assert.That(hiddenUntilCustomizing).IsFalse();
+        await Assert.That(h.Vm.ImportLine).IsEqualTo("kcap imports 27 sessions from all 3 repositories, covering the last 90 days");
+        await Assert.That(h.Cli.ImportRequests.Single().Repos!).IsEquivalentTo(["acme/web", "acme/api", "solo/notes"], CollectionOrdering.Matching);
+        await Assert.That(h.Cli.ImportRequests.Single().Folders).IsNull();
+    }
+
+    /// Unchecking a repository leaves it out of the import and nothing else: the request simply does not
+    /// name it, and the page says the choice is about this import only.
+    [Test]
+    public async Task An_unchecked_repository_is_left_out_of_this_import_only() {
+        var h = new Harness(Report());
+        await h.EnterAsync();
+
+        h.Repo("acme/api").Included = false;
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await h.Vm.Run!.Completion;
+
+        await Assert.That(h.Cli.ImportRequests.Single().Repos!).IsEquivalentTo(["acme/web", "solo/notes"], CollectionOrdering.Matching);
+        await Assert.That(HistoryStepViewModel.SelectionNote).Contains("this import only");
+        await Assert.That(HistoryStepViewModel.SelectionNote).Contains("excluded_repos");
+    }
+
+    /// A checked folder imports beside the repositories, privately by default, and every count and label
+    /// takes it in.
+    [Test]
+    public async Task A_checked_folder_imports_privately_beside_the_repositories() {
+        var h = new Harness(ReportWithFolders());
+        await h.EnterAsync();
+        h.Vm.ToggleCustomizeCommand.Execute().Subscribe();
+
+        h.Vm.Folders.Single().Included = true;
+        var label = h.Vm.NextLabel;
+        var line  = h.Vm.ImportLine;
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await h.Vm.Run!.Completion;
+
+        var onlyMe = h.Cli.ImportRequests.Single(r => r.Private);
+        var shared = h.Cli.ImportRequests.Single(r => !r.Private);
+        await Assert.That(h.Vm.FoldersVisible).IsTrue();
+        await Assert.That(label).IsEqualTo("Import 4 projects");
+        await Assert.That(line).IsEqualTo("kcap imports 29 sessions from all 3 repositories and 1 folder, covering the last 90 days");
+        await Assert.That(onlyMe.Repos!).IsEmpty();
+        await Assert.That(onlyMe.Folders!).IsEquivalentTo(["/w/scratch"]);
+        await Assert.That(shared.Folders).IsNull();
+        await Assert.That(h.Vm.Run!.Expected).IsEqualTo(29);
+    }
+
+    /// A folder alone is enough to import, and on the cloud its Only me box can widen it like a repository's.
+    [Test]
+    public async Task A_folder_alone_imports_and_can_follow_the_privacy_setting() {
+        var h = new Harness(ReportWithFolders());
+        await h.EnterAsync();
+
+        foreach (var repo in h.Vm.Groups.SelectMany(g => g.Repos)) repo.Included = false;
+        var folder = h.Vm.Folders.Single();
+        folder.Included = true;
+        folder.OnlyMe   = false;
+        var label = h.Vm.NextLabel;
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await h.Vm.Run!.Completion;
+
+        await Assert.That(label).IsEqualTo("Import 1 project");
+        await Assert.That(h.Vm.SharingLine).IsNotNull();
+        var request = h.Cli.ImportRequests.Single();
+        await Assert.That(request.Private).IsFalse();
+        await Assert.That(request.Folders!).IsEquivalentTo(["/w/scratch"]);
+    }
+
+    /// The local edition keeps a checked folder private, as it does every repository.
+    [Test]
+    public async Task On_the_local_path_a_folder_stays_private() {
+        var h = new Harness(ReportWithFolders(), onLocalPath: true);
+        await h.EnterAsync();
+
+        var folder = h.Vm.Folders.Single();
+        folder.Included = true;
+        folder.OnlyMe   = false;
+
+        await Assert.That(folder.Level).IsEqualTo(ImportLevel.OnlyMe);
+        await Assert.That(h.Vm.UnmatchedNote!).Contains("check their folders under Customize");
+    }
+
+    /// A folder the report does not split by harness may hold one the page offers no checkbox for, so
+    /// while harnesses are offered its count is unknown rather than a guess.
+    [Test]
+    public async Task An_unsplit_folder_shows_no_count_while_harnesses_are_offered() {
+        var h = new Harness(OlderClaudeAndCodexHistory() with {
+            UnmatchedSessions = 3, UnmatchedFolders = [new("/w/scratch", 3, [new(D30, 1), new(D90, 2), new(null, 3)])],
+        });
+        await h.EnterAsync();
+        var counted = h.Vm.Windows.Select(w => w.CountLabel).ToList();
+
+        h.Vm.Folders.Single().Included = true;
+
+        await Assert.That(counted.All(c => c is not null)).IsTrue();
+        await Assert.That(h.Vm.Windows.All(w => w.CountLabel is null)).IsTrue();
+    }
+
+    static ImportDiscoveryFolder SplitFolder(string path, params ImportDiscoveryVendor[] shares) =>
+        new(path, shares.Sum(s => s.Sessions),
+            [.. shares[0].Windows!.Select((w, i) => new ImportDiscoveryWindow(w.Since, shares.Sum(s => s.Windows![i].Sessions)))],
+            shares);
+
+    /// The import names only the offered harnesses' flags, so a folder's Pi sessions, with no Pi checkbox
+    /// to leave them out by, are neither offered nor counted, and a folder only Pi wrote to is not listed.
+    [Test]
+    public async Task A_folder_harness_with_no_checkbox_is_neither_counted_nor_imported() {
+        var h = new Harness(OlderClaudeAndCodexHistory() with {
+            UnmatchedSessions = 7,
+            UnmatchedFolders  = [
+                SplitFolder("/w/scratch", Share("claude", 2, 2, 1, 29), Share("pi", 3, 2, 1, 28)),
+                SplitFolder("/w/pi-only", Share("pi", 2, 1, 0, 27)),
+            ],
+        });
+        await h.EnterAsync();
+
+        var folder = h.Vm.Folders.Single();
+        folder.Included = true;
+        var counts = h.Vm.Windows.Select(w => w.CountLabel ?? "").ToList();
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await h.Vm.Run!.Completion;
+
+        await Assert.That(h.Vm.Sources.Select(s => s.Id)).IsEquivalentTo([HarnessId.Claude, HarnessId.Codex], CollectionOrdering.Matching);
+        await Assert.That((folder.Path, folder.Sessions)).IsEqualTo(("/w/scratch", 2));
+        await Assert.That(counts).IsEquivalentTo(["6 sessions", "27 sessions", "51 sessions"], CollectionOrdering.Matching);
+        await Assert.That(h.Vm.Run!.Expected).IsEqualTo(27);
+        await Assert.That(h.Cli.ImportRequests.All(r => r.VendorFlags.SequenceEqual(["--claude", "--codex"]))).IsTrue();
+        await Assert.That(h.Cli.ImportRequests.Single(r => r.Private).Folders!).IsEquivalentTo(["/w/scratch"]);
+    }
+
+    /// A checked folder counts only its checked harnesses' sessions, and one that only an unchecked
+    /// harness wrote to leaves the import, as such a repository does.
+    [Test]
+    public async Task A_folder_follows_the_checked_harnesses() {
+        var h = new Harness(OlderClaudeAndCodexHistory() with {
+            UnmatchedSessions = 6,
+            UnmatchedFolders  = [
+                SplitFolder("/w/mixed", Share("claude", 2, 2, 1, 29), Share("codex", 1, 1, 0, 28)),
+                SplitFolder("/w/codex-only", Share("codex", 3, 2, 1, 27)),
+            ],
+        });
+        await h.EnterAsync();
+
+        foreach (var folder in h.Vm.Folders) folder.Included = true;
+        h.Vm.Sources.Single(s => s.Id == HarnessId.Codex).IsSelected = false;
+        var counts = h.Vm.Windows.Select(w => w.CountLabel ?? "").ToList();
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await h.Vm.Run!.Completion;
+
+        await Assert.That(h.Vm.SelectedFolderCount).IsEqualTo(1);
+        await Assert.That(counts).IsEquivalentTo(["5 sessions", "20 sessions", "35 sessions"], CollectionOrdering.Matching);
+        await Assert.That(h.Cli.ImportRequests.All(r => r.VendorFlags.SequenceEqual(["--claude"]))).IsTrue();
+        await Assert.That(h.Cli.ImportRequests.Single(r => r.Private).Folders!).IsEquivalentTo(["/w/mixed"]);
+    }
+
     [Test]
     public async Task Not_now_imports_nothing() {
         var h = new Harness(Report());
@@ -311,17 +630,6 @@ public class HistoryStepViewModelTests {
 
         await Assert.That(h.Cli.ImportCallCount).IsEqualTo(0);
         await Assert.That(h.Vm.Run).IsNull();
-    }
-
-    [Test]
-    public async Task No_harness_recording_has_nothing_to_discover() {
-        var h = new Harness(Report()) { Scope = [] };
-        await h.EnterAsync();
-
-        await Assert.That(h.Vm.State).IsEqualTo(HistoryState.NoHarness);
-        await Assert.That(h.Cli.DiscoverCalls).IsEmpty();
-        await Assert.That(h.Vm.CanContinue).IsTrue();
-        await Assert.That(h.Vm.Skippable).IsFalse();
     }
 
     [Test]
@@ -338,9 +646,6 @@ public class HistoryStepViewModelTests {
     /// Every line the local path can show, across each empty arm and the repository list.
     static async Task<List<string?>> LocalLinesAsync(bool onLocalPath) {
         var lines = new List<string?>();
-        var none = new Harness(Report(), onLocalPath) { Scope = [] };
-        await none.EnterAsync();
-        lines.Add(none.Vm.EmptyMessage);
         foreach (var report in new[] { new ImportDiscoveryReport([], 12, []), null }) {
             var h = new Harness(report, onLocalPath);
             await h.EnterAsync();
@@ -433,20 +738,21 @@ public class HistoryStepViewModelTests {
     }
 
     [Test]
-    public async Task Removing_the_scope_cancels_old_discovery_and_drops_its_result() {
+    public async Task Switching_edition_cancels_old_discovery_and_drops_its_result() {
         var h = new Harness(Report());
         var gate = new TaskCompletionSource<ImportDiscoveryReport?>();
         h.Cli.DiscoverBehavior = _ => gate.Task;
         await h.Vm.OnEnterAsync(CancellationToken.None);
         var oldDiscovery = h.Vm.Discovery;
-        h.Scope = [];
-        await h.Vm.OnEnterAsync(CancellationToken.None);
+        h.Local = true;
+        h.Cli.DiscoverBehavior = _ => Task.FromResult<ImportDiscoveryReport?>(new([], 0, []));
+        await h.EnterAsync();
         gate.SetResult(Report());
         await oldDiscovery;
-        await Assert.That(h.Vm.State).IsEqualTo(HistoryState.NoHarness);
+        await Assert.That(h.Vm.State).IsEqualTo(HistoryState.NoHistory);
         await Assert.That(h.Vm.Groups).IsEmpty();
-        await Assert.That(h.Vm.Windows).IsEmpty();
         await Assert.That(h.Vm.SelectedCount).IsEqualTo(0);
+        await Assert.That(h.Cli.DiscoverCalls.Count).IsEqualTo(2);
     }
 
     [Test]
@@ -464,11 +770,61 @@ public class HistoryStepViewModelTests {
     }
 
     [Test]
-    public async Task Titling_is_offered_only_for_a_harness_that_titles() {
-        var h = new Harness(Report()) { Scope = [HarnessId.Cursor] };
+    public async Task Titling_is_offered_only_while_a_harness_that_titles_is_imported_from() {
+        var h = new Harness(new ImportDiscoveryReport(
+            [Split("acme", "web", Share("claude", 4, 4, 1, 30), Share("cursor", 2, 2, 0, 29))], 0, []));
         await h.EnterAsync();
+        var both = h.Vm.TitlingOffered;
 
+        h.Vm.Sources.Single(s => s.Id == HarnessId.Claude).IsSelected = false;
+
+        await Assert.That(both).IsTrue();
         await Assert.That(h.Vm.TitlingOffered).IsFalse();
+    }
+
+    /// Naming sends excerpts to the agent's model provider, so the box starts clear and an import the user
+    /// did not turn it on for passes --skip-title; ticking it is the only way to name.
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Naming_is_off_until_the_user_turns_it_on(bool local) {
+        var untouched = new Harness(Report(), onLocalPath: local);
+        await untouched.EnterAsync();
+        var offered = untouched.Vm.TitlingOffered;
+        var ticked  = untouched.Vm.TitleLocally;
+        await untouched.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await untouched.Vm.Run!.Completion;
+
+        var opted = new Harness(Report(), onLocalPath: local);
+        await opted.EnterAsync();
+        opted.Vm.TitleLocally = true;
+        await opted.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await opted.Vm.Run!.Completion;
+
+        await Assert.That(offered).IsTrue();
+        await Assert.That(ticked).IsFalse();
+        await Assert.That(untouched.Cli.ImportRequests).IsNotEmpty();
+        await Assert.That(opted.Cli.ImportRequests).IsNotEmpty();
+        await Assert.That(untouched.Cli.ImportRequests.All(r => r.SkipTitle)).IsTrue();
+        await Assert.That(opted.Cli.ImportRequests.All(r => !r.SkipTitle)).IsTrue();
+    }
+
+    /// "Everything stays on this machine" is true of a local import only while naming is off; turning it on
+    /// changes the promise to say where the excerpts go.
+    [Test]
+    public async Task The_local_lede_promises_nothing_leaves_only_while_naming_is_off() {
+        var h = new Harness(Report(), onLocalPath: true);
+        await h.EnterAsync();
+        var off    = h.Vm.Lede;
+        var raised = new List<string?>();
+        h.Vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        h.Vm.TitleLocally = true;
+
+        await Assert.That(off).Contains("Everything stays on this machine.");
+        await Assert.That(h.Vm.Lede).DoesNotContain("Everything stays on this machine.");
+        await Assert.That(h.Vm.Lede).Contains("Naming sends excerpts to your agent's model provider");
+        await Assert.That(raised).Contains(nameof(HistoryStepViewModel.Lede));
     }
 
     /// The checkboxes wait behind Customize; opening it draws an Import and an Only me box per owner and

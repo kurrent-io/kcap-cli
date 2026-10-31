@@ -95,6 +95,7 @@ internal sealed class GrokImportSource(GrokPaths paths, Func<string, Task<Reposi
 
             int? serverLastLine;
             try { serverLastLine = await LastLineAsync(ctx.HttpClient, ctx.BaseUrl, s.SessionId, agentId: null, ct); }
+            catch (SessionDeletedException) { results.Add(Classify(s, meta, ImportCommand.ClassificationStatus.Deleted, nonBlank)); continue; }
             catch { results.Add(Classify(s, meta, ImportCommand.ClassificationStatus.ProbeError, nonBlank, "watermark probe failed")); continue; }
 
             var status       = ImportCommand.ClassificationStatus.New;
@@ -304,6 +305,7 @@ internal sealed class GrokImportSource(GrokPaths paths, Func<string, Task<Reposi
     async Task<int?> LastLineAsync(HttpClient http, string baseUrl, string sessionId, string? agentId, CancellationToken ct) {
         var url = $"{baseUrl}/api/sessions/{sessionId}/last-line" + (agentId is not null ? $"?agentId={agentId}" : "");
         using var resp = await http.GetWithRetryAsync(url, time, ct: ct);
+        SessionDeletedException.ThrowIfDeleted(resp, sessionId);
         if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
         if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"watermark probe returned {(int)resp.StatusCode}");
 

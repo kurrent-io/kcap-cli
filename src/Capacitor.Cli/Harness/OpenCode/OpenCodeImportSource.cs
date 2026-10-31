@@ -170,6 +170,9 @@ internal sealed class OpenCodeImportSource : IImportSource {
                 hwm = await FetchServerLastLineAsync(ctx.HttpClient, ctx.BaseUrl, s.SessionId, agentId: null, ct);
             } catch (OperationCanceledException) {
                 throw; // cancellation is not a probe error
+            } catch (SessionDeletedException) {
+                results.Add(Make(s, meta, ImportCommand.ClassificationStatus.Deleted, total));
+                continue;
             } catch {
                 results.Add(Make(s, meta, ImportCommand.ClassificationStatus.ProbeError, total, "watermark probe failed"));
                 continue;
@@ -466,6 +469,7 @@ internal sealed class OpenCodeImportSource : IImportSource {
         HttpClient http, string baseUrl, string sessionId, string? agentId, CancellationToken ct) {
         var url = $"{baseUrl}/api/sessions/{sessionId}/last-line" + (agentId is not null ? $"?agentId={agentId}" : "");
         using var resp = await http.GetWithRetryAsync(url, _time, ct: ct);
+        SessionDeletedException.ThrowIfDeleted(resp, sessionId);
         if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
         if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"watermark probe returned {(int)resp.StatusCode}");
         var body = await resp.Content.ReadAsStringAsync(ct);

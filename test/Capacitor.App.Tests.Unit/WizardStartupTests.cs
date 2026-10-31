@@ -618,7 +618,7 @@ public class WizardStartupTests {
 
     static async Task<HistoryStepViewModel> ImportingAsync(FakeKcapCli cli) {
         cli.DiscoverBehavior = _ => Task.FromResult<ImportDiscoveryReport?>(OneRepo());
-        var history = new HistoryStepViewModel(cli, () => [HarnessId.Claude], action => action(), "test-mac", TimeProvider.System);
+        var history = new HistoryStepViewModel(cli, action => action(), "test-mac", TimeProvider.System);
         await history.OnEnterAsync(CancellationToken.None);
         await history.Discovery;
         await history.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
@@ -1120,9 +1120,10 @@ public class WizardStartupTests {
         });
     }
 
-    /// History reads exactly the harnesses the Harnesses page left recording.
+    /// History is discovered for every harness on the machine, not only those the Harnesses page left
+    /// recording: past sessions and future capture are separate choices.
     [Test]
-    public async Task History_discovers_for_the_harnesses_left_recording() {
+    public async Task History_discovers_every_harness_whatever_the_harnesses_page_left_recording() {
         await AvaloniaSession.DispatchAsync(async () => {
             using var harness = new WizardFixtures.GraphHarness(Config.Root);
             harness.ShimApplicable = false; // this page leaves only once the login shell can find kcap
@@ -1138,7 +1139,7 @@ public class WizardStartupTests {
             await graph.History.OnEnterAsync(CancellationToken.None);
             await graph.History.Discovery;
 
-            await Assert.That(harness.Cli.DiscoverCalls.Single()).IsEquivalentTo(["--claude"]);
+            await Assert.That(harness.Cli.DiscoverCalls.Single()).IsEmpty();
             await Assert.That(harness.DetectionFactoryCalls).IsEqualTo(1);
 
             return true;

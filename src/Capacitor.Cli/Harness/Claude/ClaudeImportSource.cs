@@ -7,8 +7,8 @@ namespace Capacitor.Cli.Harness.Claude;
 
 /// <summary>
 /// Discover + classify Claude Code transcripts under <c>~/.claude/projects/</c>.
-/// Discovery wraps <see cref="ImportCommand.DiscoverTranscripts(string)"/> and
-/// applies the <c>--cwd</c> / <c>--session</c> filters via the existing helpers.
+/// Discovery wraps <see cref="ImportCommand.DiscoverTranscripts(string)"/>, drops kcap's own
+/// headless runs, and applies the <c>--cwd</c> / <c>--session</c> filters.
 /// Classification delegates to <see cref="TranscriptFileClassification.ClassifyAsync"/>
 /// with <c>vendor = "claude"</c>. Claude sessions are imported per chain, so
 /// <see cref="ImportSessionAsync"/> is never the entry point — <c>ImportChainsAsync</c> is.
@@ -42,6 +42,10 @@ internal sealed class ClaudeImportSource(
             var normalized = ImportCommand.NormalizeGuid(sessionFilter);
             transcripts = [.. transcripts.Where(t => t.SessionId == normalized)];
         }
+
+        // kcap's own headless runs persist transcripts beside the user's. Dropped here, before anything
+        // counts, probes or titles them, and left on disk: they are skipped, never deleted.
+        transcripts = [.. transcripts.Where(t => !TitleGenerator.IsCapacitorSubSession(t.FilePath))];
 
         // --cwd filter — read the first few transcript lines to recover the cwd
         // (the encoded directory name isn't always trustworthy on its own).

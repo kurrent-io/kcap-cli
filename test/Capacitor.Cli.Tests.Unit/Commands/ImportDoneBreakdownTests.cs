@@ -145,6 +145,40 @@ public class ImportDoneBreakdownTests {
         await Assert.That(counts.Errored).IsEqualTo(0);
     }
 
+    /// <summary>A session a cap left for the background import never ran, so it is Deferred in its source's
+    /// row as it is in the totals, not Errored.</summary>
+    [Test]
+    public async Task chain_vendor_counts_a_deferred_session_as_deferred_not_errored() {
+        var classifications = new[] {
+            Cls("s1", HarnessId.Claude, ImportCommand.ClassificationStatus.New),
+            Cls("s2", HarnessId.Claude, ImportCommand.ClassificationStatus.New),
+        };
+
+        var counts = ImportCommand.ComputePerSourceFinalCounts(
+            classifications:  classifications,
+            imported:         1,
+            routedOutcomes:   null,
+            deferredIds:      new HashSet<string> { "s2" });
+
+        await Assert.That(counts.Loaded).IsEqualTo(1);
+        await Assert.That(counts.Deferred).IsEqualTo(1);
+        await Assert.That(counts.Errored).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task deleted_sessions_count_as_skipped_in_their_source_row() {
+        var classifications = new[] {
+            Cls("s1", HarnessId.Claude, ImportCommand.ClassificationStatus.Deleted),
+            Cls("s2", HarnessId.Claude, ImportCommand.ClassificationStatus.AlreadyLoaded),
+        };
+
+        var counts = ImportCommand.ComputePerSourceFinalCounts(classifications, imported: 0, routedOutcomes: null);
+
+        await Assert.That(counts.Deleted).IsEqualTo(1);
+        await Assert.That(counts.Skipped).IsEqualTo(2);
+        await Assert.That(counts.Failed).IsEqualTo(0);
+    }
+
     // --- Multi-source invariant: sub-grid sum == totals ---
 
     [Test]

@@ -11,10 +11,13 @@ sealed class SpectreCapture : IDisposable {
     readonly StringBuilder _text     = new();
 
     public SpectreCapture() {
+        // No environment enrichers: on a CI runner they turn ANSI back on, and a wrapped [dim] line then
+        // starts with an escape sequence that Flat cannot collapse.
         AnsiConsole.Console = AnsiConsole.Create(new AnsiConsoleSettings {
             Ansi        = AnsiSupport.No,
             ColorSystem = ColorSystemSupport.NoColors,
             Out         = new AnsiConsoleOutput(new StringWriter(_text)),
+            Enrichment  = new ProfileEnrichment { UseDefaultEnrichers = false },
         });
     }
 

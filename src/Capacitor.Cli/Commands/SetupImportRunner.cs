@@ -58,7 +58,8 @@ sealed class SetupImportRunner(
                 maxSessions:             inv.MaxSessions,
                 onSelected:              s => selection = s,
                 onFinished:              o => outcome = o,
-                nested:                  true);
+                nested:                  true,
+                skip:                    inv.Skip);
 
             return new SetupImportRun(exit, selection, outcome, null);
         } catch (Exception ex) {
