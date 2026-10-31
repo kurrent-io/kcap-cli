@@ -20,7 +20,9 @@ public static class PiExtensionInstaller {
     /// dependency on the <c>@earendil-works/pi-coding-agent</c> types, and
     /// fail-safe so a kcap/server hiccup never disrupts the pi session.
     /// </summary>
-    public const string ExtensionContent =
+    public const string ExtensionContent = Header + PiKcapPathSource.Text + Body;
+
+    const string Header =
         """
         // kcap.ts — kcap live-ingest extension for Pi (badlogic/pi-mono).
         //
@@ -33,6 +35,14 @@ public static class PiExtensionInstaller {
         // appends to each turn's system prompt (before_agent_start). Safe-by-default —
         // every handler swallows errors so a kcap or server hiccup never disrupts the
         // pi session.
+
+        import { statSync } from "node:fs";
+        import { delimiter, join } from "node:path";
+
+        """;
+
+    const string Body =
+        """
 
         export default function (pi: any) {
           // Hosted launches set KCAP_PI_PURE=1: the daemon owns capture there, and this
@@ -65,8 +75,10 @@ public static class PiExtensionInstaller {
               // before returning. Either way this exec timeout sits well outside that ceiling, so a
               // hung kcap can never stall pi's startup or shutdown.
               const res = await pi.exec("kcap", args, { timeout: 10000 });
+              if (event === "session-start" && typeof res?.code === "number" && res.code !== 0) noticeIfKcapMissing();
               return { file: String(file), stdout: res?.stdout ?? "" };
             } catch {
+              if (event === "session-start") noticeIfKcapMissing();
               return null; // never disrupt the pi session
             }
           }

@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
@@ -817,6 +818,90 @@ public class UninstallCommandTests {
         }
     }
 
+    const string ScopedConfig = """
+        {"version":2,"active_profile":"default","profiles":{"default":{
+          "excluded_paths":["/code/secret-project"],"excluded_repos":["acme/secret"],
+          "allowed_paths":["/code"],"allowed_repos":["acme/open"]}}}
+        """;
+
+    [Test]
+    public async Task The_prompt_lists_the_capture_exclusions_the_config_delete_loses() {
+        await using var fixture = await Fixture.CreateAsync();
+        var configPath = AppConfig.GetConfigPath(fixture.Root);
+        await File.WriteAllTextAsync(configPath, ScopedConfig);
+
+        var exit = await NewCommand(fixture, stdin: "n\n").HandleAsync(["uninstall"]);
+
+        var output = fixture.Out.ToString();
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(output).Contains("Delete 4 capture exclusions");
+        await Assert.That(output).Contains("ignored path /code/secret-project");
+        await Assert.That(output).Contains("excluded repo acme/secret");
+        await Assert.That(output).Contains("allowed path /code,");
+        await Assert.That(output).Contains("allowed repo acme/open,");
+        await Assert.That(output).Contains("kcap uninstall --keep-config");
+        await Assert.That(output.IndexOf("ignored path", StringComparison.Ordinal)).IsLessThan(output.IndexOf("Proceed?", StringComparison.Ordinal));
+        await Assert.That(await File.ReadAllTextAsync(configPath)).IsEqualTo(ScopedConfig);
+    }
+
+    [Test]
+    public async Task Exclusions_past_ten_are_counted_and_named_by_profile() {
+        await using var fixture = await Fixture.CreateAsync();
+        var paths = string.Join(',', Enumerable.Range(1, 11).Select(i => $"\"/code/p{i:00}\""));
+        await File.WriteAllTextAsync(AppConfig.GetConfigPath(fixture.Root), $$$$"""
+            {"version":2,"active_profile":"default","profiles":{
+              "default":{"excluded_paths":[{{{{paths}}}}]},
+              "work":{"excluded_repos":["acme/secret"]}}}
+            """);
+
+        var exit = await NewCommand(fixture).HandleAsync(["uninstall", "--yes"]);
+
+        var output = fixture.Out.ToString();
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(output).Contains("Delete 12 capture exclusions");
+        await Assert.That(output).Contains("ignored path /code/p10 (profile default)");
+        await Assert.That(output).DoesNotContain("/code/p11");
+        await Assert.That(output).Contains("and 2 more");
+        await Assert.That(Directory.Exists(fixture.ConfigDir)).IsFalse();
+    }
+
+    [Test]
+    public async Task Keep_config_keeps_the_exclusions_and_announces_no_loss() {
+        await using var fixture = await Fixture.CreateAsync();
+        var configPath = AppConfig.GetConfigPath(fixture.Root);
+        await File.WriteAllTextAsync(configPath, ScopedConfig);
+
+        var exit = await NewCommand(fixture).HandleAsync(["uninstall", "--yes", "--keep-config"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(fixture.Out.ToString()).DoesNotContain("capture exclusion");
+        await Assert.That(ConfigMutator.LoadPure(configPath).Profiles["default"].ExcludedPaths).IsEquivalentTo(["/code/secret-project"]);
+    }
+
+    [Test]
+    public async Task An_unreadable_config_is_announced_as_losing_whatever_exclusions_it_holds() {
+        await using var fixture = await Fixture.CreateAsync();
+        var configPath = AppConfig.GetConfigPath(fixture.Root);
+        await File.WriteAllTextAsync(configPath, "{ not json");
+
+        await NewCommand(fixture, stdin: "n\n").HandleAsync(["uninstall"]);
+
+        var output = fixture.Out.ToString();
+        await Assert.That(output).Contains($"Delete {configPath}, which kcap cannot read");
+        await Assert.That(output).Contains("kcap uninstall --keep-config");
+    }
+
+    [Test]
+    public async Task A_config_without_exclusions_adds_no_notice() {
+        await using var fixture = await Fixture.CreateAsync();
+        await File.WriteAllTextAsync(AppConfig.GetConfigPath(fixture.Root),
+            """{"version":2,"active_profile":"default","profiles":{"default":{"server_url":"https://kcap.example.com"}}}""");
+
+        await NewCommand(fixture, stdin: "n\n").HandleAsync(["uninstall"]);
+
+        await Assert.That(fixture.Out.ToString()).DoesNotContain("capture exclusion");
+    }
+
     UninstallCommand NewCommand(Fixture f, DaemonStore? store = null, string? workdir = null, UserHome? home = null, IOutgoingRecorders? recorders = null, ILocalStackFactory? stacks = null, KcapLinkRemover? links = null, Func<bool>? systemdRunning = null, string stdin = "") {
         var userHome = home ?? f.UserHome;
         var profiles = Resolutions.None(f.Root);
@@ -837,6 +922,8 @@ public class UninstallCommandTests {
     }
 
     sealed class EmptyStackFactory(UserHome home, ConfigRoot config) : ILocalStackFactory {
+        public LocalRoot Root => LocalRoot.Resolve(null, home);
+
         public LocalStack Create() =>
             new(LocalRoot.Resolve(null, home), home, new FakeLocalServerService([], home), new HttpClient(), TimeProvider.System, new FakeOutgoingRecorders([]), config);
 
@@ -844,9 +931,52 @@ public class UninstallCommandTests {
     }
 
     sealed class StackFactory(Func<LocalStack> create) : ILocalStackFactory {
+        public LocalRoot Root => throw new InvalidOperationException("The command read the root without a platform refusal.");
+
         public LocalStack Create() => create();
 
         public LocalBundleStager Stager() => throw new InvalidOperationException("The command reached the bundles.");
+    }
+
+    sealed class UnsupportedStackFactory(LocalRoot root) : ILocalStackFactory {
+        public LocalRoot Root => root;
+
+        public LocalStack Create() => throw new LocalInstallFailure(LocalInstallFailureCode.UnsupportedPlatform, "The local edition runs on macOS for now.");
+
+        public LocalBundleStager Stager() => throw new InvalidOperationException("The command reached the bundles.");
+    }
+
+    /// <summary>A server another build installed holds its data under the config directory by default;
+    /// a build that cannot manage it must not delete it along with the configuration.</summary>
+    [Test]
+    public async Task A_local_server_this_build_cannot_manage_survives_the_config_delete() {
+        await using var fixture = await Fixture.CreateAsync();
+        var root     = LocalRoot.Resolve(null, fixture.UserHome);
+        var data     = Path.Combine(root.Directory, "data", "postgres", "PG_VERSION");
+        var profiles = Path.Combine(fixture.ConfigDir, "profiles.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(data)!);
+        await File.WriteAllTextAsync(data, "18");
+        await File.WriteAllTextAsync(profiles, "{}");
+
+        var exit = await NewCommand(fixture, stacks: new UnsupportedStackFactory(root)).HandleAsync(["uninstall", "--yes"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(File.Exists(data)).IsTrue();
+        await Assert.That(File.Exists(profiles)).IsFalse();
+        await Assert.That(fixture.Out.ToString()).Contains($"Keep the local server in {root.Directory}");
+    }
+
+    [Test]
+    public async Task An_empty_local_root_goes_with_the_config_directory_where_no_server_runs() {
+        await using var fixture = await Fixture.CreateAsync();
+        var root = LocalRoot.Resolve(null, fixture.UserHome);
+        Directory.CreateDirectory(root.Directory);
+
+        var exit = await NewCommand(fixture, stacks: new UnsupportedStackFactory(root)).HandleAsync(["uninstall", "--yes"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(Directory.Exists(fixture.ConfigDir)).IsFalse();
+        await Assert.That(fixture.Out.ToString()).DoesNotContain("Keep the local server");
     }
 
     const string LocalUrl = "http://localhost:9473";

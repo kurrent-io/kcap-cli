@@ -132,7 +132,14 @@ public static class AccountWiring {
         var steps = new List<WiringStep> { Step("hooks", CodexHooksWriter.Install(paths.UserHooksJson)) };
 
         if (options.PluginDir is { } plugin) {
-            var ok = AgentsSkillsInstaller.Install(Path.Combine(plugin, "skills"), options.AgentsSkillsDir);
+            var recorded  = SharedSkillsConsumers.ReadRecorded(options.AgentsSkillsDir);
+            var untracked = recorded is null && AgentsSkillsInstaller.IsInstalled(options.AgentsSkillsDir);
+            var ok        = AgentsSkillsInstaller.Install(Path.Combine(plugin, "skills"), options.AgentsSkillsDir);
+
+            // An unrecorded tree's other consumers are inferred by the next plugin command, which can see them.
+            if (ok && !untracked)
+                SharedSkillsConsumers.Write(options.AgentsSkillsDir, (recorded ?? Enumerable.Empty<string>()).Append(HarnessId.Codex.VendorId));
+
             steps.Add(new WiringStep("skills", ok, ok ? options.AgentsSkillsDir : "could not install agent skills"));
         }
 
@@ -144,10 +151,16 @@ public static class AccountWiring {
         return steps;
     }
 
-    static IReadOnlyList<WiringStep> UnwireCodex(CodexPaths paths) => [
-        Step("hooks", CodexHooksWriter.Remove(paths.UserHooksJson)),
-        Step("mcp", CodexConfigToml.UnregisterKcapMcpServers(paths.ConfigToml)),
-    ];
+    static IReadOnlyList<WiringStep> UnwireCodex(CodexPaths paths) {
+        IReadOnlyList<WiringStep> steps = [
+            Step("hooks", CodexHooksWriter.Remove(paths.UserHooksJson)),
+            Step("mcp", CodexConfigToml.UnregisterKcapMcpServers(paths.ConfigToml)),
+            Step(NetworkStep, CodexConfigToml.RestoreNetworkAccess(paths.ConfigToml, [])),
+        ];
+        CodexConfigToml.DeleteEmptyOwnershipLedger(paths.ConfigToml);
+
+        return steps;
+    }
 
     static WiringStep Step(string name, SettingsEdit edit) => edit switch {
         SettingsEdit.Malformed => new(name, false, "settings file unreadable; left unchanged"),
@@ -157,6 +170,14 @@ public static class AccountWiring {
 
     static WiringStep Step(string name, CodexConfigToml.Change change) =>
         new(name, change is not CodexConfigToml.Change.Failed, change.ToString());
+
+    /// <summary>A kept setting fails the step, a warning only, so its reason reaches the unwire report.</summary>
+    static WiringStep Step(string name, CodexNetworkRestore restore) =>
+        restore.Change == CodexConfigToml.Change.Failed
+            ? new(name, false, "could not update config.toml; sandbox network settings left in place")
+            : restore.Kept.Count > 0
+                ? new(name, false, "kept sandbox network settings kcap cannot prove are safe to undo: " + string.Join("; ", restore.Kept))
+                : new(name, true, restore.Change.ToString());
 
     static bool IsMalformed(string path) {
         if (!File.Exists(path)) return false;
