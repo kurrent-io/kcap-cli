@@ -175,6 +175,8 @@ A turn that cannot be read is named in place (for example "Turn 3 was not found 
 
 Activity not yet closed into a turn — everything after the last closed turn under `# After turn <N>`, or the whole session after a "No closed turn is recorded yet" note — shows only prompts, replies and file writes: `## User Prompt`, `## Assistant`, `## Write <path>` (the file's content) and `## Edit <path>` (the diff), with subagent activity under `### Agent (<type>)`. Its tool calls and results appear once the turn closes.
 
+When the turn list itself could not be read, the note says "The session's turns could not be read" and why: the tool calls and results are missing, not pending. When the last turn has no recorded end time, `# After turn <N>` says that later activity cannot be placed instead of listing it.
+
 When using `--chain`, sessions are separated by `# Session <id>` headers.
 
 ## When to Use Each Flag

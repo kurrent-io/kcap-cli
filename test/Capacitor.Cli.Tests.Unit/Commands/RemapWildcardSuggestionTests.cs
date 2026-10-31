@@ -33,4 +33,20 @@ public class RemapWildcardSuggestionTests {
 
         await Assert.That(error).Contains("kcap remap ~/old '~/My Work'");
     }
+
+    [Test]
+    public async Task A_path_with_a_shell_metacharacter_is_quoted_in_the_suggestion() {
+        var error = RemapCommand.WildcardToError("~/R&D/*", "~/old", "~/R&D/*");
+
+        await Assert.That(error).Contains("kcap remap ~/old '~/R&D'");
+    }
+
+    [Test]
+    public async Task An_apostrophe_cannot_end_the_quoted_path_early() {
+        var error = RemapCommand.WildcardToError("~/Bob's/*", "~/old", "~/Bob's/*");
+
+        await Assert.That(error).Contains(OperatingSystem.IsWindows()
+            ? "kcap remap ~/old '~/Bob''s'"
+            : @"kcap remap ~/old '~/Bob'\''s'");
+    }
 }

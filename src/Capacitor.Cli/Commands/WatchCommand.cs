@@ -2048,7 +2048,25 @@ partial class WatchCommand(
         vendor == "gemini"
             ? GeminiImportSource.IsImportRelevantLine(line)
             : TryExtractAssistantText(line, vendor) is not null
-           || (TryExtractUserText(line, time, vendor) is { } prompt && !string.IsNullOrWhiteSpace(prompt) && !CommandNameRegex.IsMatch(prompt));
+           || (TryExtractUserText(line, time, vendor) is { } prompt && !string.IsNullOrWhiteSpace(prompt) && !CommandNameRegex.IsMatch(prompt))
+           || (vendor == "claude" && IsClaudeImagePrompt(line));
+
+    /// <summary>A Claude prompt that is only an attached image has no text to extract, yet is the user's turn.</summary>
+    static bool IsClaudeImagePrompt(string line) {
+        if (!line.Contains("\"image\"", StringComparison.Ordinal)) return false;
+
+        try {
+            using var doc  = JsonDocument.Parse(line);
+            var       root = doc.RootElement;
+
+            return root.Str("type") == "user"
+                && root.Bool("isMeta") != true
+                && root.Obj("message")?.Arr("content") is { } content
+                && content.EnumerateArray().Any(block => block.Str("type") == "image");
+        } catch (JsonException) {
+            return false;
+        }
+    }
 
     /// <summary>Whether a session watcher's held-back lines go to the server: once they hold a real turn, or
     /// reach <see cref="WatchState.TranscriptThreshold"/> whatever they hold.</summary>

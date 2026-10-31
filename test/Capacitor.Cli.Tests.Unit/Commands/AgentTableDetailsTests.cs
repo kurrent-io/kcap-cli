@@ -83,4 +83,11 @@ public class AgentTableDetailsTests {
         var elsewhere = Path.Combine(Root, "borrowed");
         await Assert.That(AgentCommand.WorktreeCell(Repo, elsewhere)).IsEqualTo(elsewhere);
     }
+
+    [Test]
+    public async Task A_sibling_folder_sharing_the_worktrees_prefix_keeps_its_full_path() {
+        var sibling = Path.Combine(Repo, ".capacitor", "worktrees-backup", "agent");
+
+        await Assert.That(AgentCommand.WorktreeCell(Repo, sibling)).IsEqualTo(sibling);
+    }
 }

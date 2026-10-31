@@ -741,6 +741,19 @@ public class ValidatePlanCommandTests : IDisposable {
         await Assert.That(exitCode).IsEqualTo(0);
     }
 
+    [Test, NotInParallel]
+    public async Task A_session_the_failure_list_does_not_know_says_failures_are_unknown() {
+        StubArtifacts($$"""{ "primary": {{ArtifactJson("art-1", "plan", "native_plan", "Step 1")}}, "artifacts": [], "diagnostics": [] }""");
+        StubRecap();
+        _server.Given(Request.Create().WithPath($"/api/sessions/{SessionId}/errors").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(404));
+
+        var stdout = await CaptureStdoutAsync(() => ValidatePlanCommand.HandleCore(Api(), SessionId));
+
+        await Assert.That(stdout).Contains("- Write: src/Foo.cs");
+        await Assert.That(stdout).Contains("Tool failures could not be read");
+    }
+
     /// <summary>The legacy recap-only path lists the same evidence: no summary (no model provider) leaves the recorded
     /// writes as the only evidence, and they must survive.</summary>
     [Test, NotInParallel]

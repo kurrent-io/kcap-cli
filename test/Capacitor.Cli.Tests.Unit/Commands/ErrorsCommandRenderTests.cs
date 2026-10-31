@@ -39,6 +39,17 @@ public class ErrorsCommandRenderTests {
     }
 
     [Test]
+    [Arguments("""{"command":"curl -H 'Authorization: Bearer abcdef123456' https://api.example.com"}""", "abcdef123456")]
+    [Arguments("""{"url":"https://api.example.com/v1?access_token=abcdef123456&page=2"}""", "abcdef123456")]
+    [Arguments("""{"api_key":"abcdef123456","region":"eu"}""", "abcdef123456")]
+    public async Task A_credential_in_the_input_is_redacted(string input, string secret) {
+        var summary = ErrorsCommand.InputSummary(JsonDocument.Parse(input).RootElement);
+
+        await Assert.That(summary).DoesNotContain(secret);
+        await Assert.That(summary).Contains("[REDACTED]");
+    }
+
+    [Test]
     public async Task A_long_input_is_cut() {
         var summary = ErrorsCommand.InputSummary(JsonDocument.Parse($$"""{"command":"{{new string('x', 500)}}"}""").RootElement);
 

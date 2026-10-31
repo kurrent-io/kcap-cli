@@ -507,7 +507,7 @@ internal sealed class AgentCommand(
 
         var owned = Path.Combine(repo, ".capacitor", "worktrees");
 
-        return trimmed.StartsWith(owned, comparison) && trimmed.Length > owned.Length + 1
+        return trimmed.StartsWith(owned, comparison) && trimmed.Length > owned.Length + 1 && trimmed[owned.Length] is '/' or '\\'
             ? trimmed[(owned.Length + 1)..]
             : trimmed;
     }

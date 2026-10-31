@@ -445,7 +445,7 @@ sealed class UninstallCommand(
     internal static string KeptProgramLine(InstallKind kind, string? scriptRoot, string? snapName, string? processPath) =>
         kind switch {
             InstallKind.Script when scriptRoot is not null =>
-                $"It keeps kcap itself, every installed version under {scriptRoot}. Delete that folder afterwards to remove it.",
+                $"It keeps kcap itself, every installed version under {scriptRoot}. Remove it afterwards by deleting {ScriptInstallLayout.VersionsName}, {ScriptInstallLayout.CurrentName} and {ScriptInstallLayout.MarkerFileName} there, not the whole folder: it can hold data the installer does not own.",
             InstallKind.Npm => "It keeps kcap itself. Remove it afterwards with: npm uninstall -g @kurrent/kcap",
             InstallKind.App => "It keeps the kcap desktop app and its command-line tool. Uninstall the app to remove them.",
             InstallKind.Snap when snapName is not null => $"It keeps the kcap snap. Remove it afterwards with: sudo snap remove {snapName}",

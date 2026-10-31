@@ -14,8 +14,11 @@ static class RecapTranscript {
     /// <summary>One session's full transcript: its plans, then each closed turn's trace, then whatever
     /// happened after the last closed turn. <paramref name="fetchTurn"/> may throw
     /// <see cref="CapacitorApiException"/>; a turn that cannot be read is named, never skipped.</summary>
+    /// <param name="turnsUnreadable">Why the turn list could not be fetched, so a failed fetch is not
+    /// reported as a session with no closed turn.</param>
     internal static async Task<string> RenderSessionAsync(
-            IReadOnlyList<RecapEntry> entries, string? turnsJson, Func<int, Task<TurnDetailResult>> fetchTurn) {
+            IReadOnlyList<RecapEntry> entries, string? turnsJson, Func<int, Task<TurnDetailResult>> fetchTurn,
+            string? turnsUnreadable = null) {
         var sb = new StringBuilder();
 
         foreach (var plan in entries.Where(e => e.Type == "plan")) {
@@ -27,11 +30,20 @@ static class RecapTranscript {
         var activity = entries.Where(e => e.Type != "plan").ToList();
         var turns    = ParseTurns(turnsJson);
 
-        if (turns.Count == 0) {
+        if (turns is null) turnsUnreadable ??= "the server's reply is unreadable";
+
+        if (turns is not { Count: > 0 }) {
+            var unread = turnsUnreadable is null ? null : $"The session's turns could not be read ({turnsUnreadable})";
+
             if (activity.Count > 0) {
-                sb.AppendLine(RowsOnlyNote("No closed turn is recorded yet"));
+                sb.AppendLine(unread is null
+                    ? RowsOnlyNote("No closed turn is recorded yet", "tool calls and their results appear once the turn closes")
+                    : RowsOnlyNote(unread, "tool calls and their results are missing"));
                 sb.AppendLine();
                 sb.Append(RenderEntries(activity));
+            } else if (unread is not null) {
+                sb.AppendLine($"({unread}.)");
+                sb.AppendLine();
             }
 
             return sb.ToString();
@@ -43,10 +55,19 @@ static class RecapTranscript {
             sb.Append(await RenderTurnAsync(index, fetchTurn));
         }
 
-        if (turns[^1].LastEventAt is { } closedAt && activity.Where(e => e.Timestamp > closedAt).ToList() is { Count: > 0 } open) {
-            sb.AppendLine($"# After turn {turns[^1].Index}");
+        var last = turns[^1];
+
+        if (last.LastEventAt is not { } closedAt) {
+            if (activity.Count > 0) {
+                sb.AppendLine($"# After turn {last.Index}");
+                sb.AppendLine();
+                sb.AppendLine($"(Turn {last.Index} has no recorded end time, so activity after it cannot be told apart from the turns above and is not shown.)");
+                sb.AppendLine();
+            }
+        } else if (activity.Where(e => e.Timestamp > closedAt).ToList() is { Count: > 0 } open) {
+            sb.AppendLine($"# After turn {last.Index}");
             sb.AppendLine();
-            sb.AppendLine(RowsOnlyNote("This activity is not closed into a turn yet"));
+            sb.AppendLine(RowsOnlyNote("This activity is not closed into a turn yet", "tool calls and their results appear once the turn closes"));
             sb.AppendLine();
             sb.Append(RenderEntries(open));
         }
@@ -54,8 +75,8 @@ static class RecapTranscript {
         return sb.ToString();
     }
 
-    static string RowsOnlyNote(string why) =>
-        $"({why}, so only prompts, replies and file writes are shown; tool calls and their results appear once the turn closes.)";
+    static string RowsOnlyNote(string why, string tools) =>
+        $"({why}, so only prompts, replies and file writes are shown; {tools}.)";
 
     static async Task<string> RenderTurnAsync(int index, Func<int, Task<TurnDetailResult>> fetchTurn) {
         TurnDetailResult result;
@@ -80,14 +101,15 @@ static class RecapTranscript {
         }
     }
 
-    /// <summary>Closed turns in index order, with when each ended. Empty for a missing or unreadable list.</summary>
-    internal static List<(int Index, DateTimeOffset? LastEventAt)> ParseTurns(string? turnsJson) {
+    /// <summary>Closed turns in index order, with when each ended. Empty for a missing list, null for one
+    /// that cannot be read.</summary>
+    internal static List<(int Index, DateTimeOffset? LastEventAt)>? ParseTurns(string? turnsJson) {
         if (string.IsNullOrWhiteSpace(turnsJson)) return [];
 
         try {
             using var doc = JsonDocument.Parse(turnsJson);
 
-            if (!doc.RootElement.IsArray) return [];
+            if (!doc.RootElement.IsArray) return null;
 
             var turns = new List<(int, DateTimeOffset?)>();
 
@@ -103,7 +125,7 @@ static class RecapTranscript {
 
             return [.. turns.OrderBy(t => t.Item1)];
         } catch (JsonException) {
-            return [];
+            return null;
         }
     }
 

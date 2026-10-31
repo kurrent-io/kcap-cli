@@ -198,22 +198,22 @@ class RecapCommand(
 
             var own = entries.Where(e => e.SessionId == sid || (e.SessionId is null && sid == sessionIds[0])).ToList();
 
+            var (turnsJson, turnsUnreadable) = await FetchTurnList(sid);
+
             await Console.Out.WriteAsync(await RecapTranscript.RenderSessionAsync(
-                own, await FetchTurnList(sid), index => sessionsApi.GetTurnAsync(Uri.EscapeDataString(sid), index)));
+                own, turnsJson, index => sessionsApi.GetTurnAsync(Uri.EscapeDataString(sid), index), turnsUnreadable));
         }
 
         return 0;
     }
 
-    /// <summary>The session's closed turns as the server sent them, or null when there are none to read:
-    /// the transcript then falls back to the <c>/recap</c> rows and says so.</summary>
-    async Task<string?> FetchTurnList(string sessionId) {
+    /// <summary>The session's closed turns as the server sent them, null when it has none, or why the fetch
+    /// failed: the transcript then falls back to the <c>/recap</c> rows and names which of the two it was.</summary>
+    async Task<(string? Json, string? Unreadable)> FetchTurnList(string sessionId) {
         try {
-            return await sessionsApi.GetTurnsAsync(Uri.EscapeDataString(sessionId)) is TurnsResult.Found(var json) ? json : null;
+            return (await sessionsApi.GetTurnsAsync(Uri.EscapeDataString(sessionId)) is TurnsResult.Found(var json) ? json : null, null);
         } catch (CapacitorApiException ex) {
-            await Console.Error.WriteLineAsync($"Turns for {sessionId} could not be read: {ex.Message}");
-
-            return null;
+            return (null, ex.Message);
         }
     }
 

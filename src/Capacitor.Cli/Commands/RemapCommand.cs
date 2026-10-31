@@ -155,7 +155,12 @@ public sealed class RemapCommand(ConfigRoot root) {
             return path.EndsWith('*') && trimmed.Length > 0 && !trimmed.Contains('*') ? trimmed : null;
         }
 
-        static string Quote(string path) => path.Any(char.IsWhiteSpace) ? $"'{path}'" : path;
+        // Single quotes keep every shell metacharacter literal; inside them PowerShell doubles an
+        // apostrophe, while a POSIX shell has to close the quote, escape it and reopen.
+        static string Quote(string path) =>
+            path.All(c => char.IsLetterOrDigit(c) || c is '/' or '\\' or '.' or '_' or '-' or '~' or ':' or '+') ? path
+            : OperatingSystem.IsWindows() ? $"'{path.Replace("'", "''")}'"
+            : $"'{path.Replace("'", @"'\''")}'";
     }
 
     /// <summary>

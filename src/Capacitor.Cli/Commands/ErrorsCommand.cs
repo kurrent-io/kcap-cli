@@ -59,7 +59,8 @@ class ErrorsCommand(ISessionsApi sessionsApi) {
     }
 
     /// <summary>What the failed call acted on: its path, command, pattern or address when it names one,
-    /// else its whole input. One line, cut to <see cref="InputWidth"/>.</summary>
+    /// else its whole input. One line, cut to <see cref="InputWidth"/> after credentials are redacted, so a
+    /// cut cannot leave half a secret the patterns no longer match.</summary>
     internal static string? InputSummary(JsonElement? input) {
         if (input is not { } el || el.IsNull) return null;
 
@@ -75,9 +76,13 @@ class ErrorsCommand(ISessionsApi sessionsApi) {
             if (named is { Length: > 0 }) break;
         }
 
-        var text = named is { Length: > 0 } ? named : el.IsString ? el.GetString() ?? "" : el.GetRawText();
+        var text = named is { Length: > 0 } ? Redacted(named)
+                 : el.IsString ? Redacted(el.GetString() ?? "")
+                 : SecretRedactor.RedactLine(el.GetRawText());
         text = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
         return text.Length == 0 ? null : HttpClientExtensions.StripControlCharacters(text.Length > InputWidth ? text[..(InputWidth - 3)] + "..." : text);
+
+        static string Redacted(string value) => SecretRedactor.RedactValue(value, keyIsSecret: false) ?? value;
     }
 }

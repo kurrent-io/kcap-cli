@@ -179,6 +179,42 @@ public class RecapTranscriptTests {
     }
 
     [Test]
+    public async Task A_failed_turn_list_fetch_is_named_not_read_as_no_closed_turn() {
+        var text = await RecapTranscript.RenderSessionAsync(
+            [Row("user_prompt", "start", T0)],
+            null,
+            _ => throw new InvalidOperationException("no turn may be fetched"),
+            turnsUnreadable: "Server returned HTTP 500");
+
+        await Assert.That(text).Contains("The session's turns could not be read (Server returned HTTP 500)");
+        await Assert.That(text).Contains("tool calls and their results are missing");
+        await Assert.That(text).DoesNotContain("No closed turn is recorded yet");
+        await Assert.That(text).Contains("## User Prompt");
+    }
+
+    [Test]
+    public async Task An_unreadable_turn_list_is_named_even_without_rows() {
+        var text = await RecapTranscript.RenderSessionAsync([], "<html>", _ => throw new InvalidOperationException("no turn may be fetched"));
+
+        await Assert.That(text).Contains("The session's turns could not be read (the server's reply is unreadable)");
+    }
+
+    /// <summary>Without the last turn's end time no row can be placed after it, so the gap is said rather
+    /// than the rows being dropped without a word.</summary>
+    [Test]
+    public async Task Activity_after_a_last_turn_with_no_end_time_is_named_not_dropped() {
+        const string turns = """[ {"turn_index":0} ]""";
+
+        var text = await RecapTranscript.RenderSessionAsync(
+            [Row("user_prompt", "still running", T0.AddMinutes(20))],
+            turns,
+            Turns(new() { [0] = """[ {"kind":"user_message","text":"earlier"} ]""" }));
+
+        await Assert.That(text).Contains("# After turn 0");
+        await Assert.That(text).Contains("(Turn 0 has no recorded end time, so activity after it cannot be told apart from the turns above and is not shown.)");
+    }
+
+    [Test]
     public async Task Subagent_rows_keep_their_grouping_in_the_fallback() {
         var text = RecapTranscript.RenderEntries([
             Row("user_prompt", "go", T0),
@@ -190,10 +226,11 @@ public class RecapTranscriptTests {
     }
 
     [Test]
-    public async Task An_unreadable_turn_list_reads_as_no_turns() {
-        await Assert.That(RecapTranscript.ParseTurns("<html>")).IsEmpty();
+    public async Task An_unreadable_turn_list_is_told_apart_from_a_missing_one() {
+        await Assert.That(RecapTranscript.ParseTurns("<html>")).IsNull();
+        await Assert.That(RecapTranscript.ParseTurns("""{"turns":[]}""")).IsNull();
         await Assert.That(RecapTranscript.ParseTurns(null)).IsEmpty();
-        await Assert.That(string.Join(",", RecapTranscript.ParseTurns("""[ {"turn_index":"x"}, {"turn_index":3} ]""").Select(t => t.Index)))
+        await Assert.That(string.Join(",", RecapTranscript.ParseTurns("""[ {"turn_index":"x"}, {"turn_index":3} ]""")!.Select(t => t.Index)))
             .IsEqualTo("3");
     }
 }

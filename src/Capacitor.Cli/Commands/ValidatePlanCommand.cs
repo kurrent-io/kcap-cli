@@ -218,6 +218,7 @@ class ValidatePlanCommand(ISessionsApi sessionsApi) {
 
         try {
             if (await sessionsApi.GetErrorsAsync(sessionId, chain: true) is ErrorsResult.Found found) failures = found.Errors;
+            else failuresUnread = true;
         } catch (Exception ex) when (ex is CapacitorApiException or HttpRequestException or System.Text.Json.JsonException) {
             failuresUnread = true;
         }

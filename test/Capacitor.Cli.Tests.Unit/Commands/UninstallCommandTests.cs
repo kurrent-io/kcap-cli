@@ -929,7 +929,7 @@ public class UninstallCommandTests {
     [Arguments(InstallKind.Npm, "npm uninstall -g @kurrent/kcap")]
     [Arguments(InstallKind.App, "Uninstall the app")]
     [Arguments(InstallKind.Snap, "sudo snap remove kcap-desktop")]
-    [Arguments(InstallKind.Script, "/home/u/.local/share/kcap. Delete that folder")]
+    [Arguments(InstallKind.Script, "/home/u/.local/share/kcap. Remove it afterwards by deleting versions, current and install.json there, not the whole folder")]
     [Arguments(InstallKind.Unknown, "(/opt/kcap/kcap). Remove it the way it was installed.")]
     public async Task The_plan_says_how_to_remove_kcap_itself(InstallKind kind, string expected) {
         var line = UninstallCommand.KeptProgramLine(kind, "/home/u/.local/share/kcap", "kcap-desktop", "/opt/kcap/kcap");
