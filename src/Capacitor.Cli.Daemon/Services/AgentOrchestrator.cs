@@ -3275,7 +3275,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 StartTitle          = startTitle,
                 IsPrivate           = isPrivate,
                 ContinuesAgentId    = resume?.Entry.InheritedAgentIds is [.., var predecessor] ? predecessor : null,
-                HandoffSource       = cmd.Handoff?.Source,
+                HandoffSource       = cmd.Handoff?.Source ?? resume?.Entry.Launch.HandoffSource,
                 // Keeps the worktree and the entry through any failure until the resume is judged.
                 ResumePending       = resume is not null
             };

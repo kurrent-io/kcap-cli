@@ -7,8 +7,7 @@ namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>Each hand-off's takeover outcome by the successor's canonical session id, the newest
 /// <see cref="Capacity"/> kept in one owner-only file. A <c>running</c> outcome found when the file is first
-/// read was cut short by a restart and reads as <c>interrupted</c>: only the process that wrote it could still
-/// finish it. A file that does not parse reads as empty and is replaced by the next put.</summary>
+/// read was cut short by a restart and reads as <c>interrupted</c> until a resumed successor runs it again. A file that does not parse reads as empty and is replaced by the next put.</summary>
 internal sealed partial class HandoffOutcomeStore(string stateDirectory, TimeProvider time) {
     public const int Capacity = 200;
 

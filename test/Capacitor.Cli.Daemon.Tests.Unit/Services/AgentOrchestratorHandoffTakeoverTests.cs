@@ -508,25 +508,71 @@ public class AgentOrchestratorHandoffTakeoverTests : IDisposable {
         await Assert.That(outcome.SourceTitle).IsEqualTo("Wire the widget");
     }
 
-    /// <summary>A restart cut the takeover short; the agent comes back without its hand-off block, so nothing
-    /// finishes the takeover, and the outcome stays interrupted.</summary>
+    /// <summary>The successor's ledger entry names its source, so a restart before the takeover settles does not
+    /// lose it.</summary>
     [Test]
-    public async Task A_recovered_successor_still_reads_interrupted() {
+    public async Task A_handoff_launch_records_its_source_in_the_resume_ledger() {
         ServeSource();
-        await using var f = Build(beforeStart: c =>
-            new HandoffOutcomeStore(c.Store.StateDirectory(c.Name), TimeProvider.System)
-                .Put(Successor, HandoffOutcomeDto.Running(Source, "Wire the widget")));
-        WriteResumableEntry(f);
+        await using var f = Build();
 
+        await f.Orch.HandleLaunchAgentForTest(Launch(f.Repo));
+        await SettledAsync(f);
+
+        await Assert.That(f.Orch.ResumeLedger!.TryRead(AgentId)!.Launch.HandoffSource).IsEqualTo(SourceContext);
+    }
+
+    /// <summary>A restart cut the takeover short; the resumed successor finishes it under a fresh lease.</summary>
+    [Test]
+    public async Task A_recovered_successor_finishes_its_takeover() {
+        ServeSource();
+        await using var f = Build(beforeStart: c => PutOutcome(c, HandoffOutcomeDto.Running(Source, "Wire the widget")));
+        WriteResumableEntry(f, SourceContext);
+
+        await ResumeAsync(f);
+        var outcome = await SettledAsync(f);
+
+        await Assert.That(outcome.State).IsEqualTo("done");
+        await Assert.That(f.Server.HandoffBegins.Select(b => (b.Source, b.Successor))).IsEquivalentTo([(SourceWire, SuccessorWire)]);
+        await Assert.That(Declares()).IsEqualTo(1);
+    }
+
+    /// <summary>A takeover that settled before the restart is not run again.</summary>
+    [Test]
+    public async Task A_recovered_successor_whose_takeover_settled_takes_over_nothing() {
+        ServeSource();
+        await using var f = Build(beforeStart: c => PutOutcome(c, HandoffOutcomeDto.Refused(Source, "Wire the widget", "source_active")));
+        WriteResumableEntry(f, SourceContext);
+
+        await ResumeAsync(f);
+        await Task.Delay(200);
+
+        await Assert.That((await QueryAsync(f.Orch, Successor))!.State).IsEqualTo("refused");
+        await Assert.That(f.Server.HandoffBegins).IsEmpty();
+    }
+
+    /// <summary>An entry written without the source has nothing to finish the takeover with.</summary>
+    [Test]
+    public async Task A_recovered_successor_without_its_source_still_reads_interrupted() {
+        ServeSource();
+        await using var f = Build(beforeStart: c => PutOutcome(c, HandoffOutcomeDto.Running(Source, "Wire the widget")));
+        WriteResumableEntry(f, source: null);
+
+        await ResumeAsync(f);
+        await Task.Delay(200);
+
+        await Assert.That((await QueryAsync(f.Orch, Successor))!.State).IsEqualTo("interrupted");
+        await Assert.That(f.Server.HandoffBegins).IsEmpty();
+    }
+
+    static void PutOutcome(DaemonConfig c, HandoffOutcomeDto outcome) =>
+        new HandoffOutcomeStore(c.Store.StateDirectory(c.Name), TimeProvider.System).Put(Successor, outcome);
+
+    static async Task ResumeAsync(Fixture f) {
         f.Orch.LoadResumeLedger();
         var resumed = f.Orch.ResumeOnBootAsync(CancellationToken.None);
         await PumpUntilAsync(f, () => resumed.IsCompleted, TimeSpan.FromSeconds(1));
         await resumed;
         await Assert.That(f.Orch.GetAgentForTest(AgentId)!.SessionId).IsEqualTo(SuccessorWire);
-        await Task.Delay(200);
-
-        await Assert.That((await QueryAsync(f.Orch, Successor))!.State).IsEqualTo("interrupted");
-        await Assert.That(f.Server.HandoffBegins).IsEmpty();
     }
 
     /// <summary>A source this daemon still runs is not ended, whatever the server says, and is refused before the
@@ -547,7 +593,7 @@ public class AgentOrchestratorHandoffTakeoverTests : IDisposable {
         await Assert.That(Writes()).IsEmpty();
     }
 
-    void WriteResumableEntry(Fixture f) {
+    void WriteResumableEntry(Fixture f, HandoffSourceContext? source) {
         var stamp    = TimeProvider.System.GetUtcNow();
         var worktree = Tmp.CreateDir("wt-successor");
         var launch = new ResumeLaunchDescriptor(
@@ -557,7 +603,7 @@ public class AgentOrchestratorHandoffTakeoverTests : IDisposable {
             McpConfigPath: null, Title: "Hand-off", IsPrivate: false, Origin: "server",
             RequesterUserId: "user-1", RequesterDisplay: "User One", ConsentSource: "default",
             ConsentAt: stamp.ToString("O"), FlowRunId: null, FlowRole: null,
-            WorktreeBranch: "feature", WorktreeIsStandalone: false, WorktreeSourceRepo: f.Repo.Path);
+            WorktreeBranch: "feature", WorktreeIsStandalone: false, WorktreeSourceRepo: f.Repo.Path, HandoffSource: source);
         f.Orch.ResumeLedger!.Write(new ResumeLedgerEntry(
             ResumeLedgerEntry.CurrentSchemaVersion, AgentId, "daemon-1", stamp, stamp, "cursor", "acp",
             SuccessorWire, Successor, launch, ResumeState.Resuming, Attempts: 0, LastError: null,

@@ -168,10 +168,12 @@ internal partial class AgentOrchestrator {
 
     /// <summary>Starts the takeover of a hand-off's source off the caller's path, once, as soon as the agent's own
     /// session exists; a terminal agent's pinned id names no session until its transcript is found. The agent runs
-    /// on whatever the outcome.</summary>
+    /// on whatever the outcome. A resumed successor runs it again unless its stored outcome settled: the server
+    /// admits a repeated begin for the same successor.</summary>
     void StartHandoffTakeover(AgentInstance agent) {
         if (agent.HandoffSource is not { } source || SessionIds.Canonical(agent.SessionId) is not { } successor) return;
         if (agent.Runtime is not IAcpTranscriptSource && agent.TranscriptPath is null) return;
+        if (_handoffOutcomes.Get(successor) is { State: not ("running" or "interrupted") }) return;
         if (Interlocked.CompareExchange(ref agent.HandoffTakeoverStarted, 1, 0) != 0) return;
 
         PutHandoffOutcome(successor, HandoffOutcomeDto.Running(source.SessionId, source.Title));
