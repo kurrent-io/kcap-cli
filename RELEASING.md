@@ -86,8 +86,10 @@ build logs a warning; SmartScreen then warns on the first download.
 
 Both jobs then run `scripts/verify-windows-signatures.sh` (`signtool verify /pa`, plus a required
 timestamp: a Trusted Signing certificate is valid for three days, so an untimestamped signature
-stops verifying almost at once). The desktop job checks the installed tree that `Setup.exe` lays
-down, and that its CLI, daemon and service are byte-identical to what the CLI build signed.
+stops verifying almost at once; and a signer equal to `AZURE_TRUSTED_SIGNING_PUBLISHER`, because
+Velopack keeps a file someone else already signed). The desktop job checks the installed tree that
+`Setup.exe` lays down, and that its CLI, daemon and service are byte-identical to what the CLI build
+signed.
 `assert-bundle-digest.sh` separately proves the bundled daemon still matches the CLI's digest.
 
 ### Gating
@@ -139,6 +141,7 @@ In GitHub (repository settings):
    | `AZURE_TRUSTED_SIGNING_PROFILE` | The certificate profile name |
    | `AZURE_TRUSTED_SIGNING_CLIENT_ID` | The app registration's Application (client) ID |
    | `AZURE_TRUSTED_SIGNING_TENANT_ID` | The Directory (tenant) ID |
+   | `AZURE_TRUSTED_SIGNING_PUBLISHER` | The certificate's subject common name, exactly as `signtool verify /v` prints it under "Issued to" for the signer |
 
    None of these is a secret, and no secret is needed.
 
