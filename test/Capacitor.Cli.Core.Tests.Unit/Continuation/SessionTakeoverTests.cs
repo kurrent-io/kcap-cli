@@ -34,9 +34,9 @@ public class SessionTakeoverTests {
 
     async Task<TakeoverResult> Run(
             Routes routes, TakeoverAdmission admission = TakeoverAdmission.Judged, string previous = Previous, string current = Current,
-            CancellationToken ct = default) {
+            CancellationToken ct = default, bool skipAttached = false) {
         using var client = new HttpClient(routes);
-        return await new SessionTakeover(Local, TimeProvider.System).RunAsync(client, Base, previous, current, admission, ct);
+        return await new SessionTakeover(Local, TimeProvider.System).RunAsync(client, Base, previous, current, admission, skipAttached, ct);
     }
 
     static JsonObject Outcome(TakeoverResult r) => ((TakeoverResult.Completed)r).Outcome;
@@ -162,6 +162,36 @@ public class SessionTakeoverTests {
         var order = routes.Posts.Where(p => p.Path == "/api/work-items/declare").Select(p => p.Body!["work_item_id"]!.GetValue<string>()).ToList();
         await Assert.That(order).IsEquivalentTo(new[] { "w1", "w3", "w2" }, CollectionOrdering.Matching);
     }
+
+    /// <summary>A declare makes its item primary over one the agent chose, so a rerun must not re-declare an item the
+    /// current session already holds.</summary>
+    [Test]
+    public async Task Skipping_attached_items_declares_only_what_the_current_session_lacks() {
+        var routes = Server(Ended(), items: """[{"work_item_id":"w1","label":"One","is_primary":false},{"work_item_id":"w2","label":"Two","is_primary":true}]""");
+        routes.Get($"/api/work-items/session/{Current}", 200, """[{"work_item_id":"w2","label":"Two","is_primary":false},{"work_item_id":"w9","label":"Mine","is_primary":true}]""");
+        routes.Post("/api/work-items/declare", 200, "{}");
+
+        var o = Outcome(await Run(routes, skipAttached: true));
+
+        var declared = routes.Posts.Where(p => p.Path == "/api/work-items/declare").Select(p => p.Body!["work_item_id"]!.GetValue<string>()).ToList();
+        await Assert.That(declared).IsEquivalentTo(new[] { "w1" });
+        await Assert.That(o["work_items"]!["items"]!.AsArray().Select(i => (Str(i!["work_item_id"]), i!["attached"]!.GetValue<bool>())))
+            .IsEquivalentTo(new (string?, bool)[] { ("w1", true), ("w2", true) });
+    }
+
+    /// <summary>Not knowing what the current session holds, the run declares everything, as it would without the option.</summary>
+    [Test]
+    public async Task Skipping_attached_items_declares_everything_when_the_current_session_cannot_be_read() {
+        var routes = Server(Ended(), items: """[{"work_item_id":"w1","label":"One","is_primary":true}]""");
+        routes.Get($"/api/work-items/session/{Current}", 500, "");
+        routes.Post("/api/work-items/declare", 200, "{}");
+
+        await Run(routes, skipAttached: true);
+
+        await Assert.That(routes.Posts.Count(p => p.Path == "/api/work-items/declare")).IsEqualTo(1);
+    }
+
+    static string? Str(JsonNode? node) => node?.GetValue<string>();
 
     [Test]
     public async Task Work_items_outside_the_plan_are_reported_and_plans_are_still_adopted() {

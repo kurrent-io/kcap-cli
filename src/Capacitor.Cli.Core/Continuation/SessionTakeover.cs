@@ -18,8 +18,11 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
     /// <summary>The plans endpoint returns at most this many, the most recently touched, with no paging.</summary>
     public const int PlansReadCap = 20;
 
+    /// <param name="skipAttached">Leaves out every work item the current session already holds: a declare makes its
+    /// item primary over one an agent chose, so a rerun must not re-declare what an earlier run attached.</param>
     public async Task<TakeoverResult> RunAsync(
-            HttpClient client, string baseUrl, string previous, string current, TakeoverAdmission admission, CancellationToken ct = default) {
+            HttpClient client, string baseUrl, string previous, string current, TakeoverAdmission admission,
+            bool skipAttached = false, CancellationToken ct = default) {
         if (WorkContextIds.CanonicalSessionId(previous) is not { } previousWire || SessionId.Parse(previousWire) is not { } previousId)
             return new TakeoverResult.Refused($"'{previous}' is not a session id.", TakeoverResult.Refused.InvalidSessionId);
 
@@ -33,7 +36,7 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
         var outcome = new JsonObject { ["continued_from"] = previousWire };
 
         try {
-            return await RunAsync(client, baseUrl, previous, previousWire, previousId, currentWire, admission, outcome, ct);
+            return await RunAsync(client, baseUrl, previous, previousWire, previousId, currentWire, admission, skipAttached, outcome, ct);
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             return new TakeoverResult.Interrupted(outcome, TakeoverResult.Interrupted.Cancelled);
         }
@@ -41,7 +44,7 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
 
     async Task<TakeoverResult> RunAsync(
             HttpClient client, string baseUrl, string previous, string previousWire, SessionId previousId, string currentWire,
-            TakeoverAdmission admission, JsonObject outcome, CancellationToken ct) {
+            TakeoverAdmission admission, bool skipAttached, JsonObject outcome, CancellationToken ct) {
         var escaped = Uri.EscapeDataString(previousWire);
 
         var (summary, summaryError) = await ReadAsync(client, $"{baseUrl}/api/sessions/{escaped}/summary", ct);
@@ -65,8 +68,10 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
 
         var itemsRead = ReadAsync(client, $"{baseUrl}/api/work-items/session/{escaped}", ct);
         var plansRead = ReadAsync(client, $"{baseUrl}/api/sessions/{escaped}/plans", ct);
+        var heldRead  = skipAttached ? ReadHeldWorkItemsAsync(client, baseUrl, currentWire, ct) : Task.FromResult(new HashSet<string>());
         var (items, itemsError) = await itemsRead;
         var (plans, plansError) = await plansRead;
+        var held = await heldRead;
         using var itemsResponse = items;
         using var plansResponse = plans;
 
@@ -83,6 +88,11 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
 
         foreach (var (entry, body) in declares) {
             if (state.Stopped(ct)) break;
+            if (held.Contains(Str(body["work_item_id"]) ?? "")) {
+                entry["attached"] = true;
+                continue;
+            }
+
             await WriteAsync(client, $"{baseUrl}/api/work-items/declare", body, entry, state, ct);
         }
 
@@ -328,6 +338,18 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
         writes.Failed++;
 
         return false;
+    }
+
+    /// <summary>The work items the session holds, or none when they cannot be read: declaring again is what the run
+    /// would do without knowing.</summary>
+    static async Task<HashSet<string>> ReadHeldWorkItemsAsync(HttpClient client, string baseUrl, string sessionWire, CancellationToken ct) {
+        var (read, _) = await ReadAsync(client, $"{baseUrl}/api/work-items/session/{Uri.EscapeDataString(sessionWire)}", ct);
+        using var response = read;
+        if (response is not { IsSuccessStatusCode: true }) return [];
+
+        return ParseArray(await response.Content.ReadAsStringAsync(ct)) is { } list
+            ? [.. list.Select(i => Str(i?["work_item_id"])).OfType<string>()]
+            : [];
     }
 
     static async Task<(HttpResponseMessage? Response, string? Error)> ReadAsync(HttpClient client, string url, CancellationToken ct) {

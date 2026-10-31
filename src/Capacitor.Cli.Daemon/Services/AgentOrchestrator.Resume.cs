@@ -1502,7 +1502,7 @@ internal partial class AgentOrchestrator {
         try {
             using var client = await _http.ForBackgroundAsync(ct);
             var result = await new SessionTakeover(new ProvenExitedLiveness(), _time)
-                .RunAsync(client, ServerBase, previous, current, TakeoverAdmission.Judged, ct);
+                .RunAsync(client, ServerBase, previous, current, TakeoverAdmission.Judged, ct: ct);
 
             if (result is TakeoverResult.Interrupted && ct.IsCancellationRequested) return;
 

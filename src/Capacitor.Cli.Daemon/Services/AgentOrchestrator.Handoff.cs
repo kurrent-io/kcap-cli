@@ -257,7 +257,7 @@ internal partial class AgentOrchestrator {
 
             var result = await (RunHandoffTakeoverForTest?.Invoke(client, sourceWire, successor, run.Token)
                 ?? new SessionTakeover(new HostedSessionLiveness(HostsSession), _time)
-                    .RunAsync(client, ServerBase, sourceWire, successor, TakeoverAdmission.EndedOnly, run.Token));
+                    .RunAsync(client, ServerBase, sourceWire, successor, TakeoverAdmission.EndedOnly, skipAttached: true, run.Token));
             if (result is TakeoverResult.Interrupted && ct.IsCancellationRequested) throw new OperationCanceledException(ct);
 
             // Only the renewal loop cancels the run without the shutdown token.
