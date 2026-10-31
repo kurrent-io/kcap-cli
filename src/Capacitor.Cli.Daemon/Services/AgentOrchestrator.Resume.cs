@@ -388,7 +388,8 @@ internal partial class AgentOrchestrator {
             AccountId:              agent.Account?.AccountId,
             ScratchWorkspace:       cmd is { ScratchWorkspace: true } ? true : prior?.Launch.ScratchWorkspace,
             WorktreeOwnsBranch:     agent.Worktree.OwnsBranch,
-            AccountLabel:           agent.Account?.Label);
+            AccountLabel:           agent.Account?.Label,
+            HandoffSource:          agent.HandoffSource);
 
         return NewRunningEntry(agent.Id, agent.Vendor, agent.RuntimeTransport, agent.SessionId, agent.VendorSession, launch, prior) with {
             HasTerminal = agent.Runtime.EmitsTerminalOutput, TranscriptFormat = TranscriptFormatOf(agent),
@@ -460,7 +461,8 @@ internal partial class AgentOrchestrator {
             AccountId:              account?.AccountId,
             ScratchWorkspace:       cmd.ScratchWorkspace ? true : null,
             WorktreeOwnsBranch:     worktree.OwnsBranch,
-            AccountLabel:           account?.Label);
+            AccountLabel:           account?.Label,
+            HandoffSource:          cmd.Handoff?.Source);
 
         return NewRunningEntry(cmd.AgentId, cmd.Vendor, PreStartTransport, null, pinnedSessionId ?? cmd.ResumeSessionId, launch, prior: null);
     }
@@ -1460,7 +1462,9 @@ internal partial class AgentOrchestrator {
         var successor = entry with {
             AgentId = agentId, SessionId = null, VendorSession = null, Attempts = 0, LastError = null, CreatedAt = _time.GetUtcNow(),
             LaunchEpoch = _daemonEpoch,
-            InheritedAgentIds = [.. (entry.InheritedAgentIds ?? []), entry.AgentId]
+            InheritedAgentIds = [.. (entry.InheritedAgentIds ?? []), entry.AgentId],
+            // The server admits a repeated hand-off begin only for the session it continued the source as.
+            Launch = entry.Launch with { HandoffSource = null }
         };
         var launch  = new ResumeLaunch(successor, ResumedWorktree(entry)) { AttemptOf = entry.AgentId, DefersLedger = true, Token = ct };
         var cmd     = BuildResumeCommand(entry, LastAlive(entry, null), _server.CurrentConnectionId) with { AgentId = agentId, Prompt = prompt, ResumeSessionId = null };
@@ -1498,13 +1502,16 @@ internal partial class AgentOrchestrator {
         try {
             using var client = await _http.ForBackgroundAsync(ct);
             var result = await new SessionTakeover(new ProvenExitedLiveness(), _time)
-                .RunAsync(client, ServerBase, previous, current, force: false, ct);
+                .RunAsync(client, ServerBase, previous, current, TakeoverAdmission.Judged, ct: ct);
+
+            if (result is TakeoverResult.Interrupted && ct.IsCancellationRequested) return;
 
             LogContinueTakeover(agentId, previous, current, result switch {
                 TakeoverResult.Completed { Unsuccessful: false } => "completed",
                 TakeoverResult.Completed                         => "partial",
                 TakeoverResult.Refused r                         => $"refused: {r.Reason}",
                 TakeoverResult.Failed f                          => $"failed: {f.Reason}",
+                TakeoverResult.Interrupted i                     => $"failed: interrupted ({i.Code})",
                 _                                                => "unauthorized"
             });
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {

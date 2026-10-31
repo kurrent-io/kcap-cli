@@ -35,7 +35,8 @@ sealed class RecapContinuation(ConfigRoot config, ProfileContext profiles, Token
         TakeoverResult result;
 
         try {
-            result = await new SessionTakeover(AgentSessions.OnThisMachine(config), time).RunAsync(client, baseUrl, previous, current, force);
+            result = await new SessionTakeover(AgentSessions.OnThisMachine(config), time).RunAsync(
+                client, baseUrl, previous, current, force ? TakeoverAdmission.Forced : TakeoverAdmission.Judged);
         } catch (HttpRequestException ex) {
             await Console.Error.WriteLineAsync($"Continuing session {previous} failed: {ex.Message}");
             return 1;
@@ -51,6 +52,10 @@ sealed class RecapContinuation(ConfigRoot config, ProfileContext profiles, Token
                 return Refused;
             case TakeoverResult.Failed f:
                 await Console.Error.WriteLineAsync(f.Reason);
+                return 1;
+            case TakeoverResult.Interrupted i:
+                await Console.Out.WriteLineAsync(TakeoverReport.Render(i.Outcome));
+                await Console.Error.WriteLineAsync($"Continuing session {previous} was interrupted ({i.Code}).");
                 return 1;
             default:
                 await Console.Error.WriteLineAsync(await UnauthorizedNoticeAsync(baseUrl));
