@@ -11,8 +11,8 @@ namespace Capacitor.App.Views;
 
 /// Hosts a ready page in a NativeWebView. The WebView exists only while the page is Ready, which
 /// the view model reaches only where IWebViewAvailability allows it, so a runtime without a usable
-/// WebView never constructs one. A page loads only into a native web view whose WebRTC is off, and
-/// every handler the WebView raises catches what it throws: they run from native callbacks, where
+/// WebView never constructs one. A page loads only into a native web view whose WebRTC is off and
+/// whose navigations pass WebKitNavigationGuard, and every handler the WebView raises catches what it throws: they run from native callbacks, where
 /// an escaping exception ends the process.
 public partial class PageViewer : UserControl {
     PageViewerViewModel? _vm;
@@ -94,12 +94,18 @@ public partial class PageViewer : UserControl {
         webView.AdapterCreated += (_, e) => {
             try {
                 if (!ReferenceEquals(webView, _webView)) return;
-                if (e.TryGetPlatformHandle() is IAppleWKWebViewPlatformHandle apple && WebKitPeerConnection.TryDisable(apple.WKWebView)) {
-                    _webViewSafe = true;
-                    Show();
-                } else {
+                if (e.TryGetPlatformHandle() is not IAppleWKWebViewPlatformHandle apple) {
+                    Console.Error.WriteLine("kcap: the page web view is not a WKWebView; pages open in the browser");
+                    _vm?.WebViewUnusable();
+                } else if (!WebKitPeerConnection.TryDisable(apple.WKWebView)) {
                     Console.Error.WriteLine("kcap: could not turn WebRTC off in the page web view; pages open in the browser");
                     _vm?.WebViewUnusable();
+                } else if (!WebKitNavigationGuard.TryInstall(apple.WKWebView)) {
+                    Console.Error.WriteLine("kcap: could not guard the page web view's navigations; pages open in the browser");
+                    _vm?.WebViewUnusable();
+                } else {
+                    _webViewSafe = true;
+                    Show();
                 }
             } catch (Exception ex) {
                 Console.Error.WriteLine($"kcap: page web view setup failed: {ex.Message}");
