@@ -12,7 +12,6 @@ using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.App.Views;
 using Capacitor.App.Views.Onboarding;
 using Capacitor.Cli.Core;
-using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Plans;
 using Capacitor.Cli.Core.WorkItems;
@@ -168,7 +167,7 @@ public class ButtonAutomationNameTests {
             var opened = await AnnouncedAsync(window);
 
             var names = folded.Concat(opened).ToHashSet();
-            string[] expected = ["Parts", "Who's on it", "Copy Ada", "Copy Bob", "Issues", "Plan", "Agents and commands",
+            string[] expected = ["Parts, 1 open", "Parts, 0 of 1", "Who's on it", "Copy Ada", "Copy Bob", "Issues", "Plan", "Agents and commands",
                                  "Session details, More", "Session details, Less",
                                  "x-design.md", pullRequestCard ? "Pull requests" : "#7: Fix",
                                  .. titledIssues ? ["WK-1: One", "WK-2: Two"] : new[] { "WK-1" }];
@@ -303,7 +302,7 @@ public class ButtonAutomationNameTests {
                 [new ImportDiscoveryRepo("acme", "web", 40, DateTimeOffset.UnixEpoch, [new(since, 5), new(null, 40)])],
                 0, [new(since, 5), new(null, 40)])),
         };
-        var vm = new HistoryStepViewModel(cli, () => [HarnessId.Claude], action => action(), "test-mac", TimeProvider.System);
+        var vm = new HistoryStepViewModel(cli, action => action(), "test-mac", TimeProvider.System);
         await vm.OnEnterAsync(CancellationToken.None);
         await vm.Discovery;
         vm.ToggleCustomizeCommand.Execute().Subscribe();

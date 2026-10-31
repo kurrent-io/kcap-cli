@@ -86,11 +86,15 @@ public static partial class ImportScopePrompt {
     static string ScopeLabel(ImportScope scope) => scope switch {
         ImportScope.All    => "everything",
         ImportScope.Org o  => $"org repos only ({o.OrgLogin})",
-        ImportScope.Repo { Repos: [var only] } => $"repository {only.Owner}/{only.Name}",
+        ImportScope.Repo { Repos: [var only], Folders: [] } => $"repository {only.Owner}/{only.Name}",
+        ImportScope.Repo { Repos: [], Folders: [var folder] } => $"folder {folder}",
         // Named, not counted: the `repos:` line below lists what MATCHED, so a repo that was asked for
         // and found nothing appears nowhere else — and this is the text a --yes run leaves in CI logs.
-        ImportScope.Repo r                     =>
+        ImportScope.Repo { Folders: [] } r      =>
             $"{r.Repos.Count} repositories ({RepoLine([.. r.Repos.Select(x => $"{x.Owner}/{x.Name}")])})",
+        ImportScope.Repo r                     =>
+            $"{r.Repos.Count} repositor{(r.Repos.Count == 1 ? "y" : "ies")} and {r.Folders.Count} folder{(r.Folders.Count == 1 ? "" : "s")} "
+          + $"({RepoLine([.. r.Repos.Select(x => $"{x.Owner}/{x.Name}"), .. r.Folders])})",
         _                  => "?"
     };
 
@@ -115,10 +119,11 @@ public static partial class ImportScopePrompt {
     /// options (no current repo + no detected repos).
     /// </summary>
     public static ImportScope? RunPicker(
+            IAnsiConsole                               ansi,
             (string Owner, string Name)?               currentRepo,
             IReadOnlyList<(string Owner, string Name)> discoveredRepos
         ) {
-        var choice = AnsiConsole.Prompt(
+        var choice = ansi.Prompt(
             new SelectionPrompt<string>()
                 .Title("What would you like to import?")
                 .AddChoices("all", "org", "repo")
@@ -135,7 +140,7 @@ public static partial class ImportScopePrompt {
             case "all":
                 return new ImportScope.All();
             case "org":
-                var owner = RunOrgPicker(discoveredRepos);
+                var owner = RunOrgPicker(ansi, discoveredRepos);
 
                 return owner is null ? null : new ImportScope.Org(owner);
         }
@@ -143,12 +148,12 @@ public static partial class ImportScopePrompt {
         var repoChoices = BuildRepoChoices(currentRepo, discoveredRepos);
 
         if (repoChoices.Length == 0) {
-            AnsiConsole.MarkupLine("[red]No repositories detected in discovered sessions.[/]");
+            ansi.MarkupLine("[red]No repositories detected in discovered sessions.[/]");
 
             return null;
         }
 
-        var picked = AnsiConsole.Prompt(
+        var picked = ansi.Prompt(
             new SelectionPrompt<string>()
                 .Title("Which repository?")
                 .PageSize(15)
@@ -167,16 +172,16 @@ public static partial class ImportScopePrompt {
     /// choosing from the owners seen across discovered sessions. Returns the
     /// chosen owner, or null when no owners were detected (a reason is printed).
     /// </summary>
-    public static string? RunOrgPicker(IReadOnlyList<(string Owner, string Name)> discoveredRepos) {
+    public static string? RunOrgPicker(IAnsiConsole ansi, IReadOnlyList<(string Owner, string Name)> discoveredRepos) {
         var owners = BuildOrgChoices(discoveredRepos);
 
         if (owners.Length == 0) {
-            AnsiConsole.MarkupLine("[red]No git-remote owners detected in discovered sessions. Use --repo <owner/name> or --all.[/]");
+            ansi.MarkupLine("[red]No git-remote owners detected in discovered sessions. Use --repo <owner/name> or --all.[/]");
 
             return null;
         }
 
-        return AnsiConsole.Prompt(
+        return ansi.Prompt(
             new SelectionPrompt<string>()
                 .Title("Which org? [dim](git-remote owner)[/]")
                 .PageSize(15)
@@ -190,6 +195,8 @@ public static partial class ImportScopePrompt {
     /// Returns true to proceed with the import.
     /// </summary>
     public static bool PromptConfirm(
+            IAnsiConsole          ansi,
+            TextWriter            stderr,
             ImportScope           scope,
             int                   matchedCount,
             IReadOnlyList<string> repoSamples,
@@ -197,11 +204,11 @@ public static partial class ImportScopePrompt {
             bool                  skip,
             string                indent = ""
         ) {
-        WriteSummaryToStderr(scope, matchedCount, repoSamples, visibilityDescription, indent);
+        WriteSummaryToStderr(stderr, scope, matchedCount, repoSamples, visibilityDescription, indent);
 
         if (skip) return true;
 
-        return AnsiConsole.Prompt(
+        return ansi.Prompt(
             new ConfirmationPrompt("Continue?") { DefaultValue = false }
         );
     }
@@ -214,6 +221,7 @@ public static partial class ImportScopePrompt {
     // non-TTY stderr (e.g. CI), so the printed text matches FormatSummary
     // byte-for-byte in CI logs.
     static void WriteSummaryToStderr(
+            TextWriter            stderr,
             ImportScope           scope,
             int                   matchedCount,
             IReadOnlyList<string> repoSamples,
@@ -221,7 +229,7 @@ public static partial class ImportScopePrompt {
             string                indent
         ) {
         var console = AnsiConsole.Create(
-            new AnsiConsoleSettings { Out = new AnsiConsoleOutput(Console.Error) }
+            new AnsiConsoleSettings { Out = new AnsiConsoleOutput(stderr) }
         );
 
         console.WriteLine($"{indent}About to import:");

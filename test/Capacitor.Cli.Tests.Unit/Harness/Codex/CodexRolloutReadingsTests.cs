@@ -26,7 +26,7 @@ public class CodexRolloutReadingsTests {
         _accounts.Mutate(r => (r with { Accounts = [new VendorAccount("b", HarnessId.Codex, AccountDirectory.Normalize(dir), "b", DateTimeOffset.UnixEpoch, Generation: 3)] }, 0));
     }
 
-    CodexRolloutReadings Producer() => CodexRolloutReadings.For(_accounts, _rollout, "s1", Home)!;
+    CodexRolloutReadings Producer() => CodexRolloutReadings.For(_accounts, _rollout, Home)!;
 
     AccountReadingDto? Stored() => _accounts.Readings.LoadAll().TryGetValue("b", out var file) ? file.Reading : null;
 
@@ -123,7 +123,7 @@ public class CodexRolloutReadingsTests {
     public async Task Line_in_no_registered_account_records_nothing() {
         var elsewhere = Home.CreateFile(".codex-c/sessions/2026/10/24/rollout-y.jsonl", "");
 
-        var producer = CodexRolloutReadings.For(_accounts, elsewhere, "s1", Home);
+        var producer = CodexRolloutReadings.For(_accounts, elsewhere, Home);
 
         await Assert.That(producer).IsNull();
         await Assert.That(_accounts.Readings.LoadAll().Count).IsEqualTo(0);
@@ -166,7 +166,7 @@ public class CodexRolloutReadingsTests {
 
         var second = new AccountStore(Tmp.PathTo("accounts2"));
         second.Mutate(r => (r with { Accounts = _accounts.Load().Accounts }, 0));
-        var single = new CodexRolloutReadings(second.Readings, second.Load().Accounts.Single(), "s1");
+        var single = new CodexRolloutReadings(second.Readings, second.Load().Accounts.Single());
         foreach (var line in lines) single.Observe(line);
 
         var before = _accounts.Readings.Stat();
@@ -196,5 +196,50 @@ public class CodexRolloutReadingsTests {
 
         await Assert.That(_accounts.Readings.Stat().Length).IsEqualTo(0);
         await Assert.That(File.Exists(Path.Combine(_accounts.Directory, "readings.lock"))).IsFalse();
+    }
+
+    void StartGenerationAt(string timestamp) =>
+        _accounts.Mutate(r => (r with { Accounts = [r.Accounts.Single() with { GenerationStartedAt = DateTimeOffset.Parse(timestamp, System.Globalization.CultureInfo.InvariantCulture) }] }, 0));
+
+    [Test]
+    public async Task Lines_before_the_generation_start_are_dropped_from_a_batch() {
+        StartGenerationAt("2026-10-24T23:05:00.000Z");
+
+        Producer().Observe([
+            Line($$"""{"limit_id":"codex","primary":{{Window(80, 300)}}}""", "2026-10-24T23:00:00.000Z"),
+            Line($$"""{"limit_id":"codex","primary":{{Window(10, 10080)}}}""", "2026-10-24T23:10:00.000Z"),
+        ]);
+
+        var reading = Stored()!;
+
+        await Assert.That(reading.Windows.Single().WindowMinutes).IsEqualTo(10080);
+        await Assert.That(reading.Windows.Single().UsedPercent).IsEqualTo(10.0);
+    }
+
+    [Test]
+    public async Task Batch_entirely_before_the_generation_start_writes_nothing() {
+        StartGenerationAt("2026-10-24T23:30:00.000Z");
+
+        Producer().Observe([
+            Line($$"""{"limit_id":"codex","primary":{{Window(80, 300)}}}""", "2026-10-24T23:00:00.000Z"),
+            Line($$"""{"limit_id":"codex","primary":{{Window(10, 300)}}}""", "2026-10-24T23:10:00.000Z"),
+        ]);
+
+        await Assert.That(_accounts.Readings.Stat().Length).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Switched_account_without_a_generation_start_drops_lines_from_before_its_last_refresh() {
+        _accounts.Mutate(r => (r with { Accounts = [r.Accounts.Single() with { RefreshedAt = DateTimeOffset.Parse("2026-10-24T23:05:00.000Z", System.Globalization.CultureInfo.InvariantCulture) }] }, 0));
+
+        Producer().Observe([
+            Line($$"""{"limit_id":"codex","primary":{{Window(80, 300)}}}""", "2026-10-24T23:00:00.000Z"),
+            Line($$"""{"limit_id":"codex","primary":{{Window(10, 10080)}}}""", "2026-10-24T23:10:00.000Z"),
+        ]);
+
+        var reading = Stored()!;
+
+        await Assert.That(reading.Windows.Single().WindowMinutes).IsEqualTo(10080);
+        await Assert.That(reading.Windows.Single().UsedPercent).IsEqualTo(10.0);
     }
 }

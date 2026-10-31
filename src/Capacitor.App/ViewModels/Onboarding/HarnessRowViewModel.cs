@@ -9,7 +9,7 @@ namespace Capacitor.App.ViewModels.Onboarding;
 /// One detected harness on the Harnesses page: whether to record it, whether to give it the tools,
 /// and how its install went.
 public sealed class HarnessRowViewModel : ReactiveObject {
-    internal const string CodexConsentNote = "Also opens Codex's sandbox network to your server, so its skills can reach it.";
+    internal const string CodexConsentNote = "Also opens Codex's sandbox network to kcap, so its skills can reach it.";
 
     bool               _record;
     bool               _tools;
@@ -23,11 +23,13 @@ public sealed class HarnessRowViewModel : ReactiveObject {
         Label    = vendor.Label;
         Flag     = vendor.Flag;
         Declined = declined;
-        // The strongest claim wins: a launchable CLI, then an installed app, then files it wrote.
-        Signal   = detected.BinaryFound ? "on your PATH" : detected.DesktopAppFound ? "desktop app or its data" : "config found";
+        SettingsOnly = !detected.BinaryFound && !detected.DesktopAppFound;
+        Signal   = detected.BinaryFound ? "on your PATH" : detected.DesktopAppFound ? "desktop app or its data" : "settings folder only";
 
-        _record = !declined;
-        _tools  = !declined;
+        // A settings folder outlives an uninstall and can be written by something else, so it is no
+        // consent to record: those rows wait for the user to turn them on.
+        _record = !declined && !SettingsOnly;
+        _tools  = !declined && !SettingsOnly;
 
         RetryCommand = ReactiveCommand.CreateFromTask(() => retry(this), canRetry);
     }
@@ -38,6 +40,9 @@ public sealed class HarnessRowViewModel : ReactiveObject {
     public string Label    { get; }
     public string Signal   { get; }
     public bool   Declined { get; }
+
+    /// Found only by files it left, with no command on PATH and no installed app.
+    public bool SettingsOnly { get; }
 
     public string SignalLine => Declined ? $"{Signal} · you turned this down before" : Signal;
 

@@ -467,45 +467,98 @@ internal sealed class AgentCommand(
             return 0;
         }
 
-        foreach (var line in FormatAgentTable(agents)) console.Out.WriteLine(line);
+        foreach (var line in FormatAgentTable(agents, await FetchDetailsAsync(ResolveName(daemonName)))) console.Out.WriteLine(line);
 
         return 0;
     }
 
-    /// The title goes last: it is the widest free-form column, so the repo column is padded to
-    /// its longest value instead. Free-form cells come from launch prompts, repo paths and resume
-    /// failures, so control characters are stripped before they reach the terminal.
-    internal static IEnumerable<string> FormatAgentTable(IReadOnlyList<AgentRow> agents) {
+    static readonly TimeSpan DetailsBudget = TimeSpan.FromSeconds(3);
+
+    /// <summary>The daemon's status rows by agent id, the source the desktop app reads, or null when the
+    /// daemon does not answer in time: the table then shows only its own columns.</summary>
+    async Task<IReadOnlyDictionary<string, AgentStatusDto>?> FetchDetailsAsync(string daemonName) {
+        var probe = await LocalControlProbe.ProbeAsync(store, daemonName, time, DetailsBudget);
+
+        return probe.Snapshot?.Agents
+            .GroupBy(a => a.Id, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>What the agent is doing inside a running process, in the app's words: "working" mid-turn,
+    /// "idle" when its turn ended and it waits for a prompt, "needs you" on a question. Empty when the
+    /// process is not running or the daemon cannot tell.</summary>
+    internal static string Activity(AgentStatusDto? detail) =>
+        detail is not { Status: "Running" } ? ""
+        : UsageLimitNoticeDto.IsQuestion(detail.UsageLimit) || detail.TerminalDialog is not null ? "needs you"
+        : detail.AwaitingInput == false || detail.LiveSubagents > 0 ? "working"
+        : detail.AwaitingInput == true ? "idle"
+        : "";
+
+    /// <summary>The checkout the agent runs in, against the repository it belongs to: empty when it runs in
+    /// the repository itself, the worktree's own name for one the daemon made under the repository, else
+    /// its full path.</summary>
+    internal static string WorktreeCell(string repo, string? worktree) {
+        if (string.IsNullOrEmpty(worktree)) return "";
+
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var trimmed    = worktree.TrimEnd('/', '\\');
+
+        if (repo.Length == 0 || string.Equals(trimmed, repo.TrimEnd('/', '\\'), comparison)) return repo.Length == 0 ? trimmed : "";
+
+        var owned = Path.Combine(repo, ".capacitor", "worktrees");
+
+        return trimmed.StartsWith(owned, comparison) && trimmed.Length > owned.Length + 1 && trimmed[owned.Length] is '/' or '\\'
+            ? trimmed[(owned.Length + 1)..]
+            : trimmed;
+    }
+
+    /// <summary>The title goes last: it is the widest free-form column, so the others are padded to
+    /// their longest value instead. Free-form cells come from launch prompts, repo paths and resume
+    /// failures, so control characters are stripped before they reach the terminal.</summary>
+    /// <param name="details">The daemon's status rows by agent id. With them the table adds what the agent
+    /// is doing (ACTIVITY), the harness it runs, the session it records to and the worktree it works in;
+    /// a column no row has a value for is left out.</param>
+    internal static IEnumerable<string> FormatAgentTable(
+            IReadOnlyList<AgentRow> agents, IReadOnlyDictionary<string, AgentStatusDto>? details = null) {
+        static string Clean(string? value) => HttpClientExtensions.StripControlCharacters(value ?? "");
+
         static string RepoCell(AgentRow a) {
             var flow = a.FlowRunId.Length > 0 ? $"  [flow {a.FlowRunId}]" : "";
             var role = a.FlowRole.Length > 0 ? $"  [{a.FlowRole}]" : "";
 
-            return HttpClientExtensions.StripControlCharacters($"{a.Repo}{flow}{role}");
+            return Clean($"{a.Repo}{flow}{role}");
         }
 
-        static string StateCell(AgentRow a) => HttpClientExtensions.StripControlCharacters(a.State ?? "");
+        AgentStatusDto? Detail(AgentRow a) => details?.GetValueOrDefault(a.Id);
 
-        var withState   = agents.Any(a => a.State is not null);
-        var statusWidth = Math.Max(10, agents.Max(a => a.Status.Length));
-        var stateWidth  = withState ? Math.Max("STATE".Length, agents.Max(a => StateCell(a).Length)) : 0;
+        // Header, then the cell for a row; a column is shown when some row fills it, or always for null.
+        (string Head, Func<AgentRow, string> Cell, int? Least)[] columns = [
+            ("AGENT", a => Clean(a.Id), null),
+            ("STATUS", a => Clean(a.Status), null),
+            ("STATE", a => Clean(a.State), agents.Any(a => a.State is not null) ? (int?)null : -1),
+            ("ACTIVITY", a => Activity(Detail(a)), 0),
+            ("KIND", a => Clean(a.Kind), null),
+            ("HARNESS", a => Clean(Detail(a)?.Vendor), 0),
+            ("SESSION", a => Clean(Detail(a)?.SessionId), 0),
+            ("REPO", RepoCell, null),
+            ("WORKTREE", a => Clean(WorktreeCell(a.Repo, Detail(a)?.WorktreePath)), 0),
+        ];
 
-        string Lead(string id, string status, string state, string kind) =>
-            withState
-                ? $"{id,-34} {status.PadRight(statusWidth)} {state.PadRight(stateWidth)} {kind,-12}"
-                : $"{id,-34} {status.PadRight(statusWidth)} {kind,-12}";
+        var shown = columns
+            .Where(c => c.Least switch { null => true, -1 => false, _ => agents.Any(a => c.Cell(a).Length > 0) })
+            .ToList();
+        var withTitle = agents.Any(a => a.Title is not null);
+        var widths    = shown.Select(c => Math.Max(c.Head.Length, agents.Max(a => c.Cell(a).Length))).ToList();
 
-        if (agents.All(a => a.Title is null)) {
-            yield return $"{Lead("AGENT", "STATUS", "STATE", "KIND")} REPO";
-            foreach (var a in agents) yield return $"{Lead(a.Id, a.Status, StateCell(a), a.Kind)} {RepoCell(a)}";
+        string Line(IEnumerable<string> cells, string? title) {
+            var padded = cells.Select((cell, i) => i < shown.Count - 1 || withTitle ? cell.PadRight(widths[i]) : cell);
 
-            yield break;
+            return (string.Join(' ', padded) + (withTitle ? $" {title}" : "")).TrimEnd();
         }
 
-        var repoWidth = Math.Max("REPO".Length, agents.Max(a => RepoCell(a).Length));
+        yield return Line(shown.Select(c => c.Head), "TITLE");
 
-        yield return $"{Lead("AGENT", "STATUS", "STATE", "KIND")} {"REPO".PadRight(repoWidth)} TITLE";
-        foreach (var a in agents)
-            yield return $"{Lead(a.Id, a.Status, StateCell(a), a.Kind)} {RepoCell(a).PadRight(repoWidth)} {HttpClientExtensions.StripControlCharacters(a.Title)}".TrimEnd();
+        foreach (var a in agents) yield return Line(shown.Select(c => c.Cell(a)), Clean(a.Title));
     }
 
     /// <summary>

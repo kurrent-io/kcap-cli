@@ -38,7 +38,7 @@ public class ImportSelectionReportingTests : IDisposable {
     }
 
     ImportCommand Import() => new(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home,
-        TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System);
+        TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: new TestImportTerminal().Console);
 
     [Test]
     public async Task Capped_run_reports_selection_before_the_first_upload_and_a_partition_at_the_end() {
@@ -66,6 +66,34 @@ public class ImportSelectionReportingTests : IDisposable {
         await Assert.That(finished.Partition!.SucceededIds).IsEquivalentTo(selected.SelectedIds);
         await Assert.That(finished.Partition.FailedIds).IsEmpty();
         await Assert.That(_server.LogEntries.Count(e => e.RequestMessage.Path.StartsWith("/hooks/session-start", StringComparison.Ordinal))).IsEqualTo(5);
+    }
+
+    /// <summary>Seven found, five imported now: the two the cap left are queued, so the Done totals account
+    /// for all seven, and the output says how the work was divided before and after it ran.</summary>
+    [Test]
+    public async Task Capped_run_counts_and_names_the_sessions_left_for_the_background_import() {
+        StubHooks();
+        var projects = Projects();
+        var terminal = new TestImportTerminal();
+        ImportCommand.ImportRunOutcome? finished = null;
+
+        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home),
+                new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: terminal.Console)
+            .HandleImport(
+                filterCwd: null, minLines: 1,
+                sources: [new ClaudeImportSource(Config.Root, projects.Path, router: new GitProviderRouter(), time: TimeProvider.System)],
+                scope: new ImportScope.All(), skipConfirmation: true, skipTitle: true,
+                maxSessions: 5, onFinished: o => finished = o);
+
+        await Assert.That(finished!.Counts.Imported).IsEqualTo(5);
+        await Assert.That(finished.Counts.Deferred).IsEqualTo(2);
+        await Assert.That(finished.Counts.Failed).IsEqualTo(0);
+        await Assert.That(finished.Counts.Total).IsEqualTo(7);
+
+        var output = terminal.Plain.ToString();
+        await Assert.That(output).Contains("Of 7 sessions found, 7 need importing: the newest 5 now, and 2 queued for the background import.");
+        await Assert.That(output).Contains("5 imported · 0 skipped · 0 failed\n");
+        await Assert.That(output).Contains(ImportCommand.DeferredNote(2));
     }
 
     [Test]

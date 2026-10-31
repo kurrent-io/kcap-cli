@@ -35,7 +35,7 @@ public class DaemonSignInTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_footer_says_signed_out_and_offers_sign_in_for_the_apps_own_profile() {
+    public async Task The_footer_says_sign_in_required_and_offers_sign_in_for_the_apps_own_profile() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
             var vm = new MainWindowViewModel(
@@ -46,16 +46,20 @@ public class DaemonSignInTests {
             service.SnapshotsSubject.OnNext(Snap(connection: "reconnecting", credential: "signed_out", profile: "work"));
             service.StatusSubject.OnNext(Attached);
 
-            await Assert.That(vm.ConnectionDisplay).IsEqualTo(MainWindowViewModel.SignedOutDisplay);
-            await Assert.That(((ISolidColorBrush)vm.StatusBrush).Color).IsEqualTo(Color.Parse(StatusColors.Disrupted));
+            await Assert.That(vm.Alert!.Text).IsEqualTo(MainWindowViewModel.SignInRequiredText);
+            await Assert.That(vm.Alert.Recovery).IsEqualTo(RailRecovery.SignIn);
+            // A signed-out daemon needs the user, as the launcher's card shows it too.
+            await Assert.That(((ISolidColorBrush)vm.StatusBrush).Color).IsEqualTo(Color.Parse(StatusColors.InProgress));
             await Assert.That(vm.SignInVisible).IsTrue();
 
             service.SnapshotsSubject.OnNext(Snap(connection: "reconnecting", credential: "signed_out", profile: "old"));
-            await Assert.That(vm.ConnectionDisplay).IsEqualTo(MainWindowViewModel.SignedOutDisplay);
+            await Assert.That(vm.Alert!.Text).IsEqualTo(MainWindowViewModel.SignInRequiredText);
+            await Assert.That(vm.Alert.Recovery).IsEqualTo(RailRecovery.None)
+                .Because("signing the app in leaves another profile's daemon signed out");
             await Assert.That(vm.SignInVisible).IsFalse().Because("signing the app in leaves another profile's daemon signed out");
 
             service.SnapshotsSubject.OnNext(Snap(connection: "connected", profile: "old"));
-            await Assert.That(vm.ConnectionDisplay).IsEqualTo("Connected");
+            await Assert.That(vm.Alert).IsNull();
         });
     }
 

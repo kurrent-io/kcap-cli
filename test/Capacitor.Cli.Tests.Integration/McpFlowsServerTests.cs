@@ -415,7 +415,7 @@ public class McpFlowsServerTests : IAsyncDisposable {
                 // open flow (`session_id` names another session). Backwards-compatible by
                 // construction, so pinning it here is deliberate, not a relaxation of the byte-stable
                 // contract this test otherwise enforces.
-                properties: ["flow_run_id", "session_id", "wait"],
+                properties: ["flow_run_id", "session_id", "wait", "timeout_s"],
                 required:   []
             );
 
@@ -1838,7 +1838,7 @@ public class McpFlowsServerTests : IAsyncDisposable {
 
             await AssertSchema(
                 startFlow,
-                properties: ["definition_id", "definition_yaml", "target_kind", "target_ref", "target_title", "session_title", "context", "instructions", "mode", "repo_path", "patch_path", "base_commit", "vendor", "model"],
+                properties: ["definition_id", "definition_yaml", "target_kind", "target_ref", "target_title", "session_title", "context", "instructions", "mode", "repo_path", "patch_path", "base_commit", "vendor", "model", "wait"],
                 required:   ["target_kind", "target_ref", "target_title", "session_title", "context"]
             );
 

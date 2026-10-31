@@ -41,7 +41,7 @@ public static class MistralVibeConfigToml {
         foreach (var model in models)
             if (model.TryGetValue("alias", out var alias) && alias as string == active
              || model.TryGetValue("name", out var named) && named as string == active)
-                return model.TryGetValue("name", out var name) ? name as string : null;
+                return model.TryGetValue("name", out var name) && name is string { Length: > 0 } resolved ? resolved : null;
 
         return null;
     }

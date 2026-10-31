@@ -5,6 +5,7 @@ using System.Reactive.Linq;
 using Capacitor.App.Services;
 using Capacitor.App.Services.Update;
 using Capacitor.App.Views;
+using Capacitor.Cli.Core.LocalIpc;
 using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
@@ -17,18 +18,35 @@ public sealed class AboutSettingsViewModel : ReactiveObject, IDisposable {
     string? _daemonVersion;
     string? _cliVersionText;
     UpdateMenuItem? _update;
+    readonly Func<bool, Task>? _setBetaUpdates;
+    bool _betaUpdates;
 
     public AboutSettingsViewModel(IDaemonClientService service, Func<CancellationToken, Task<string?>> cliVersion,
             LocalStackViewModel? localStack = null, IObservable<UpdateMenuItem>? updateMenu = null, Func<Task>? updateAction = null,
-            IUrlOpener? opener = null, CancellationToken appLifetime = default) {
+            IUrlOpener? opener = null, Func<bool>? followsBetas = null, Func<bool, Task>? setBetaUpdates = null,
+            CancellationToken appLifetime = default) {
         _cliVersion = cliVersion;
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(appLifetime);
         LocalStack = localStack;
+        _setBetaUpdates = setBetaUpdates;
+        _betaUpdates = followsBetas?.Invoke() ?? false;
         // The service keeps its last snapshot after a disconnect, so the version only stands while attached.
         service.Status.CombineLatest(service.Snapshots.Select(s => MainWindowViewModel.StripBuildMetadata(s.Daemon.Version)),
                 (status, version) => status.State == AttachState.Connected ? version : "")
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(v => DaemonVersion = v.Length > 0 ? v : null)
+            .DisposeWith(_subscriptions);
+        service.Status.CombineLatest(service.Snapshots.Select(s => (DaemonInfoDto?)s.Daemon).StartWith((DaemonInfoDto?)null),
+                (status, daemon) => (status, daemon))
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(t => {
+                DaemonStatus = DaemonStatusFor(t.status, t.daemon);
+                var attached = t.status.State == AttachState.Connected ? t.daemon : null;
+                ServerConnection = DaemonStatusText.Server(t.status, t.daemon);
+                RunningAgents = attached is null ? null
+                    : attached.MaxAgents == 0 ? $"{attached.ActiveAgents} running · no limit"
+                    : $"{attached.ActiveAgents} running · limit {attached.MaxAgents}";
+            })
             .DisposeWith(_subscriptions);
         updateMenu?.ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(item => Update = item)
@@ -50,6 +68,26 @@ public sealed class AboutSettingsViewModel : ReactiveObject, IDisposable {
         }
     }
 
+    /// The attach to this machine's daemon, with its name while attached.
+    public string DaemonStatus {
+        get;
+        private set => this.RaiseAndSetIfChanged(ref field, value);
+    } = "connecting";
+
+    /// The daemon's own connection to its server, and which server; null while not attached.
+    public string? ServerConnection {
+        get;
+        private set => this.RaiseAndSetIfChanged(ref field, value);
+    }
+
+    /// Agents running on the daemon against its configured limit; null while not attached.
+    public string? RunningAgents {
+        get;
+        private set => this.RaiseAndSetIfChanged(ref field, value);
+    }
+
+    internal static string DaemonStatusFor(AttachStatus status, DaemonInfoDto? daemon) => DaemonStatusText.Attach(status, daemon);
+
     public string? CliVersion {
         get => _cliVersionText;
         private set {
@@ -63,10 +101,22 @@ public sealed class AboutSettingsViewModel : ReactiveObject, IDisposable {
         private set {
             this.RaiseAndSetIfChanged(ref _update, value);
             this.RaisePropertyChanged(nameof(UpdateVisible));
+            this.RaisePropertyChanged(nameof(BetaUpdatesVisible));
         }
     }
 
     public bool UpdateVisible => Update is { Visible: true };
+
+    public bool BetaUpdatesVisible => UpdateVisible && _setBetaUpdates is not null;
+
+    public bool BetaUpdates {
+        get => _betaUpdates;
+        set {
+            if (_setBetaUpdates is null || value == _betaUpdates) return;
+            this.RaiseAndSetIfChanged(ref _betaUpdates, value);
+            _ = _setBetaUpdates(value);
+        }
+    }
 
     public ReactiveCommand<Unit, Unit> UpdateCommand { get; }
     public ReactiveCommand<Unit, Unit> OpenDocsCommand { get; }

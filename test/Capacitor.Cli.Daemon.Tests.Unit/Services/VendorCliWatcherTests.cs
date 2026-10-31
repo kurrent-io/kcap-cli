@@ -103,6 +103,28 @@ public class VendorCliWatcherTests {
         await Assert.That(h.Refreshes.Count).IsEqualTo(1);
     }
 
+    /// <summary>A desktop app's bundled CLI moves to a new directory on update and the old one is
+    /// pruned: the watcher follows the vendor's current path rather than the one it started with. The
+    /// pruned path stats null, so watching it alone would never see the change.</summary>
+    [Test]
+    public async Task A_cli_that_moved_is_watched_at_its_current_path() {
+        const string before = "/app/claude-code/2.1.259/claude";
+        const string after  = "/app/claude-code/2.1.263/claude";
+        var current = before;
+        var h = new Harness(("claude", before));
+        h.Watcher.CurrentCliPath = vendor => vendor == "claude" ? current : null;
+        h.Stats[before] = Old;
+        h.Watcher.PrimeBaselines();
+
+        h.Stats.Remove(before);
+        h.Stats[after] = New;
+        current = after;
+        h.Watcher.Tick();
+
+        await Assert.That(h.Refreshes.Count).IsEqualTo(1);
+        await Assert.That(h.Refreshes[0]).Contains("claude");
+    }
+
     [Test]
     public async Task A_transient_stat_failure_neither_refreshes_nor_moves_the_baseline() {
         var h = new Harness(("claude", "/bin/claude"));
@@ -400,7 +422,7 @@ public class VendorCliWatcherTests {
         try {
             await Assert.That(refreshes.Count).IsEqualTo(1);
 
-            var recorded = store.Readings.TryRecord(work.Id, 0, null, f => f with {
+            var recorded = store.Readings.TryRecord(work.Id, (f, _) => f with {
                 Reading = f.Reading with { Windows = [new UsageWindowDto("five_hour", 300, 42, null, null)] },
             });
             await Assert.That(recorded).IsTrue();

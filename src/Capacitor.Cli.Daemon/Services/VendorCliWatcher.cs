@@ -31,6 +31,8 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
     internal Func<string, CliBinaryStat?>   StatBinary;
     internal Func<string, CatalogPathStat>  StatCatalog = CatalogPathStat.Of;
     internal Action<string>                 Refresh;
+    // A vendor's CLI path is read per tick: a desktop app's bundled CLI moves to a new directory on update.
+    internal Func<string, string?>          CurrentCliPath = _ => null;
     internal IReadOnlyList<(string Vendor, string CliPath, IReadOnlyList<string> CatalogPaths)> Watched;
 
     readonly Dictionary<string, CliBinaryStat?>   _baselines        = new(StringComparer.Ordinal);
@@ -59,6 +61,7 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
         _recordedCatalogs = () => config.VendorCatalogBaselines;
         Refresh    = reason => orchestrator.RefreshAdvertisedCapabilities(reason);
         StatBinary = path => StatCliBinary(config.Binaries, path);
+        CurrentCliPath = vendor => factories.TryGetValue(vendor, out var factory) ? factory.CliPath : null;
         Watched    = [];
         accounts.Changed += OnAccountsChanged;
     }
@@ -170,7 +173,7 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
 
         List<string>? changed = null;
         foreach (var (vendor, cliPath, catalogPaths) in Watched) {
-            var current        = StatCli(cliPath);
+            var current        = StatCli(CurrentCliPath(vendor) ?? cliPath);
             var binaryChanged  = Changed(_baselines.GetValueOrDefault(vendor), current);
             var catalog        = StatCatalogs(catalogPaths);
             var catalogChanged = !catalog.AsSpan().SequenceEqual(_catalogBaselines.GetValueOrDefault(vendor) ?? []);

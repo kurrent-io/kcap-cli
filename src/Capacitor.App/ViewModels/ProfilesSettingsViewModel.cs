@@ -1,14 +1,19 @@
 using System.Reactive;
+using System.Reactive.Disposables;
+using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
+using Capacitor.App.Services;
 using Capacitor.App.Services.Onboarding;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.LocalIpc;
 using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
 
-public sealed class ProfilesSettingsViewModel : ReactiveObject {
+public sealed class ProfilesSettingsViewModel : ReactiveObject, IDisposable {
     /// The confirmation for removing a profile. Removing the one the local daemon runs on deletes the
     /// daemon's only sign-in, so the prompt says so; with no attached daemon reporting a profile, it
     /// says it may.
@@ -34,11 +39,14 @@ public sealed class ProfilesSettingsViewModel : ReactiveObject {
     bool _isBusy;
     int _refreshGeneration;
 
+    /// <param name="appLane">This app's own server connection, on the profile it was bound to at startup.</param>
+    /// <param name="daemon">The local daemon, whose snapshot names the profile it runs on and its own connection.</param>
     public ProfilesSettingsViewModel(
             ConfigRoot config, TokenStore tokens, OnboardingGate gate, string boundProfile,
             Func<string, string, CancellationToken, Task> openSignIn,
             Func<string, CancellationToken, Task<bool>> confirmRemove,
-            CancellationToken appLifetime = default) {
+            CancellationToken appLifetime = default, IObservable<ServerLaneStatus>? appLane = null,
+            IDaemonClientService? daemon = null) {
         _config = config;
         _tokens = tokens;
         _gate = gate;
@@ -50,7 +58,24 @@ public sealed class ProfilesSettingsViewModel : ReactiveObject {
         var idle = this.WhenAnyValue(x => x.IsBusy, busy => !busy);
         SignInCommand = ReactiveCommand.CreateFromTask<ProfileRow>(SignInAsync, idle);
         RemoveCommand = ReactiveCommand.CreateFromTask<ProfileRow>(RemoveAsync, idle);
+
+        appLane?.Select(s => (s.State, s.Failure)).DistinctUntilChanged()
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(lane => { _lane = lane; Redecorate(); })
+            .DisposeWith(_subscriptions);
+        daemon?.Status.CombineLatest(daemon.Snapshots.Select(s => (DaemonInfoDto?)s.Daemon).StartWith((DaemonInfoDto?)null),
+                (status, info) => status.State == AttachState.Connected && info is not null
+                    ? (info.Profile, Word: DaemonStatusText.Connection(status, info))
+                    : ((string?)null, Word: (string?)null))
+            .DistinctUntilChanged()
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(attached => { _daemon = attached; Redecorate(); })
+            .DisposeWith(_subscriptions);
     }
+
+    readonly CompositeDisposable _subscriptions = new();
+    (ServerLaneState State, ConnectionFailure? Failure)? _lane;
+    (string? Profile, string? Word) _daemon;
 
     public IReadOnlyList<ProfileRow> Rows {
         get => _rows;
@@ -59,6 +84,34 @@ public sealed class ProfilesSettingsViewModel : ReactiveObject {
             this.RaisePropertyChanged(nameof(ListedRows));
         }
     }
+
+    void Redecorate() => Rows = [.. _rows.Select(Decorate)];
+
+    ProfileRow Decorate(ProfileRow row) {
+        var (connection, attention) = ConnectionFor(row.Name, row.IsBound, _lane, _daemon);
+        return row with { Connection = connection, ConnectionNeedsAttention = attention };
+    }
+
+    /// The app's own connection on the profile it is bound to, and the daemon's on the profile it reports. A daemon
+    /// that does not say which profile it runs on is not guessed at.
+    internal static (string? Text, bool Attention) ConnectionFor(
+            string profile, bool bound, (ServerLaneState State, ConnectionFailure? Failure)? lane, (string? Profile, string? Word) daemon) {
+        var app = bound && lane is { } l ? l.State switch {
+            ServerLaneState.Connected  => ("This app: connected", false),
+            ServerLaneState.Connecting => ("This app: connecting", false),
+            ServerLaneState.Retrying when l.Failure is { } failure => ($"This app: can't reach the server ({failure.Reason})", true),
+            ServerLaneState.Retrying   => ("This app: reconnecting", false),
+            ServerLaneState.SignedOut  => ("This app: sign-in rejected", true),
+            _                          => ((string?)null, false),
+        } : (null, false);
+        var ours = daemon.Word is not null && string.Equals(daemon.Profile, profile, StringComparison.Ordinal)
+            ? ($"Daemon: {daemon.Word}", daemon.Word is not ("connected" or "connecting"))
+            : ((string?)null, false);
+        var text = string.Join(" · ", new[] { app.Item1, ours.Item1 }.OfType<string>());
+        return (text.Length > 0 ? text : null, app.Item2 || ours.Item2);
+    }
+
+    public void Dispose() => _subscriptions.Dispose();
 
     public IReadOnlyList<ProfileRow> ListedRows => [.. _rows.Where(r => !r.IsPlaceholder)];
 
@@ -94,8 +147,9 @@ public sealed class ProfilesSettingsViewModel : ReactiveObject {
             rows.Add(new ProfileRow(name, profile.ServerUrl, name == config.ActiveName, name == _boundProfile,
                 await StatusAsync(name, profile)));
         }
-        if (generation == _refreshGeneration) Rows = rows;
-        return rows;
+        var decorated = rows.Select(Decorate).ToList();
+        if (generation == _refreshGeneration) Rows = decorated;
+        return decorated;
     }
 
     // Refresh-free on purpose: grading a row must never spend a single-use refresh token.

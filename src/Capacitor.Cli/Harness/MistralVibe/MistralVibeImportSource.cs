@@ -111,6 +111,7 @@ internal sealed class MistralVibeImportSource(MistralVibePaths paths, TimeProvid
 
             int? serverLastLine;
             try { serverLastLine = await FetchServerLastLineAsync(ctx.HttpClient, ctx.BaseUrl, s.SessionId, ct); }
+            catch (SessionDeletedException) { results.Add(Classify(s, meta, ImportCommand.ClassificationStatus.Deleted, nonBlank)); continue; }
             catch { results.Add(Classify(s, meta, ImportCommand.ClassificationStatus.ProbeError, nonBlank, "watermark probe failed")); continue; }
 
             var lastLineIndex = LastNonBlankIndex(lines);
@@ -275,6 +276,7 @@ internal sealed class MistralVibeImportSource(MistralVibePaths paths, TimeProvid
 
     async Task<int?> FetchServerLastLineAsync(HttpClient http, string baseUrl, string sessionId, CancellationToken ct) {
         using var resp = await http.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/last-line", time, ct: ct);
+        SessionDeletedException.ThrowIfDeleted(resp, sessionId);
         if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
         if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"watermark probe returned {(int)resp.StatusCode}");
 

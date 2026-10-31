@@ -20,7 +20,7 @@ internal sealed partial class ClaudeLauncher(
     ) : IHostedAgentLauncher {
 
     public string Vendor  => "claude";
-    public string CliPath => config.ClaudePath;
+    public string CliPath => harnesses.LaunchCommand(HarnessId.Claude, config.ClaudePath);
     public bool   SupportsUnattended => true;
     public bool   SupportsPrReview   => true;
 
@@ -266,11 +266,13 @@ internal sealed partial class ClaudeLauncher(
     /// in front of them unless they already choose the session: in place, every Claude session in the
     /// folder shares the cwd, so only the id tells this agent's transcript from the user's own.
     public LaunchArgs BuildPassthrough(LauncherContext ctx, IReadOnlyList<string> userArgs) {
-        if (ClaudeSessionArgs.SelectsSession(userArgs, out var chosen)) return new([.. userArgs], McpConfigPath: null, chosen);
+        var mode = ClaudePermissionModeArgs.Selected(userArgs);
+
+        if (ClaudeSessionArgs.SelectsSession(userArgs, out var chosen)) return new([.. userArgs], McpConfigPath: null, chosen, mode);
 
         var pinned = Guid.NewGuid().ToString();
 
-        return new(["--session-id", pinned, .. userArgs], McpConfigPath: null, pinned);
+        return new(["--session-id", pinned, .. userArgs], McpConfigPath: null, pinned, mode);
     }
 
     public void Cleanup(AgentInstance agent) {

@@ -5,6 +5,7 @@ using Capacitor.App.Services;
 using Capacitor.App.Services.LocalSetup;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -19,11 +20,13 @@ public class LocalStackViewModelTests {
         public int Reconnects;
         public int Reads;
         public int Starts;
-        public Func<ProcessResult> StartResult = () => new ProcessResult(0, "Local server is running.\n", "", false);
+        public LocalEmbeddingSetting Setting = LocalEmbeddingSetting.Builtin(new string('a', 64));
+        public bool ModelReady;
+        public Func<Task<ProcessResult>> StartResult = () => Task.FromResult(new ProcessResult(0, "Local server is running.\n", "", false));
         /// What the registry names; the view model reads it, never the run's target.
         public string? Registry;
 
-        public Harness(string? installed = "1.2.0") {
+        public Harness(string? installed = "1.2.0", bool searchSettings = false) {
             Registry = installed;
             Upgrade = new LocalUpgradeController(() => Cli, action => action(), held: () => Search.Running);
             Search  = new LocalSearchController(() => Cli, action => action(), held: () => Upgrade.Running);
@@ -32,11 +35,16 @@ public class LocalStackViewModelTests {
                 return Registry;
             }, Status, Upgrade, _ => {
                 Starts++;
-                return Task.FromResult(StartResult());
+                return StartResult();
             }, () => {
                 Reconnects++;
                 return Task.CompletedTask;
-            }, CancellationToken.None, ImmediateScheduler.Instance, Search);
+            }, CancellationToken.None, ImmediateScheduler.Instance, Search) {
+                Search = searchSettings ? new LocalSearchViewModel(() => Setting,
+                    _ => Task.FromResult<LocalEmbeddingModelManifest?>(null), Status, Search, Upgrade,
+                    () => Task.CompletedTask, CancellationToken.None, ImmediateScheduler.Instance,
+                    builtinModelReady: () => ModelReady) : null,
+            };
         }
 
         public async Task RunAsync(int exitCode, params string[] lines) {
@@ -45,10 +53,114 @@ public class LocalStackViewModelTests {
             await Upgrade.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
         }
 
-        public void Dispose() => Vm.Dispose();
+        public void Dispose() {
+            Vm.Search?.Dispose();
+            Vm.Dispose();
+            Status.Dispose();
+        }
     }
 
     static IEnumerable<string?> ShownText(LocalStackViewModel vm) => [vm.Headline, vm.Detail, vm.Guidance, vm.StateText, vm.StartMessage];
+
+    [Test]
+    [Arguments(false, false)]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    [Arguments(true, true)]
+    public async Task Search_configured_elsewhere_clears_the_warning_only_after_it_is_applied(bool needsStart, bool keyword) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness("1.3.0", searchSettings: true);
+            await h.RunAsync(needsStart ? 2 : 0, UpgradeScript.Planned("1.2.0", "1.3.0"),
+                """{"v":1,"event":"embeddings_skipped","code":"model_download_failed","message":"Model download failed"}""",
+                UpgradeScript.Switched("1.3.0"), needsStart
+                    ? UpgradeScript.Failed("start_failed", "Server did not start.", true)
+                    : UpgradeScript.Upgraded("1.2.0", "1.3.0"));
+
+            h.Status.OnNext(new(ServerLaneState.Retrying));
+            h.ModelReady = true;
+            h.Setting = (keyword ? LocalEmbeddingSetting.Declined : h.Setting) with { Pending = true };
+            h.Status.OnNext(new(ServerLaneState.Connected));
+            await Assert.That(h.Vm.BannerVisible).IsTrue();
+            await Assert.That(h.Vm.Search!.StateText).IsEqualTo("search setup pending");
+
+            h.Status.OnNext(new(ServerLaneState.Retrying));
+            h.Setting = h.Setting with { Pending = false };
+            h.Status.OnNext(new(ServerLaneState.Connected));
+            if (needsStart) {
+                await Assert.That(h.Vm.StartVisible).IsTrue();
+                await h.Vm.StartCommand.Execute().ToTask();
+            }
+
+            await Assert.That(h.Vm.Search.StateText).IsEqualTo(keyword ? "keyword search" : "search by meaning");
+            await Assert.That(h.Vm.BannerVisible).IsFalse();
+        });
+    }
+
+    [Test]
+    public async Task A_search_fallback_stays_visible_until_search_is_configured() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            await h.RunAsync(0, UpgradeScript.Planned("1.2.0", "1.3.0"),
+                """{"v":1,"event":"embeddings_skipped","code":"download_failed","message":"Model download failed"}""");
+
+            await Assert.That(h.Vm.BannerVisible).IsTrue();
+            await Assert.That(h.Vm.IsNote).IsTrue();
+            await Assert.That(h.Vm.Detail).Contains("keyword").And.Contains("Settings → Search");
+
+            h.Cli.SetupLocalBehavior = LocalSetupScript.Prints(0,
+                """{"v":1,"event":"embeddings_configured","provider":"builtin"}""", LocalSetupScript.Committed);
+            await h.Search.StartAsync(LocalEmbeddingChoice.Default, CancellationToken.None);
+            await h.Search.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            await Assert.That(h.Vm.BannerVisible).IsFalse();
+        });
+    }
+
+    [Test]
+    [Arguments(false, "declined", true)]
+    [Arguments(true, "declined", true)]
+    [Arguments(false, "declined", false)]
+    [Arguments(true, "declined", false)]
+    [Arguments(false, "write_failed", true)]
+    public async Task A_keyword_choice_clears_the_search_warning_only_when_applied(bool needsStart, string skipCode, bool setupSucceeds) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness("1.3.0");
+            var setting = LocalEmbeddingSetting.Builtin(new string('a', 64));
+            using var settings = new LocalSearchViewModel(() => setting,
+                _ => Task.FromResult<LocalEmbeddingModelManifest?>(null), h.Status, h.Search, h.Upgrade,
+                () => Task.CompletedTask, CancellationToken.None, ImmediateScheduler.Instance);
+            await h.RunAsync(needsStart ? 2 : 0, UpgradeScript.Planned("1.2.0", "1.3.0"),
+                """{"v":1,"event":"embeddings_skipped","code":"model_download_failed","message":"Model download failed"}""",
+                UpgradeScript.Switched("1.3.0"), needsStart
+                    ? UpgradeScript.Failed("start_failed", "Server did not start.", true)
+                    : UpgradeScript.Upgraded("1.2.0", "1.3.0"));
+
+            settings.Choice.UseKeyword = true;
+            var applied = setupSucceeds && skipCode == "declined";
+            h.Cli.SetupLocalBehavior = (onLine, interrupt, ct) => {
+                if (applied) setting = LocalEmbeddingSetting.Declined;
+                return LocalSetupScript.Prints(setupSucceeds ? 0 : 1,
+                    $$"""{"v":1,"event":"embeddings_skipped","code":"{{skipCode}}"}""",
+                    setupSucceeds ? LocalSetupScript.Committed : LocalSetupScript.Failed("start_failed"))(onLine, interrupt, ct);
+            };
+            await settings.ApplyCommand.Execute().ToTask();
+            await h.Search.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            if (needsStart) await h.Vm.StartCommand.Execute().ToTask();
+
+            await Assert.That(h.Cli.SetupLocalEmbeddings.Single()).IsEqualTo(LocalEmbeddingChoice.KeywordOnly);
+            await Assert.That(h.Vm.BannerVisible).IsEqualTo(!applied);
+            await Assert.That(h.Vm.IsNote).IsEqualTo(!applied);
+            await Assert.That(settings.CanApply).IsEqualTo(!applied);
+
+            if (applied) {
+                setting = LocalEmbeddingSetting.Builtin(new string('a', 64));
+                h.Status.OnNext(new(ServerLaneState.Retrying));
+                h.Status.OnNext(new(ServerLaneState.Connected));
+                await Assert.That(settings.StateText).IsEqualTo("search by meaning");
+                await Assert.That(settings.CanApply).IsFalse();
+            }
+        });
+    }
 
     [Test]
     public async Task The_rail_shows_the_installed_version_and_the_servers_state() {
@@ -82,10 +194,11 @@ public class LocalStackViewModelTests {
 
             await Assert.That(h.Vm.Upgrading).IsTrue();
             await Assert.That(h.Vm.BannerVisible).IsTrue();
-            await Assert.That(h.Vm.Headline).IsEqualTo("Upgrading kcap local 1.2.0 to 1.3.0");
-            await Assert.That(h.Vm.Detail).IsEqualTo("Downloading 1.3.0… 25%");
+            await Assert.That(h.Vm.ActionsVisible).IsFalse();
+            await Assert.That(h.Vm.Headline).IsEqualTo("Updating kcap local 1.2.0 → 1.3.0…");
+            await Assert.That(h.Vm.Detail).IsEqualTo("Downloading 1.3.0 25%");
             await Assert.That(h.Vm.DownloadFraction).IsEqualTo(0.25);
-            await Assert.That(h.Vm.StateText).IsEqualTo("upgrading");
+            await Assert.That(h.Vm.StateText).IsNull();
 
             exit.SetResult(new StreamingResult(0, false, []));
             await h.Upgrade.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
@@ -131,10 +244,10 @@ public class LocalStackViewModelTests {
 
             await Assert.That(h.Vm.BannerVisible).IsTrue();
             await Assert.That(h.Vm.Attention).IsTrue();
-            await Assert.That(h.Vm.Headline).IsEqualTo("kcap local could not be upgraded to 1.3.0");
+            await Assert.That(h.Vm.Headline).IsEqualTo("kcap local could not be updated to 1.3.0");
             await Assert.That(h.Vm.Detail).IsEqualTo("The download was interrupted. kcap local 1.2.0 was left as it was.");
             await Assert.That(h.Vm.TryAgainVisible).IsTrue();
-            await Assert.That(h.Vm.StateText).IsEqualTo("upgrade failed");
+            await Assert.That(h.Vm.StateText).IsEqualTo("update failed");
             await Assert.That(h.Vm.Version).IsEqualTo("1.2.0");
             foreach (var text in ShownText(h.Vm)) await Assert.That(text ?? "").DoesNotContain("kcap local upgrade");
 
@@ -163,9 +276,10 @@ public class LocalStackViewModelTests {
             await Assert.That(h.Vm.IsNote).IsTrue();
             await Assert.That(h.Vm.Attention).IsFalse();
             await Assert.That(h.Vm.StateText).IsEqualTo("running");
-            await Assert.That(h.Vm.Headline).IsEqualTo("The upgrade to kcap local 1.3.0 is waiting");
+            await Assert.That(h.Vm.Headline).IsEqualTo("kcap local 1.3.0 update is waiting");
             await Assert.That(h.Vm.Detail).IsEqualTo(LocalStackViewModel.BusyDetail);
             await Assert.That(h.Vm.TryAgainVisible).IsTrue();
+            await Assert.That(h.Vm.ActionsVisible).IsTrue();
         });
     }
 
@@ -230,6 +344,7 @@ public class LocalStackViewModelTests {
 
             await Assert.That(h.Vm.BannerVisible).IsTrue();
             await Assert.That(h.Vm.StartVisible).IsTrue();
+            await Assert.That(h.Vm.ActionsVisible).IsTrue();
             await Assert.That(h.Vm.SuppressesServerStart).IsTrue();
 
             await h.Vm.StartCommand.Execute().ToTask();
@@ -238,6 +353,71 @@ public class LocalStackViewModelTests {
             await Assert.That(h.Vm.BannerVisible).IsFalse();
             await Assert.That(h.Vm.SuppressesServerStart).IsFalse();
             await Assert.That(h.Reconnects).IsEqualTo(1);
+        });
+    }
+
+    [Test]
+    [Arguments(false, false)]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    public async Task A_successful_start_keeps_only_an_unresolved_search_warning(bool configureBeforeStart, bool configureDuringStart) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness("1.3.0");
+            using var settings = new LocalSearchViewModel(() => LocalEmbeddingSetting.Builtin(new string('a', 64)),
+                _ => Task.FromResult<LocalEmbeddingModelManifest?>(null), h.Status, h.Search, h.Upgrade,
+                () => Task.CompletedTask, CancellationToken.None, ImmediateScheduler.Instance);
+            var exit = new TaskCompletionSource<ProcessResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+            h.StartResult = () => exit.Task;
+            h.Cli.SetupLocalBehavior = LocalSetupScript.Prints(0,
+                """{"v":1,"event":"embeddings_configured","provider":"builtin"}""", LocalSetupScript.Committed);
+            await h.RunAsync(2, UpgradeScript.Planned("1.2.0", "1.3.0"),
+                """{"v":1,"event":"embeddings_skipped","code":"model_download_failed","message":"Model download failed"}""",
+                UpgradeScript.Switched("1.3.0"), UpgradeScript.Failed("start_failed", "Server did not start.", true));
+
+            if (configureBeforeStart) await ConfigureSearchAsync();
+            var start = h.Vm.StartCommand.Execute().ToTask();
+            if (configureDuringStart) await ConfigureSearchAsync();
+            exit.SetResult(new ProcessResult(0, "Local server is running.", "", false));
+            await start.WaitAsync(TimeSpan.FromSeconds(5));
+
+            var warning = !configureBeforeStart && !configureDuringStart;
+            await Assert.That(h.Vm.BannerVisible).IsEqualTo(warning);
+            await Assert.That(h.Vm.IsNote).IsEqualTo(warning);
+            await Assert.That(h.Vm.StartVisible).IsFalse();
+            await Assert.That(h.Vm.Attention).IsFalse();
+            await Assert.That(settings.CanApply).IsEqualTo(warning);
+            if (warning) {
+                await Assert.That(h.Vm.Headline).IsEqualTo("Search needs attention");
+                await Assert.That(h.Vm.Detail).Contains("keyword").And.Contains("Settings → Search");
+                await settings.ApplyCommand.Execute().ToTask();
+                await h.Search.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                await Assert.That(h.Vm.BannerVisible).IsFalse();
+                await Assert.That(settings.CanApply).IsFalse();
+            }
+
+            async Task ConfigureSearchAsync() {
+                await h.Search.StartAsync(LocalEmbeddingChoice.Builtin, CancellationToken.None);
+                await h.Search.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        });
+    }
+
+    [Test]
+    public async Task A_successful_start_does_not_replace_a_newer_upgrade_outcome() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness("1.3.0");
+            var exit = new TaskCompletionSource<ProcessResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+            h.StartResult = () => exit.Task;
+            await h.RunAsync(2, UpgradeScript.Planned("1.2.0", "1.3.0"), UpgradeScript.Switched("1.3.0"),
+                UpgradeScript.Failed("start_failed", "Server did not start.", true));
+
+            var start = h.Vm.StartCommand.Execute().ToTask();
+            await h.RunAsync(4, UpgradeScript.Planned("1.3.0", "1.4.0"));
+            exit.SetResult(new ProcessResult(0, "Local server is running.", "", false));
+            await start.WaitAsync(TimeSpan.FromSeconds(5));
+
+            await Assert.That(h.Vm.BannerVisible).IsTrue();
+            await Assert.That(h.Vm.Headline).IsEqualTo("kcap local 1.4.0 is not available yet");
         });
     }
 
@@ -263,7 +443,7 @@ public class LocalStackViewModelTests {
     public async Task A_failed_start_after_the_switch_keeps_the_failure_and_says_why_without_terminal_advice() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var h = new Harness();
-            h.StartResult = () => new ProcessResult(1, "", "kcap local 1.3.0 did not become ready. kcap local logs shows why.\n", false);
+            h.StartResult = () => Task.FromResult(new ProcessResult(1, "", "kcap local 1.3.0 did not become ready. kcap local logs shows why.\n", false));
 
             await h.RunAsync(2, UpgradeScript.Planned("1.2.0", "1.3.0"), UpgradeScript.Switched("1.3.0"),
                 UpgradeScript.Failed("start_failed", "kcap local 1.3.0 did not start.", true));
@@ -289,7 +469,7 @@ public class LocalStackViewModelTests {
             h.Status.OnNext(new(ServerLaneState.Retrying, "Connection refused"));
 
             await Assert.That(h.Vm.Version).IsEqualTo("1.3.0");
-            await Assert.That(h.Vm.Headline).IsEqualTo("kcap local 1.3.0 did not start after the upgrade");
+            await Assert.That(h.Vm.Headline).IsEqualTo("kcap local 1.3.0 did not start after the update");
             await Assert.That(h.Vm.Guidance).IsEqualTo(LocalStackViewModel.StartGuidance);
             await Assert.That(h.Vm.TryAgainVisible).IsFalse();
             await Assert.That(h.Vm.StartVisible).IsTrue();

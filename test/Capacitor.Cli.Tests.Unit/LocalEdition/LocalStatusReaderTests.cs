@@ -69,6 +69,24 @@ public class LocalStatusReaderTests {
         string.Join("\n", [report.Headline, .. report.Fields.Select(f => $"{f.Key}: {f.Value}"), .. report.Notes]);
 
     [Test]
+    public async Task An_upgrade_is_in_progress_until_its_lease_is_released() {
+        Publish();
+        using (var lease = await LifecycleLease.AcquireAsync(Root, TimeSpan.Zero, TimeProvider.System, CancellationToken.None)) {
+            lease.Begin("upgrade", "staging", ServerStart.Allow);
+            var journal = File.ReadAllText(Root.JournalPath);
+
+            var active = Text(await Read());
+
+            await Assert.That(active).Contains("in progress");
+            await Assert.That(active).DoesNotContain("interrupted");
+            await Assert.That(active).DoesNotContain("finishes or undoes");
+            await Assert.That(File.ReadAllText(Root.JournalPath)).IsEqualTo(journal);
+        }
+
+        await Assert.That(Text(await Read())).Contains("interrupted upgrade");
+    }
+
+    [Test]
     public async Task The_search_field_names_the_embedding_model_or_says_keyword_only() {
         Running();
 
@@ -185,8 +203,68 @@ public class LocalStatusReaderTests {
     [Test]
     public async Task Missing_server_files_send_the_user_to_setup() {
         Publish(withBinary: false);
+        Tmp.CreateDir("r/bin");
 
         await Assert.That(Text(await Read())).Contains("files are missing").And.Contains("kcap setup --local");
+    }
+
+    /// <summary>An uninstall removes the unit and <c>bin/</c> but keeps the registry: that is not a broken install, and
+    /// no start can bring it back.</summary>
+    [Test]
+    public async Task An_uninstalled_installation_says_setup_reinstalls_it_and_offers_no_start() {
+        Publish(withBinary: false);
+
+        var report = await Read();
+
+        await Assert.That(report.Headline).StartsWith("Uninstalled:");
+        await Assert.That(Text(report)).Contains("kcap setup --local reinstalls it on the same port");
+        await Assert.That(Text(report)).DoesNotContain("kcap local start starts it").And.DoesNotContain("installs and starts it");
+    }
+
+    [Test]
+    public async Task A_purged_installation_names_its_retired_url_and_offers_no_start() {
+        Root.EnsureCreated();
+        LocalStateFiles.PublishRegistry(Root, InstallRegistry.Empty.WithActive(Active).RetireActive());
+
+        var report = await Read();
+
+        await Assert.That(report.Headline).StartsWith("Purged:");
+        await Assert.That(Text(report)).Contains("Retired: http://localhost:9473").And.Contains("on a new port");
+        await Assert.That(Text(report)).DoesNotContain("kcap local start");
+    }
+
+    /// <summary>A stranger on the port is reported, never stopped, and a start that could not listen is not offered as
+    /// the fix.</summary>
+    [Test]
+    public async Task A_stopped_server_whose_port_another_process_holds_names_it_instead_of_offering_start() {
+        Running();
+        await Service.StopAsync(Unit, CancellationToken.None);
+        _holders.Add(new(4242, "python3"));
+        var calls = _log.Count;
+
+        var report = await Read();
+
+        await Assert.That(report.Headline).IsEqualTo("Stopped, and port 9473 is taken by another process.");
+        await Assert.That(Text(report)).Contains("taken by python3 (pid 4242)").And.Contains("never stops a process it did not start");
+        await Assert.That(Text(report)).DoesNotContain("kcap local start starts it");
+        await Assert.That(_log.Skip(calls).Any(l => l.Contains("stop", StringComparison.OrdinalIgnoreCase))).IsFalse();
+    }
+
+    /// <summary>A restart passes through stopped on its way; while another command holds the lifecycle lock, status
+    /// says so instead of recommending a start.</summary>
+    [Test]
+    public async Task A_stopped_server_under_another_commands_lock_reads_as_changing() {
+        Running();
+        await Service.StopAsync(Unit, CancellationToken.None);
+
+        using (await LifecycleLease.AcquireAsync(Root, TimeSpan.Zero, TimeProvider.System, CancellationToken.None)) {
+            var report = await Read();
+
+            await Assert.That(report.Headline).StartsWith("Changing:");
+            await Assert.That(Text(report)).DoesNotContain("kcap local start starts it");
+        }
+
+        await Assert.That((await Read()).Headline).IsEqualTo("Stopped.");
     }
 
     [Test]
@@ -309,6 +387,96 @@ public class LocalStatusReaderTests {
 
         await Assert.That(report.Headline).Contains("port 9473 is taken");
         await Assert.That(Text(report)).Contains("taken by nginx (pid 1)");
+    }
+
+    void Foreign(string? server = "nginx/1.25.3") =>
+        Server.Override = path => {
+            if (path != "/healthz/ready") return null;
+
+            var response = new HttpResponseMessage(HttpStatusCode.NotFound);
+            if (server is not null) response.Headers.TryAddWithoutValidation("Server", server);
+            return response;
+        };
+
+    /// <summary>The kcap server's health route never answers 404, so a running unit behind one is not starting: another
+    /// program holds the port, though the OS names no holder (another user's process, without root).</summary>
+    [Test]
+    public async Task A_running_server_behind_a_foreign_answer_is_not_called_starting() {
+        Running();
+        Foreign();
+
+        var report = await Read();
+
+        await Assert.That(report.Ready).IsFalse();
+        await Assert.That(report.Headline).IsEqualTo("Not ready: something else answers on port 9473.");
+        await Assert.That(Text(report)).Contains("Port 9473 answers as a web server that calls itself nginx/1.25.3, not as the kcap server")
+            .And.Contains("names the process that holds it");
+        await Assert.That(Text(report)).DoesNotContain("Starting");
+    }
+
+    /// <summary>A 404 from Kestrel is the kcap server before its health route is mapped, never another program.</summary>
+    [Test]
+    public async Task A_running_server_whose_host_answers_before_its_route_is_starting() {
+        Running();
+        Foreign(server: "Kestrel");
+
+        var report = await Read();
+
+        await Assert.That(report.Ready).IsFalse();
+        await Assert.That(report.Headline).IsEqualTo("Starting, or a store is down.");
+        await Assert.That(Text(report)).DoesNotContain("answers as");
+    }
+
+    [Test]
+    public async Task A_listener_that_does_not_speak_http_is_another_program() {
+        Running();
+        Server.Override = _ => throw new HttpRequestException(HttpRequestError.InvalidResponse, "The server returned an invalid or unrecognized response.");
+
+        var report = await Read();
+
+        await Assert.That(report.Headline).IsEqualTo("Not ready: something else answers on port 9473.");
+        await Assert.That(Text(report)).Contains("answers as a program that does not speak HTTP");
+    }
+
+    /// <summary>The OS's name for the holder wins over what its answer says.</summary>
+    [Test]
+    public async Task A_foreign_answer_from_a_holder_the_os_names_names_the_process() {
+        Running();
+        Foreign();
+        _holders.Add(new(4242, "python3"));
+
+        var report = await Read();
+
+        await Assert.That(report.Headline).IsEqualTo("Not ready: something else answers on port 9473.");
+        await Assert.That(Text(report)).Contains("taken by python3 (pid 4242)");
+    }
+
+    [Test]
+    public async Task A_stopped_server_behind_a_foreign_answer_offers_no_start() {
+        Running();
+        await Service.StopAsync(Unit, CancellationToken.None);
+        Foreign(server: null);
+        var calls = _log.Count;
+
+        var report = await Read();
+
+        await Assert.That(report.Headline).IsEqualTo("Stopped, and port 9473 is taken by another process.");
+        await Assert.That(Text(report)).Contains("answers as a web server that answers HTTP 404").And.Contains("never stops a process it did not start");
+        await Assert.That(Text(report)).DoesNotContain("kcap local start starts it");
+        await Assert.That(_log.Skip(calls).Any(l => l.Contains("stop", StringComparison.OrdinalIgnoreCase))).IsFalse();
+    }
+
+    /// <summary>An answer the kcap server can give, even an unhealthy one, says nothing about who holds the port.</summary>
+    [Test]
+    public async Task A_stopped_server_with_a_server_shaped_answer_on_its_port_still_offers_start() {
+        Running();
+        await Service.StopAsync(Unit, CancellationToken.None);
+        Health(HttpStatusCode.ServiceUnavailable, postgres: "Unhealthy");
+
+        var report = await Read();
+
+        await Assert.That(report.Headline).IsEqualTo("Stopped.");
+        await Assert.That(Text(report)).Contains("kcap local start starts it");
     }
 
     [Test]

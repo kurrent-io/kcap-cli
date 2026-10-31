@@ -1,3 +1,5 @@
+using Capacitor.Cli.Core.Mcp;
+
 namespace Capacitor.Cli.Core.Harness.Pi;
 
 /// <summary>
@@ -6,7 +8,7 @@ namespace Capacitor.Cli.Core.Harness.Pi;
 /// (<c>~/.pi/agent/extensions/kcap-mcp.ts</c>) that spawns the <c>kcap mcp &lt;name&gt;</c>
 /// servers and registers their tools as native Pi tools. Sibling of
 /// <see cref="PiExtensionInstaller"/> with a distinct file + marker; <see cref="ExtensionContent"/>
-/// is the embedded source of truth (const, not a resource — NativeAOT-safe).
+/// is the embedded source of truth (a string, not a resource — NativeAOT-safe).
 /// </summary>
 public static class PiMcpExtensionInstaller {
     public const string MarkerFileName = ".kcap-mcp-extension-version";
@@ -17,18 +19,29 @@ public static class PiMcpExtensionInstaller {
     /// fail-safe so a kcap/server hiccup never disrupts the pi session: each server
     /// is spawned/handshaken independently and failures are logged and skipped.
     /// </summary>
-    public const string ExtensionContent = Header + PiMcpStdioClientSource.Text + Body;
+    public static readonly string ExtensionContent = Header + ServerList() + Limits + PiMcpStdioClientSource.Text + PiKcapPathSource.Text + Body;
+
+    /// <summary>Every server in <see cref="KcapMcpServers.All"/>, by the name <c>kcap mcp</c> takes, so Pi
+    /// bridges the same set every other harness registers.</summary>
+    static string ServerList() =>
+        $"const KCAP_MCP_SERVERS = [{string.Join(", ", KcapMcpServers.All.Select(s => $"\"{s.Args[^1]}\""))}];\n";
 
     const string Header =
         """
         // kcap-mcp.ts — kcap MCP-bridge extension for Pi.
         // Pi has no built-in MCP, so this bridges the kcap stdio servers (`kcap mcp <name>`)
         // into Pi as native tools: spawn each, handshake, register its tools. Dependency-free
-        // (node:child_process only) and fail-safe — one bad server never blocks the rest.
+        // (Node built-ins only) and fail-safe — one bad server never blocks the rest.
 
         import { spawn } from "node:child_process";
+        import { statSync } from "node:fs";
+        import { delimiter, join } from "node:path";
 
-        const KCAP_MCP_SERVERS = ["review", "sessions", "flows", "memory", "analytics", "workitems", "plans", "pages", "knowledge"];
+
+        """;
+
+    const string Limits =
+        """
         const HANDSHAKE_TIMEOUT_MS = 10000;
         // Generous — above the flows server's own round timeouts; only a backstop against a
         // stalled-but-not-exited server. A timeout surfaces as a tool failure (execute throws).
@@ -57,6 +70,10 @@ public static class PiMcpExtensionInstaller {
           });
         }
 
+        function isSpawnEnoent(e: any): boolean {
+          return !!e && e.code === "ENOENT" && String(e.syscall || "").startsWith("spawn");
+        }
+
         function mcpText(result: any): string {
           if (!result || !Array.isArray(result.content)) return "";
           return result.content
@@ -78,6 +95,7 @@ public static class PiMcpExtensionInstaller {
           const holders = new Map<string, { client: McpStdioClient | null }>();
           const registered = new Set<string>();
           let startInFlight: Promise<void> | null = null;
+          let spawnFailureShown = false;
 
           function registerTool(server: string, tool: any) {
             const mcpName = tool && tool.name;
@@ -128,6 +146,8 @@ public static class PiMcpExtensionInstaller {
           async function startBridge(): Promise<void> {
             if (startInFlight) return startInFlight;
             startInFlight = (async () => {
+              // A kcap that cannot be spawned fails every server the same way: reported once, below.
+              const unspawnable: string[] = [];
               await Promise.all(
                 KCAP_MCP_SERVERS.map(async (server) => {
                   const existing = holders.get(server);
@@ -145,7 +165,8 @@ public static class PiMcpExtensionInstaller {
                       "kcap mcp " + server + " handshake",
                     );
                   } catch (e: any) {
-                    console.error("[kcap-mcp] " + server + " unavailable, skipping: " + ((e && e.message) || String(e)));
+                    if (isSpawnEnoent(e)) unspawnable.push(server);
+                    else console.error("[kcap-mcp] " + server + " unavailable, skipping: " + ((e && e.message) || String(e)));
                     if (holders.get(server)?.client === client) holders.delete(server);
                     await client.stop();
                     return;
@@ -159,6 +180,10 @@ public static class PiMcpExtensionInstaller {
                   for (const tool of tools) registerTool(server, tool);
                 }),
               );
+              if (unspawnable.length && !noticeIfKcapMissing() && !spawnFailureShown) {
+                spawnFailureShown = true;
+                console.error("[kcap-mcp] could not start kcap (spawn kcap ENOENT); skipping " + unspawnable.join(", "));
+              }
             })();
             try {
               await startInFlight;
@@ -176,8 +201,9 @@ public static class PiMcpExtensionInstaller {
           // Turn-1 readiness: pi awaits the async factory before session_start.
           await startBridge();
 
-          // Respawn on a session switch/restart within the same process (idempotent).
-          pi.on("session_start", async () => { await startBridge(); });
+          // Respawn on a session switch/restart, and retry a server the factory skipped. Not awaited: a
+          // hosted launch waits for session_start, and a server may itself be waiting on that launch.
+          pi.on("session_start", () => { void startBridge(); });
           // Primary teardown — fires on switch AND on process exit (Ctrl+C/Ctrl+D/SIGHUP/SIGTERM).
           pi.on("session_shutdown", async () => { await stopBridge(); });
         }

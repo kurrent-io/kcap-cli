@@ -8,7 +8,7 @@ public enum ConnectChoice { Discover, Paste }
 /// <summary>
 /// How the Sign-in step reaches a workspace. Intent only: nothing here reaches the network or
 /// writes anything. A pasted server is normalized by the SAME rule the operation uses, then
-/// validated by the gate's shared server-URL validator, so "Continue accepted it" and "the gate can
+/// validated by the gate's shared server-URL validator, so "Connect accepted it" and "the gate can
 /// be satisfied by it" can never disagree. Discovery is single sign-on only; a server on another
 /// provider is reached by name or URL, where its own auth config picks the flow.
 /// </summary>

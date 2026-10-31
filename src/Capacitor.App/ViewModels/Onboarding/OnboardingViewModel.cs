@@ -19,6 +19,17 @@ public sealed class OnboardingViewModel : ReactiveObject {
 
     internal bool Closed => _closed;
 
+    /// The user chose to leave setup and the app with it, rather than defer setup.
+    internal bool QuitRequested { get; private set; }
+
+    /// Null where nothing gates the first step.
+    public HarnessPreflight? Preflight { get; }
+
+    /// The pre-flight's own card stands in for the step, its header and its footer.
+    public bool PreflightChecking => Preflight is { State: HarnessPreflightState.Checking };
+    public bool PreflightBlocked  => Preflight is { State: HarnessPreflightState.NoneFound };
+    public bool StepVisible       => Preflight is null or { State: HarnessPreflightState.Passed };
+
     /// Whether setup may be left half-done, the gate Finish later shows behind.
     internal bool Deferrable => _finishLaterAllowed;
 
@@ -67,12 +78,12 @@ public sealed class OnboardingViewModel : ReactiveObject {
     public bool NextVisible => !Current.OwnsPrimaryAction;
     public bool SkipVisible => _index < Steps.Count - 1 && Current.Skippable && !Current.OwnsPrimaryAction;
     public bool BackVisible => Current.BackVisible && PreviousShownIndex() >= 0;
-    public bool FooterVisible => BackVisible || NextVisible || SkipVisible || TenantActionsVisible;
+    public bool FooterVisible => StepVisible && (BackVisible || NextVisible || SkipVisible || TenantActionsVisible);
     /// Hidden, not disabled, where setup cannot be left half-done, and where the step's own primary
     /// action already closes setup.
-    public bool FinishLaterVisible => _finishLaterAllowed && Current.OffersFinishLater;
-    public bool CanGoNext => !Navigating && !_closed && Current.CanContinue;
-    public bool CanGoSkip => !Navigating && !_closed && Current.CanSkip && _index < Steps.Count - 1;
+    public bool FinishLaterVisible => StepVisible && _finishLaterAllowed && Current.OffersFinishLater;
+    public bool CanGoNext => StepVisible && !Navigating && !_closed && Current.CanContinue;
+    public bool CanGoSkip => StepVisible && !Navigating && !_closed && Current.CanSkip && _index < Steps.Count - 1;
 
     /// The workspace list's own actions share the footer line with Back.
     public bool TenantActionsVisible => Current is SignInStepViewModel { TenantChoicePending: true };
@@ -109,6 +120,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     public ReactiveCommand<Unit, Unit> NextCommand { get; }
     public ReactiveCommand<Unit, Unit> SkipCommand { get; }
     public ReactiveCommand<Unit, Unit> FinishLaterCommand { get; }
+    public ReactiveCommand<Unit, Unit> QuitCommand { get; }
 
     /// Fires once per logical close: the Done step's finish, or the window closing.
     public event Action? CloseRequested;
@@ -116,15 +128,18 @@ public sealed class OnboardingViewModel : ReactiveObject {
     /// The constructor's own initial-entry call, exposed so a test can await it deterministically.
     internal Task PendingEnterForTesting { get; }
 
+    internal Task PendingPreflightForTesting { get; } = Task.CompletedTask;
+
     /// The navigation the current step's own action last started, so a test can await it.
     internal Task PendingAdvanceForTesting { get; private set; } = Task.CompletedTask;
 
     public OnboardingViewModel(
             IEnumerable<IWizardStep> steps, CancellationToken shutdownToken = default,
             WizardLifecycleSurface? surface = null, WizardStepId? startAt = null,
-            IObservable<bool>? canFinishLater = null, IObservable<Unit>? restate = null) {
+            IObservable<bool>? canFinishLater = null, HarnessPreflight? preflight = null, IObservable<Unit>? restate = null) {
         _shutdownToken = shutdownToken;
         Surface = surface;
+        Preflight = preflight;
         var applicable = steps.Where(s => s.Applicable).ToList();
         Steps = applicable;
         if (Steps.Count == 0) throw new ArgumentException("at least one applicable step is required", nameof(steps));
@@ -153,13 +168,35 @@ public sealed class OnboardingViewModel : ReactiveObject {
         FinishLaterCommand = ReactiveCommand.Create(RequestClose,
             idle.CombineLatest(finishLaterAllowed, (notBusy, allowed) => notBusy && allowed));
 
+        QuitCommand = ReactiveCommand.Create(() => {
+            QuitRequested = true;
+            RequestClose();
+        });
+
+        if (preflight is not null) {
+            preflight.WhenAnyValue(x => x.State).Subscribe(_ => {
+                this.RaisePropertyChanged(nameof(PreflightChecking));
+                this.RaisePropertyChanged(nameof(PreflightBlocked));
+                this.RaisePropertyChanged(nameof(StepVisible));
+                RestateActions();
+            });
+            PendingPreflightForTesting = preflight.RunAsync(shutdownToken);
+        }
+
         // State other steps' PassThrough reads, changed outside the current step.
         restate?.Subscribe(_ => RestateActions());
 
-        PendingEnterForTesting = SafeEnterAsync(Current);
+        PendingEnterForTesting = preflight is null ? SafeEnterAsync(Current) : EnterOncePassedAsync(PendingPreflightForTesting);
+    }
+
+    // No step is entered, so none acts, until the pre-flight has passed.
+    async Task EnterOncePassedAsync(Task preflight) {
+        await preflight;
+        if (StepVisible && !_closed) await SafeEnterAsync(Current);
     }
 
     void OnAdvanceRequested() {
+        if (!StepVisible) return;
         if (_navigating) _advancePending = true;
         else PendingAdvanceForTesting = NavigateAsync(WizardNavigation.Next);
     }
@@ -240,7 +277,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     /// this run (an inapplicable step was filtered out at construction).
     /// </summary>
     internal bool TryGoTo(WizardStepId id) {
-        if (_navigating || _closed) return false;
+        if (_navigating || _closed || !StepVisible) return false;
 
         var target = -1;
         for (var i = 0; i < Steps.Count && target < 0; i++) {
@@ -257,7 +294,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     }
 
     async Task NavigateAsync(WizardNavigation direction) {
-        if (_navigating || _closed) return;
+        if (_navigating || _closed || !StepVisible) return;
         Navigating = true;
         try {
             if (direction == WizardNavigation.Back && PreviousShownIndex() < 0) return;

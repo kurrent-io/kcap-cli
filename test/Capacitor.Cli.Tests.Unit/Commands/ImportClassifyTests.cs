@@ -317,4 +317,34 @@ public class ImportClassifyTests : IDisposable {
         await Assert.That(result[0].ResumeFromLine).IsEqualTo(50);
     }
 
+    [Test]
+    public async Task ClassifyAsync_maps_410_to_Deleted_not_a_probe_error() {
+        StubLastLine(410, """{"error":"session_deleted"}""");
+
+        var path = await WriteTranscript(_tempDir, "sessionDeleted", lines: 50);
+
+        var result = await Classify(("sessionDeleted", path));
+
+        await Assert.That(result.Status).IsEqualTo(ImportCommand.ClassificationStatus.Deleted);
+        await Assert.That(result.ProbeErrorReason).IsNull();
+    }
+
+    void StubLastLine(int status, string body) =>
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(status).WithHeader("Content-Type", "application/json").WithBody(body));
+
+    async Task<ImportCommand.SessionClassification> Classify((string SessionId, string FilePath) transcript) {
+        using var client = new HttpClient();
+
+        var result = await TranscriptFileClassification.ClassifyAsync(
+            new GitProviderRouter(),
+            Config.Root,
+            Home,
+            client, TimeProvider.System, _server.Url!,
+            [(transcript.SessionId, transcript.FilePath, "-tmp-proj")],
+            minLines: 15, ct: CancellationToken.None
+        );
+
+        return result.Single();
+    }
 }

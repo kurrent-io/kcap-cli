@@ -76,4 +76,7 @@ public sealed record LocalFrame(FrameType Type) {
     public static LocalFrame SettingsJson(FrameType type, string json) => new(type) { Text = json };
 
     public static LocalFrame FenceJson(FrameType type, string json) => new(type) { Text = json };
+    /// Constructs a SessionRename or SessionRenameAck frame, whose payload is UTF-8 JSON
+    /// (snake_case via RenameIpcJsonContext) carried in Text — see RenameIpc.cs.
+    public static LocalFrame RenameJson(FrameType type, string json) => new(type) { Text = json };
 }

@@ -14,6 +14,8 @@ namespace Capacitor.App.ViewModels;
 /// answer clears it, and a terminal phase clears everything the server gave.
 public sealed partial class WorkContextViewModel {
     readonly AvaloniaList<WorkContextPartViewModel> _parts = new();
+    readonly AvaloniaList<WorkContextPartViewModel> _thisSessionParts = new();
+    IReadOnlyList<WorkContextPartCount> _partCounts = [];
     readonly AvaloniaList<string> _blockedBy = new();
     readonly AvaloniaList<WorkContextLinkViewModel> _links = new();
     readonly AvaloniaList<WorkContextLinkViewModel> _issues = new();
@@ -33,6 +35,10 @@ public sealed partial class WorkContextViewModel {
     }
 
     public IAvaloniaReadOnlyList<WorkContextPartViewModel> Parts => _parts;
+    /// What the collapsed section lists: the parts this session is attached to, in part order.
+    public IAvaloniaReadOnlyList<WorkContextPartViewModel> ThisSessionParts => _thisSessionParts;
+    /// Open, this session, done: one entry per mark some part carries, so the numbers add up to the list.
+    public IReadOnlyList<WorkContextPartCount> PartCounts => _partCounts;
     public IAvaloniaReadOnlyList<string> BlockedBy => _blockedBy;
     public IAvaloniaReadOnlyList<WorkContextLinkViewModel> Links => _links;
     public IAvaloniaReadOnlyList<WorkContextLinkViewModel> Issues => _issues;
@@ -129,6 +135,7 @@ public sealed partial class WorkContextViewModel {
     };
     int SettledCount => _parts.Count(p => p.IsSettled);
     public bool HasParts => _parts.Count > 0;
+    public bool HasThisSessionParts => _thisSessionParts.Count > 0;
     public bool HasBlockers => _blockedBy.Count > 0;
     public bool HasTopologyNotes => HasBlockers || !string.IsNullOrEmpty(CycleNote);
     public bool HasContributors => _contributors.Count > 0;
@@ -178,8 +185,18 @@ public sealed partial class WorkContextViewModel {
     string? _requesterAvatarUrl;
     public string? RequesterAvatarUrl { get => _requesterAvatarUrl; private set => this.RaiseAndSetIfChanged(ref _requesterAvatarUrl, value); }
 
-    bool _partsExpanded = true;
-    public bool PartsExpanded { get => _partsExpanded; private set => this.RaiseAndSetIfChanged(ref _partsExpanded, value); }
+    bool _partsExpanded;
+    public bool PartsExpanded {
+        get => _partsExpanded;
+        private set {
+            this.RaiseAndSetIfChanged(ref _partsExpanded, value);
+            this.RaisePropertyChanged(nameof(PartsAccessibleName));
+        }
+    }
+    /// The folded counts are told apart only by their marks, so the header names them in words.
+    public string PartsAccessibleName => PartsExpanded || _partCounts.Count == 0
+        ? $"Parts, {PartsHeader}"
+        : $"Parts, {string.Join(", ", _partCounts.Select(c => c.Label))}";
     bool _peopleExpanded;
     public bool PeopleExpanded { get => _peopleExpanded; private set => this.RaiseAndSetIfChanged(ref _peopleExpanded, value); }
     bool _issuesExpanded;
@@ -190,13 +207,17 @@ public sealed partial class WorkContextViewModel {
             this.RaisePropertyChanged(nameof(VisibleSeparateIssues));
         }
     }
-    bool _sessionExpanded;
+    readonly WorkContextLayout _layout;
+    /// Shared by every session's pane, so switching sessions keeps what the reader opened.
     public bool SessionExpanded {
-        get => _sessionExpanded;
-        private set {
-            this.RaiseAndSetIfChanged(ref _sessionExpanded, value);
-            this.RaisePropertyChanged(nameof(SessionToggleText));
-        }
+        get => _layout.SessionExpanded;
+        private set => _layout.SessionExpanded = value;
+    }
+
+    void OnLayoutChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) {
+        if (e.PropertyName != nameof(WorkContextLayout.SessionExpanded)) return;
+        this.RaisePropertyChanged(nameof(SessionExpanded));
+        this.RaisePropertyChanged(nameof(SessionToggleText));
     }
     public string SessionToggleText => SessionExpanded ? "Less" : "More";
     bool _runsExpanded;
@@ -217,7 +238,10 @@ public sealed partial class WorkContextViewModel {
                 LinkPolicy.Open(_opener, issue.Url);
         });
         ToggleSessionCommand = Toggle(() => SessionExpanded = !SessionExpanded);
+        _layout.PropertyChanged += OnLayoutChanged;
+        _disposables.Add(System.Reactive.Disposables.Disposable.Create(() => _layout.PropertyChanged -= OnLayoutChanged));
         ToggleRunsCommand = Toggle(() => RunsExpanded = !RunsExpanded);
+        WatchOwnWorktree();
     }
 
     ReactiveCommand<Unit, Unit> Toggle(Action flip) {
@@ -295,12 +319,28 @@ public sealed partial class WorkContextViewModel {
     }
 
     void RaiseCardCounts() {
+        SyncPartsFold();
         this.RaisePropertyChanged(nameof(PartsHeader));
+        this.RaisePropertyChanged(nameof(PartsAccessibleName));
         this.RaisePropertyChanged(nameof(HasParts));
+        this.RaisePropertyChanged(nameof(HasThisSessionParts));
         this.RaisePropertyChanged(nameof(HasBlockers));
         this.RaisePropertyChanged(nameof(HasTopologyNotes));
         this.RaisePropertyChanged(nameof(HasContributors));
         this.RaisePropertyChanged(nameof(ShowsPeople));
+    }
+
+    void SyncPartsFold() {
+        StableRows.Sync(_thisSessionParts, _parts.Where(p => p.IsThisSession));
+        WorkContextPartCount[] counts = [
+            new(WorkContextPartMark.Unknown, _parts.Count(p => p.Mark == WorkContextPartMark.Unknown)),
+            new(WorkContextPartMark.ThisSession, _thisSessionParts.Count),
+            new(WorkContextPartMark.Settled, SettledCount),
+        ];
+        var present = counts.Where(c => c.Count > 0).ToArray();
+        if (present.SequenceEqual(_partCounts)) return;
+        _partCounts = present;
+        this.RaisePropertyChanged(nameof(PartCounts));
     }
 
     void RaiseRelated() {
@@ -355,6 +395,13 @@ public sealed partial class WorkContextViewModel {
         ContextUse = SessionFactText.Context(summary?.Stats);
         SessionSharing = summary is null ? SessionFactText.Unknown : SessionFactText.SessionSharing(summary);
         AgentSharing = SessionFactText.AgentSharing(summary?.AgentVisibility);
+        _storedBranch = FirstNonBlank(summary?.RepoBranch, summary?.Repositories.FirstOrDefault(r => r.IsPrimary)?.Branch);
+        _storedRepository = FirstNonBlank(summary?.Repositories.FirstOrDefault(r => r.IsPrimary)?.RepoName, summary?.RepoName);
+        if (_isRemote) {
+            ResolveBranch();
+            if (_dto is not null) ResolveRepository(_dto.RepoPath);
+        }
+        this.RaisePropertyChanged(nameof(PhaseNote));
     }
 
     static bool Same(string a, string? b) => string.Equals(a, b, StringComparison.Ordinal);

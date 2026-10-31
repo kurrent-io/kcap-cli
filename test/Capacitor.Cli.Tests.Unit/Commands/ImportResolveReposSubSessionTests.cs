@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
@@ -49,11 +50,11 @@ public class ImportResolveReposSubSessionTests {
 
         var sessionCwds = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        await new ImportCommand(Config.Root, Resolutions.None(Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System)
+        await new ImportCommand(Config.Root, Resolutions.None(Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: new TestImportTerminal().Console)
             .ResolveTranscriptReposAsync(
             transcripts,
             codex: false,
-            new ImportCommand.ImportDisplay { Tty = false },
+            new TestImportTerminal().Display(),
             cwdRemap: null,
             sessionCwds: sessionCwds,
             worktreeAttributed: null
@@ -63,5 +64,22 @@ public class ImportResolveReposSubSessionTests {
         await Assert.That(sessionCwds.ContainsKey("real")).IsTrue();
         await Assert.That(sessionCwds["real"]).IsEqualTo(realMissing);
         await Assert.That(sessionCwds.ContainsKey("title")).IsFalse();
+    }
+
+    /// <summary>A Claude build that enqueues the prompt with no content leaves only the runner's working
+    /// directory to identify the run; that mark alone keeps it out of the report.</summary>
+    [Test]
+    public async Task ExtractCwdAndDetectSubSession_recognises_a_helper_run_by_its_working_directory() {
+        var helperCwd = "/private/var/folders/x/T/" + ClaudeHelperRun.WorkingDirName(Guid.NewGuid().ToString());
+        var subPath   = Tmp.CreateFile("helper.jsonl", [
+            """{"type":"queue-operation","operation":"enqueue","sessionId":"x"}""",
+            """{"type":"queue-operation","operation":"dequeue","sessionId":"x"}""",
+            $$$"""{"type":"user","timestamp":"2026-03-15T10:00:00Z","cwd":"{{{helperCwd}}}","message":{"content":"x"}}""",
+        ]);
+
+        var (isSubSession, cwd) = ImportCommand.ExtractCwdAndDetectSubSession(subPath, codex: false);
+
+        await Assert.That(isSubSession).IsTrue();
+        await Assert.That(cwd).IsNull();
     }
 }

@@ -17,7 +17,8 @@
                 <StackPanel x:Name="NewWorkspaceChoices" Spacing="12">
                     <Button x:Name="LocalEditionButton" Classes="onboardingEditionCard" Command="{Binding ChooseLocalCommand}"
                             AutomationProperties.Name="{x:Static vm:EditionStepViewModel.LocalTitle}"
-                            AutomationProperties.HelpText="{Binding LocalUnavailableReason}">
+                            AutomationProperties.HelpText="{Binding LocalUnavailableReason}"
+                            ToolTip.Tip="{Binding LocalUnavailableReason}" ToolTip.ShowOnDisabled="True">
                         <StackPanel>
                             <Grid Classes="onboardingEditionHead" ColumnDefinitions="20,*" RowDefinitions="Auto,Auto" ColumnSpacing="14" RowSpacing="4">
                                 <app:AppIcon Kind="Laptop" Size="20" />
@@ -86,6 +87,8 @@
                 <Border Classes="onboardingCard" IsVisible="{Binding ChoiceVisible}">
                     <StackPanel Spacing="2">
                         <RadioButton x:Name="ShareUsageOption" Classes="onboardingOption" GroupName="UsageData"
+                                     AutomationProperties.Name="{x:Static vm:UsageDataStepViewModel.ShareTitle}"
+                                     AutomationProperties.HelpText="{x:Static vm:UsageDataStepViewModel.ShareDetail}"
                                      IsChecked="{Binding Share, Mode=TwoWay}">
                             <StackPanel Spacing="2">
                                 <TextBlock Classes="onboardingLabel" FontSize="13" Text="{x:Static vm:UsageDataStepViewModel.ShareTitle}" />
@@ -93,6 +96,8 @@
                             </StackPanel>
                         </RadioButton>
                         <RadioButton x:Name="DontShareUsageOption" Classes="onboardingOption" GroupName="UsageData"
+                                     AutomationProperties.Name="{x:Static vm:UsageDataStepViewModel.OffTitle}"
+                                     AutomationProperties.HelpText="{x:Static vm:UsageDataStepViewModel.OffDetail}"
                                      IsChecked="{Binding DontShare, Mode=TwoWay}">
                             <StackPanel Spacing="2">
                                 <TextBlock Classes="onboardingLabel" FontSize="13" Text="{x:Static vm:UsageDataStepViewModel.OffTitle}" />
@@ -150,7 +155,25 @@
                             ToolTip.Tip="{x:Static vm:SetupLocation.FinishLaterTip}" />
                 </Grid>
 
-                <StackPanel Spacing="14">
+                <!-- The harness pre-flight stands in for the step until it passes. -->
+                <StackPanel x:Name="PreflightChecking" Orientation="Horizontal" Spacing="14" IsVisible="{Binding PreflightChecking}">
+                    <Border Width="40" Height="40" CornerRadius="20" Background="{StaticResource OnboardingAccentWashBrush}">
+                        <Panel Classes="onboardingSpinner">
+                            <app:AppIcon Kind="LoaderCircle" Size="16" Classes.kcapSpinning="{Binding PreflightChecking}"
+                                         Foreground="{StaticResource OnboardingAccentBrush}" />
+                        </Panel>
+                    </Border>
+                    <TextBlock Classes="onboardingLabel" FontSize="15" VerticalAlignment="Center" Text="Looking for harnesses" />
+                </StackPanel>
+
+                <StackPanel x:Name="PreflightBlocked" Spacing="14" IsVisible="{Binding PreflightBlocked}">
+                    <TextBlock x:Name="PreflightTitleText" Classes="onboardingHeadline" Text="{x:Static vm:HarnessPreflight.Title}" />
+                    <TextBlock x:Name="PreflightMessageText" Classes="onboardingLede" Text="{x:Static vm:HarnessPreflight.Message}" />
+                    <Button x:Name="PreflightQuitButton" Classes="onboardingPrimary" Content="Quit kcap" Margin="0,12,0,0"
+                            HorizontalAlignment="Left" Command="{Binding QuitCommand}" />
+                </StackPanel>
+
+                <StackPanel Spacing="14" IsVisible="{Binding StepVisible}">
                     <TextBlock x:Name="StepEyebrowText" Classes="onboardingEyebrow" Text="{Binding Eyebrow}" />
                     <!-- Fallback presenter: always shows the current step's title, template or not. -->
                     <TextBlock x:Name="StepTitleText" Classes="onboardingHeadline" Text="{Binding Current.Title}" />
@@ -158,7 +181,8 @@
                                IsVisible="{Binding Current.Lede, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 </StackPanel>
 
-                <ContentControl x:Name="StepContent" Content="{Binding Current}" HorizontalAlignment="Stretch" />
+                <ContentControl x:Name="StepContent" Content="{Binding Current}" HorizontalAlignment="Stretch"
+                                IsVisible="{Binding StepVisible}" />
             </StackPanel>
         <Border x:Name="StepFooter" Grid.Row="1" IsVisible="{Binding FooterVisible}" Background="{StaticResource OnboardingCanvasBrush}"
                 BorderBrush="{StaticResource OnboardingDividerBrush}" BorderThickness="0,1,0,0">

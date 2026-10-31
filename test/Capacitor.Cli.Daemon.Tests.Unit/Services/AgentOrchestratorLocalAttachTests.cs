@@ -81,6 +81,17 @@ public class AgentOrchestratorLocalAttachTests {
         await Assert.That(a.Args).IsEquivalentTo(new[] { "--session-id", a.SessionId!, "--model", "opus", "fix it" }, CollectionOrdering.Matching);
     }
 
+    [Test]
+    public async Task Claude_passthrough_reports_the_permission_mode_the_user_args_select() {
+        var launcher = new ClaudeLauncher(LauncherCfg(), TestHarnesses.Under(Home), NullLogger<ClaudeLauncher>.Instance);
+
+        var chosen = launcher.BuildPassthrough(CtxFor("/r"), ["--permission-mode", "manual", "fix it"]);
+        var none   = launcher.BuildPassthrough(CtxFor("/r"), ["fix it"]);
+
+        await Assert.That(chosen.PermissionMode).IsEqualTo("manual");
+        await Assert.That(none.PermissionMode).IsNull();
+    }
+
     /// <summary>Claude refuses <c>--session-id</c> beside a flag that picks the session itself.</summary>
     [Test]
     public async Task Claude_passthrough_forwards_args_that_choose_the_session_verbatim() {

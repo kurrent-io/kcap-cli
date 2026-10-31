@@ -11,16 +11,16 @@ public class ReadingStoreTests {
 
     AccountStore Store() => new(Tmp.PathTo("accounts"));
 
-    static VendorAccount Codex(string id, long generation = 0, string[]? retired = null) =>
-        new(id, HarnessId.Codex, $"/h/.codex-{id}", id, DateTimeOffset.UnixEpoch, Generation: generation, RetiredSessions: retired);
+    static VendorAccount Codex(string id, long generation = 0) =>
+        new(id, HarnessId.Codex, $"/h/.codex-{id}", id, DateTimeOffset.UnixEpoch, Generation: generation);
 
     static AccountStore Registered(AccountStore store, params VendorAccount[] accounts) {
         store.Mutate(r => (r with { Accounts = accounts }, 0));
         return store;
     }
 
-    static Func<ReadingFile, ReadingFile> Observe(int at, double used = 10) =>
-        file => file with {
+    static Func<ReadingFile, VendorAccount, ReadingFile?> Observe(int at, double used = 10) =>
+        (file, _) => file with {
             Reading = ReadingMerge.Apply(file.Reading, Obs(at, fresh: true, windows: [W("codex", 300, used, At(at + 300))])),
         };
 
@@ -31,7 +31,7 @@ public class ReadingStoreTests {
         if (OperatingSystem.IsWindows()) return;
         var store = Registered(Store(), Codex("a"));
 
-        var written = store.Readings.TryRecord("a", 0, "s1", Observe(0));
+        var written = store.Readings.TryRecord("a", Observe(0));
 
         await Assert.That(written).IsTrue();
         await Assert.That(File.GetUnixFileMode(Path.Combine(store.Directory, "readings")))
@@ -45,24 +45,53 @@ public class ReadingStoreTests {
     public async Task TryRecord_skips_an_unregistered_account() {
         var store = Registered(Store(), Codex("a"));
 
-        await Assert.That(store.Readings.TryRecord("b", 0, null, Observe(0))).IsFalse();
+        await Assert.That(store.Readings.TryRecord("b", Observe(0))).IsFalse();
         await Assert.That(File.Exists(ReadingPath(store, "b"))).IsFalse();
     }
 
     [Test]
-    public async Task TryRecord_skips_a_stale_generation() {
+    public async Task TryRecord_writes_into_the_current_generation() {
         var store = Registered(Store(), Codex("a", generation: 2));
 
-        await Assert.That(store.Readings.TryRecord("a", 1, null, Observe(0))).IsFalse();
-        await Assert.That(File.Exists(ReadingPath(store, "a"))).IsFalse();
+        await Assert.That(store.Readings.TryRecord("a", Observe(0))).IsTrue();
+
+        await Assert.That(store.Readings.LoadAll()["a"].Reading.Generation).IsEqualTo(2L);
     }
 
     [Test]
-    public async Task TryRecord_skips_a_retired_session() {
-        var store = Registered(Store(), Codex("a", retired: ["old"]));
+    public async Task TryRecord_ignores_the_retired_sessions_list() {
+        var store = Registered(Store(), Codex("a", generation: 1) with { RetiredSessions = ["s1"] });
 
-        await Assert.That(store.Readings.TryRecord("a", 0, "old", Observe(0))).IsFalse();
-        await Assert.That(store.Readings.TryRecord("a", 0, "new", Observe(0))).IsTrue();
+        var written = store.Readings.TryRecord("a", (file, _) => file with {
+            Reading  = ReadingMerge.Apply(file.Reading, Obs(0, fresh: true, windows: [W("codex", 300, 10, At(300))])),
+            Sessions = [new ReadingSession("s1", null)],
+        });
+
+        await Assert.That(written).IsTrue();
+        await Assert.That(store.Readings.LoadAll()["a"].Sessions.Single().SessionId).IsEqualTo("s1");
+    }
+
+    [Test]
+    public async Task TryRecord_passes_the_registry_entry() {
+        var started = At(0);
+        var store   = Registered(Store(), Codex("a", generation: 1) with { GenerationStartedAt = started });
+        VendorAccount? seen = null;
+
+        store.Readings.TryRecord("a", (f, entry) => {
+            seen = entry;
+            return f;
+        });
+
+        await Assert.That(seen!.Id).IsEqualTo("a");
+        await Assert.That(seen.GenerationStartedAt).IsEqualTo(started);
+    }
+
+    [Test]
+    public async Task TryRecord_writes_nothing_when_update_declines() {
+        var store = Registered(Store(), Codex("a"));
+
+        await Assert.That(store.Readings.TryRecord("a", (_, _) => null)).IsFalse();
+        await Assert.That(File.Exists(ReadingPath(store, "a"))).IsFalse();
     }
 
     [Test]
@@ -72,7 +101,7 @@ public class ReadingStoreTests {
         await Assert.That(held).IsNotNull();
 
         var clock   = Stopwatch.StartNew();
-        var written = store.Readings.TryRecord("a", 0, null, Observe(0));
+        var written = store.Readings.TryRecord("a", Observe(0));
 
         await Assert.That(written).IsFalse();
         await Assert.That(clock.Elapsed).IsLessThan(TimeSpan.FromSeconds(1));
@@ -93,7 +122,7 @@ public class ReadingStoreTests {
             Thread.Sleep(300);
         };
 
-        var written = store.Readings.TryRecord("a", 0, null, Observe(0));
+        var written = store.Readings.TryRecord("a", Observe(0));
         store.Readings.AfterMembershipCheck = null;
         await removal;
 
@@ -108,7 +137,7 @@ public class ReadingStoreTests {
         Tmp.CreateFile("accounts/readings/a.json", "{not json");
 
         await Assert.That(store.Readings.LoadAll().ContainsKey("a")).IsFalse();
-        await Assert.That(store.Readings.TryRecord("a", 0, null, Observe(0))).IsTrue();
+        await Assert.That(store.Readings.TryRecord("a", Observe(0))).IsTrue();
 
         var file = store.Readings.LoadAll()["a"];
         await Assert.That(file.Reading.Windows.Single().UsedPercent).IsEqualTo(10.0);
@@ -124,7 +153,7 @@ public class ReadingStoreTests {
         Tmp.CreateFile("accounts/readings/a.json", json);
 
         await Assert.That(store.Readings.LoadAll().ContainsKey("a")).IsFalse();
-        await Assert.That(store.Readings.TryRecord("a", 0, null, Observe(0))).IsTrue();
+        await Assert.That(store.Readings.TryRecord("a", Observe(0))).IsTrue();
         await Assert.That(store.Readings.LoadAll()["a"].Reading.Windows.Single().UsedPercent).IsEqualTo(10.0);
     }
 
@@ -138,8 +167,8 @@ public class ReadingStoreTests {
         await Assert.That(loaded.Plan).IsEqualTo("pro");
         await Assert.That(loaded.MetadataAt).IsNull();
 
-        await Assert.That(store.Readings.TryRecord("a", 0, null,
-            f => f with { Reading = ReadingMerge.Apply(f.Reading, Obs(0, fresh: false, plan: "plus")) })).IsTrue();
+        await Assert.That(store.Readings.TryRecord("a",
+            (f, _) => f with { Reading = ReadingMerge.Apply(f.Reading, Obs(0, fresh: false, plan: "plus")) })).IsTrue();
         await Assert.That(store.Readings.LoadAll()["a"].Reading.Plan).IsEqualTo("plus");
         await Assert.That(store.Readings.LoadAll()["a"].Reading.MetadataAt).IsEqualTo(At(0));
     }
@@ -149,10 +178,10 @@ public class ReadingStoreTests {
     [Test]
     public async Task Reading_of_an_older_generation_is_reset_by_the_next_observation() {
         var store = Registered(Store(), Codex("a", generation: 1));
-        await Assert.That(store.Readings.TryRecord("a", 1, "s1", f => Observe(0, used: 90)(f) with { Sessions = [new ReadingSession("s1", 5)] })).IsTrue();
+        await Assert.That(store.Readings.TryRecord("a", (f, a) => Observe(0, used: 90)(f, a)! with { Sessions = [new ReadingSession("s1", 5)] })).IsTrue();
         store.Mutate(r => (r with { Accounts = [Codex("a", generation: 2)] }, 0));
 
-        await Assert.That(store.Readings.TryRecord("a", 2, null, Observe(10, used: 5))).IsTrue();
+        await Assert.That(store.Readings.TryRecord("a", Observe(10, used: 5))).IsTrue();
 
         var file = store.Readings.LoadAll()["a"];
         await Assert.That(file.Reading.Generation).IsEqualTo(2L);
@@ -180,7 +209,7 @@ public class ReadingStoreTests {
     [Test]
     public async Task A_failed_registry_save_skips_the_reading_writes() {
         var store = Registered(Store(), Codex("a"));
-        store.Readings.TryRecord("a", 0, null, Observe(0));
+        store.Readings.TryRecord("a", Observe(0));
         var before   = File.ReadAllText(ReadingPath(store, "a"));
         var deleted  = false;
 

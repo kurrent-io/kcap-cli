@@ -1029,7 +1029,7 @@ public class DaemonLifecycleControllerTests {
         await Assert.That(h.Surface.Prompts).IsEmpty();
         await Assert.That(h.Client.RestartCount).IsEqualTo(1);
         await Assert.That(h.Surface.StatusMessages.Count).IsEqualTo(1);
-        await Assert.That(h.Surface.StatusMessages[0]).Contains("Waiting to connect");
+        await Assert.That(h.Surface.StatusMessages[0]).Contains("Waiting for it to connect");
     }
 
     /// A click is the user asking, so an unknown terminal PATH does not stop the install.
@@ -1542,7 +1542,7 @@ public class DaemonLifecycleControllerTests {
     [Test]
     public async Task Disclosure_names_the_count_and_says_the_agents_resume() {
         var text = DaemonLifecycleController.ReloadDisclosure(2, resumes: true);
-        await Assert.That(text).IsEqualTo("Reloading restarts the daemon now. Its 2 running agents are stopped, mid-turn if need be, and resumed on the new daemon unless daemon.auto_resume is off. A review or evaluation still running when it exits may end.");
+        await Assert.That(text).IsEqualTo("Reloading restarts the daemon now. Its 2 running agents are stopped, even mid-turn. Eligible agents resume if auto-resume is on. A review or evaluation still running when it exits may end.");
         await Assert.That(DaemonLifecycleController.ReloadDisclosure(1, resumes: true)).Contains("Its 1 running agent is stopped");
         await Assert.That(DaemonLifecycleController.ReloadDisclosure(0, resumes: true)).IsEqualTo("Reloading restarts the daemon now. A review or evaluation still running when it exits may end.");
     }
@@ -1550,7 +1550,7 @@ public class DaemonLifecycleControllerTests {
     /// A daemon without the shutdown frame is restarted the old way and keeps no resume ledger.
     [Test]
     public async Task Disclosure_for_a_daemon_that_cannot_keep_its_agents_warns_they_end() {
-        await Assert.That(DaemonLifecycleController.ReloadDisclosure(2, resumes: false)).IsEqualTo("Reloading restarts the daemon and ends everything it hosts: 2 agents now, plus any agent, launch or evaluation running when it exits. Uncommitted work in their worktrees is lost.");
+        await Assert.That(DaemonLifecycleController.ReloadDisclosure(2, resumes: false)).IsEqualTo("Reloading restarts the daemon and stops its 2 agents. Any other agents, launches or evaluations running when it exits also end. Uncommitted work in their worktrees is lost.");
     }
 
     [Test]
@@ -1646,8 +1646,8 @@ public class DaemonLifecycleControllerTests {
     /// A daemon attached by name that serves another server or profile is reported, and an idle one is offered
     /// the ordinary Replace, which the lane runs for the app's own profile.
     [Test]
-    [Arguments("https://norton.kcap.ai:443", "norton", "Daemon daemon-a is running for norton.kcap.ai, profile norton, not kcap.example.com, profile default.")]
-    [Arguments("https://kcap.example.com:443", "norton", "Daemon daemon-a is running for profile norton, not profile default.")]
+    [Arguments("https://norton.kcap.ai:443", "norton", "Daemon daemon-a doesn't match this app. It's running for norton.kcap.ai, profile norton, not kcap.example.com, profile default.")]
+    [Arguments("https://kcap.example.com:443", "norton", "Daemon daemon-a doesn't match this app. It's running for profile norton, not profile default.")]
     public async Task A_daemon_serving_another_identity_is_reported_and_offered_a_replace(string server, string profile, string message) {
         if (!AttachedIdentity.SupportsVerifiedReplace) return;
         await using var h = new Harness();
@@ -1694,7 +1694,7 @@ public class DaemonLifecycleControllerTests {
         await startTask;
 
         await WaitUntilAsync(() => h.Surface.Prompts.Any(p => p.Kind == LifecyclePrompt.KindRepair), what: "the replace offer");
-        await Assert.That(h.Surface.AttentionMessages.Count(m => m.StartsWith("Daemon daemon-a is running", StringComparison.Ordinal))).IsEqualTo(1);
+        await Assert.That(h.Surface.AttentionMessages.Count(m => m.StartsWith("Daemon daemon-a doesn't match", StringComparison.Ordinal))).IsEqualTo(1);
     }
 
     /// Where the platform has no verified replace, a mismatch is reported with the command to run by hand.
@@ -1823,7 +1823,7 @@ public class DaemonLifecycleControllerTests {
         await WaitUntilAsync(() => h.Surface.AttentionMessages.Count > 0, what: "the report");
         await Assert.That(h.Surface.AttentionMessages.Single())
             .Contains($"--name daemon-a --profile {(urlOverride ? "<profile>" : "default")}");
-        await Assert.That(h.Surface.AttentionMessages.Single().Contains("with <profile> replaced", StringComparison.Ordinal)).IsEqualTo(urlOverride);
+        await Assert.That(h.Surface.AttentionMessages.Single().Contains("Replace <profile>", StringComparison.Ordinal)).IsEqualTo(urlOverride);
         await Assert.That(h.Surface.Prompts).IsEmpty();
         await Assert.That(h.Lane.Requests).IsEmpty();
     }
@@ -1854,17 +1854,17 @@ public class DaemonLifecycleControllerTests {
     /// override has no profile, so the daemon must be given one that resolves the override's server.
     [Test]
     [Arguments("daemon-a", "default", false, true,
-        "`kcap daemon service install --replace --verify --name daemon-a --profile default` in a shell ")]
+        "Run this in a shell without KCAP_URL set, then restart kcap: `kcap daemon service install --replace --verify --name daemon-a --profile default`")]
     [Arguments("-My Laptop", "it's mine", false, false,
-        "`kcap daemon service uninstall --name my-laptop`, then `kcap daemon service install --name my-laptop --profile 'it'\\''s mine'` in a shell ")]
+        "Run these in a shell without KCAP_URL set, then restart kcap: `kcap daemon service uninstall --name my-laptop` `kcap daemon service install --name my-laptop --profile 'it'\\''s mine'`")]
     [Arguments("my laptop", "it's mine", true, true,
-        "`kcap daemon service install --replace --verify --name 'my laptop' --profile 'it''s mine'` in PowerShell ")]
+        "Run this in PowerShell without KCAP_URL set, then restart kcap: `kcap daemon service install --replace --verify --name 'my laptop' --profile 'it''s mine'`")]
     [Arguments("laptop", "it\u2019s", true, false,
-        "`kcap daemon service uninstall --name laptop`, then `kcap daemon service install --name laptop --profile 'it\u2019\u2019s'` in PowerShell ")]
+        "Run these in PowerShell without KCAP_URL set, then restart kcap: `kcap daemon service uninstall --name laptop` `kcap daemon service install --name laptop --profile 'it\u2019\u2019s'`")]
     [Arguments("laptop", null, false, true,
-        "--profile <profile>`, with <profile> replaced by a profile for the server this app uses, in a shell ")]
+        "Replace <profile> with a profile for this app's server. Run this in a shell without KCAP_URL set, then restart kcap: `kcap daemon service install --replace --verify --name laptop --profile <profile>`")]
     public async Task The_manual_repair_command_is_one_the_named_shell_runs(string name, string? profile, bool windows, bool verified, string expected) =>
-        await Assert.That(AttachedIdentity.ManualRepair(name, profile, windows, verified)).Contains(expected);
+        await Assert.That(AttachedIdentity.ManualRepair(name, profile, windows, verified)).IsEqualTo(expected);
 
     /// A configured name the socket reduces to the daemon's own is the same daemon, and two servers on one host
     /// are told apart in full.
@@ -1875,7 +1875,7 @@ public class DaemonLifecycleControllerTests {
 
         var otherPort = FakeDaemonClientService.Snap(daemon: "daemon-a", serverUrl: "https://kcap.example.com:8443").Daemon;
         await Assert.That(AttachedIdentity.Mismatch(otherPort, "daemon-a", "https://kcap.example.com:443", null))
-            .IsEqualTo("Daemon daemon-a is running for https://kcap.example.com:8443, not https://kcap.example.com:443.");
+            .IsEqualTo("Daemon daemon-a doesn't match this app. It's running for https://kcap.example.com:8443, not https://kcap.example.com:443.");
     }
 
     sealed class FakeMutationLane {
@@ -2153,6 +2153,7 @@ public class DaemonLifecycleControllerTests {
 
         await WaitUntilAsync(() => h.Surface.Prompts.Count == 1, what: "the Windows service offer");
         await Assert.That(h.Surface.Prompts[0].Disclosure).IsEqualTo(DaemonLifecycleController.WindowsServiceDisclosure(2, resumes: true));
+        await Assert.That(h.Surface.Prompts[0].Disclosure).Contains("2 running agents resume if auto-resume is on");
     }
 
     /// One that cannot resume them waits for idle, without spending the run's offer

@@ -540,11 +540,7 @@ public class OpenCodeImportSourceImportTests : IDisposable {
         }
     }
 
-    // NotInParallel with NO group key — globally sequential, mirroring
-    // ClaudeHookStdoutTests: this test redirects the process-global Console.Error, and a group
-    // key alone wouldn't stop an unrelated test under a different key from writing to stderr
-    // concurrently and leaking into the capture.
-    [Test, NotInParallel]
+    [Test]
     public async Task new_depth_9_descendant_invalidates_the_fingerprint_and_reimports_with_omitted_warning() {
         // the completeness fingerprint used to hash only the IN-CAP
         // descendant list, so a descendant added BELOW the depth cap (which never changes the
@@ -567,8 +563,9 @@ public class OpenCodeImportSourceImportTests : IDisposable {
                "/hooks/subagent-start", "/hooks/subagent-stop", "/hooks/session-end/opencode");
 
         using var client = new HttpClient();
+        var stderr    = new StringWriter();
         var ctx       = new ClassifyContext(client, _server.Url!, 0, Home);
-        var importCtx = new ImportContext(client, _server.Url!, false);
+        var importCtx = new ImportContext(client, _server.Url!, false) { Stderr = stderr };
 
         // Run 1: root + depths 1..8 (all within the import cap) — fully imported, ledger marked.
         var s1 = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath, TimeProvider.System);
@@ -582,7 +579,7 @@ public class OpenCodeImportSourceImportTests : IDisposable {
         _fix.AddSession("ses_n9", "ses_n8", "/work/a", "N9", 200);
         _fix.AddMessageWithTextAndAgent("ses_n9", "msg_9", "n9 work", 200, agent: "general");
 
-        using var capture = ConsoleOutput.StartErrorCapture();
+        stderr.GetStringBuilder().Clear();
 
         var s2 = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath, TimeProvider.System);
         var c2 = await s2.ClassifyAsync(
@@ -594,6 +591,6 @@ public class OpenCodeImportSourceImportTests : IDisposable {
 
         await Assert.That(await s2.ImportSessionAsync(c2[0], importCtx, CancellationToken.None)).IsEqualTo(ImportOutcome.Loaded);
 
-        await Assert.That(capture.GetCapturedError()).Contains("descendants_omitted=1");
+        await Assert.That(stderr.ToString()).Contains("descendants_omitted=1");
     }
 }

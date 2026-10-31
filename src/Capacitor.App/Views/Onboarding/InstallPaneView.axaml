@@ -62,15 +62,19 @@
                             <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
                                 <Panel Width="14" Height="14" VerticalAlignment="Center">
                                     <icons:AppIcon Kind="Circle" Size="14" Foreground="{StaticResource OnboardingMutedBrush}"
+                                                   AutomationProperties.Name="Waiting"
                                                    IsVisible="{Binding Row.State, Converter={x:Static views:RowStateIsConverter.Instance}, ConverterParameter=Pending}" />
                                     <Panel Classes="onboardingSpinner"
                                            IsVisible="{Binding Row.State, Converter={x:Static views:RowStateIsConverter.Instance}, ConverterParameter=Running}">
                                         <icons:AppIcon Kind="LoaderCircle" Size="14" Foreground="{StaticResource OnboardingAccentBrush}"
+                                                       AutomationProperties.Name="In progress"
                                                        Classes.kcapSpinning="{Binding Row.State, Converter={x:Static views:RowStateIsConverter.Instance}, ConverterParameter=Running}" />
                                     </Panel>
                                     <icons:AppIcon Kind="Check" Size="14" Foreground="{StaticResource KcapSuccessBrush}"
+                                                   AutomationProperties.Name="Done"
                                                    IsVisible="{Binding Row.State, Converter={x:Static views:RowStateIsConverter.Instance}, ConverterParameter=Done}" />
                                     <icons:AppIcon Kind="CircleMinus" Size="14" Foreground="{StaticResource OnboardingMutedBrush}"
+                                                   AutomationProperties.Name="Skipped"
                                                    IsVisible="{Binding Row.State, Converter={x:Static views:RowStateIsConverter.Instance}, ConverterParameter=Skipped}" />
                                 </Panel>
                                 <TextBlock Grid.Column="1" Classes="onboardingBody" VerticalAlignment="Center" Text="{Binding Label}" />
@@ -100,6 +104,9 @@
                                Text="{x:Static vmr:SearchChoiceViewModel.KeywordDetail}" />
                 </StackPanel>
 
+                <TextBlock x:Name="RetryStatusText" Classes="onboardingDetail" TextWrapping="Wrap" Text="{Binding RetryStatus}"
+                           IsVisible="{Binding AutoRetrying}" />
+
                 <Button x:Name="CancelInstallButton" Classes="onboardingLink" Content="Cancel" HorizontalAlignment="Left"
                         AutomationProperties.Name="Cancel the install"
                         Command="{Binding CancelCommand}" IsVisible="{Binding CancelVisible}" />
@@ -124,6 +131,10 @@
                     </StackPanel>
                     <Button x:Name="TryAgainButton" Classes="onboardingPrimary" Content="Try again" HorizontalAlignment="Left"
                             Command="{Binding TryAgainCommand}" IsVisible="{Binding TryAgainVisible}" />
+                    <Button x:Name="EmailSupportButton" Classes="onboardingPrimary" Content="Email logs to support" HorizontalAlignment="Left"
+                            Command="{Binding EmailSupportCommand}" IsVisible="{Binding EmailSupportVisible}" />
+                    <TextBlock x:Name="SupportNoteText" Classes="onboardingDetail" TextWrapping="Wrap" Text="{Binding SupportNote}"
+                               IsVisible="{Binding SupportNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 </StackPanel>
             </Grid>
         </Border>

@@ -204,7 +204,7 @@ sealed class GeminiHookCommand(
             return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 LifecycleFor(sessionId, source),
                 new SessionStartMemoryContextRequest(Url, scopeRoot, disabled, budget, CancellationToken.None,
-                    GuidelinesDisabled: guidelinesDisabled, FlowsDisabled: flowsDisabled));
+                    GuidelinesDisabled: guidelinesDisabled, Vendor: HarnessId.Gemini.VendorId, WakeUpsWanted: hosted.IsHosted, FlowsDisabled: flowsDisabled));
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
         }

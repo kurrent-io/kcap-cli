@@ -7,6 +7,7 @@ using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Accounts.Readings;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.WorkItems;
@@ -610,6 +611,31 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// A described command keeps its description on the row under the same verb as any command,
+    /// and opening it shows the command and the output the transcript recorded.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_described_command_row_keeps_its_description_and_opens_on_the_recorded_command_and_output() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var call = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"rm -rf node_modules && npm ci","description":"Reinstall dependencies"}}]}}""";
+            await h.PushAsync(Dto(Tmp.CreateFile("t.jsonl", [call, ToolErrorLine])));
+
+            var row = Group(h.Chat, 0).Calls[0];
+            await Assert.That(row.Label).IsEqualTo("Ran command");
+            await Assert.That(row.Detail).IsEqualTo("Reinstall dependencies");
+            await Assert.That(row.Outcome).IsEqualTo(ToolOutcome.Error);
+            await Assert.That(row.Result).IsEqualTo("boom");
+
+            row.Toggle();
+            var sections = row.Inspection!.Sections;
+            await Assert.That(sections.Select(s => (s.Heading, s.Text))).IsEquivalentTo(new[] {
+                ("Status", "Failed"), ("Command", "rm -rf node_modules && npm ci"), ("Output", "boom"),
+            }, CollectionOrdering.Matching);
+            await h.TeardownAsync();
+        });
+    }
+
     [Test]
     [Arguments("mcp__plugin_linear_linear__save_issue", "Linear · save issue", "Linear")]
     [Arguments("mcp__claude_ai_Linear__save_issue", "Linear · save issue", "Linear")]
@@ -1006,7 +1032,8 @@ public class ChatTabViewModelTests {
         });
     }
 
-    /// Claude Code stores its compaction summary as a user record; the row must not read as the user's.
+    /// Claude Code stores its compaction summary as a user record; the row must not read as the user's,
+    /// and it starts folded because it restates the conversation above it.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_compaction_summary_renders_as_a_conversation_compacted_note() {
@@ -1020,6 +1047,13 @@ public class ChatTabViewModelTests {
             var note = (SystemNoteItem)h.Chat.Items.Single();
             await Assert.That(note.Label).IsEqualTo(SystemNoteItem.CompactSummaryLabel);
             await Assert.That(note.Text).IsEqualTo("This session is being continued from a previous conversation.");
+            await Assert.That(note.IsExpanded).IsFalse();
+            await Assert.That(note.ToggleAccessibleName).IsEqualTo("Expand Conversation compacted");
+            note.Toggle();
+            await Assert.That(note.IsExpanded).IsTrue();
+            await Assert.That(note.ToggleAccessibleName).IsEqualTo("Collapse Conversation compacted");
+            note.Toggle();
+            await Assert.That(note.IsExpanded).IsFalse();
             await h.TeardownAsync();
         });
     }
@@ -1039,6 +1073,9 @@ public class ChatTabViewModelTests {
             await Assert.That(note.Label).IsEqualTo(SystemNoteItem.AgentReportLabel);
             await Assert.That(note.IconKind).IsEqualTo(Lucide.Avalonia.LucideIconKind.BotMessageSquare);
             await Assert.That(note.Text).IsEqualTo("**Done.**");
+            await Assert.That(note.IsExpanded).IsTrue();
+            note.Toggle();
+            await Assert.That(note.IsExpanded).IsTrue();
             await h.TeardownAsync();
         });
     }
@@ -3798,7 +3835,7 @@ public class ChatTabViewModelTests {
                 var usage = rig.Chat.AccountStripUsage!;
                 await Assert.That(usage.Bars.Select(b => (b.Label, b.PercentText, b.Tone)))
                     .IsEquivalentTo(new[] { ("5h", "42%", UsageTone.Neutral), ("Week", "81%", UsageTone.Warning) }, CollectionOrdering.Matching);
-                await Assert.That(usage.NextResetText).IsEqualTo("resets in 2h 14m");
+                await Assert.That(usage.NextResetText).IsEqualTo("5h resets in 2h 14m");
                 await Assert.That(rig.Chat.ShowsAccountDirectory).IsFalse();
                 await Assert.That(rig.Chat.AccountReadingNote).IsNull();
             } finally { await rig.H.TeardownAsync(); }
@@ -3903,7 +3940,7 @@ public class ChatTabViewModelTests {
             try {
                 await rig.PushAsync();
                 rig.Readings.OnNext(StripReadings.Snapshot(StripReadings.Account("acc1", StripReadings.Reading(StripReadings.Window(300, 42, TimeSpan.FromMinutes(134).Add(TimeSpan.FromSeconds(30)))))));
-                await WaitUntilAsync(() => rig.Chat.AccountStripUsage?.NextResetText == "resets in 2h 14m", what: "the first reset");
+                await WaitUntilAsync(() => rig.Chat.AccountStripUsage?.NextResetText == "5h resets in 2h 14m", what: "the first reset");
                 var first = rig.Chat.AccountStripUsage;
 
                 var changes = 0;
@@ -3914,8 +3951,175 @@ public class ChatTabViewModelTests {
                 await Assert.That(rig.Chat.AccountStripUsage).IsSameReferenceAs(first);
 
                 rig.Clock.OnNext(StripReadings.Now.AddMinutes(30));
-                await WaitUntilAsync(() => rig.Chat.AccountStripUsage?.NextResetText == "resets in 1h 44m", what: "the clock's reset");
+                await WaitUntilAsync(() => rig.Chat.AccountStripUsage?.NextResetText == "5h resets in 1h 44m", what: "the clock's reset");
             } finally { await rig.H.TeardownAsync(); }
+        });
+    }
+
+    static AccountViewDto LabelledRow(string label, AccountReadingDto? reading) =>
+        StripReadings.Account("a1", reading) with { Label = label };
+
+    static AccountReadingDto ReadingAt(double used) =>
+        StripReadings.Reading(StripReadings.Window(300, used, TimeSpan.FromHours(2)));
+
+    static Task PushLaunchLabelAsync(Harness h) =>
+        h.PushAsync(Dto(null) with { AccountDirectory = StripReadings.Directory, AccountId = "a1", AccountLabel = "old@x" });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Account_label_follows_the_snapshot_row() {
+        await RunOnUiAsync(async () => {
+            var readings = new BehaviorSubject<AccountsSnapshotDto?>(null);
+            var h = new Harness(TranscriptChat.For("claude"), accountReadings: readings, usageClock: Observable.Return(StripReadings.Now));
+            try {
+                await PushLaunchLabelAsync(h);
+                readings.OnNext(StripReadings.Snapshot(LabelledRow("new@x", ReadingAt(42))));
+                await WaitUntilAsync(() => h.Chat.AccountLabel == "new@x", what: "the row's label");
+
+                await Assert.That(h.Chat.AccountStripUsage).IsNotNull();
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Account_label_and_usage_never_mix_when_the_row_changes() {
+        await RunOnUiAsync(async () => {
+            var readings = new BehaviorSubject<AccountsSnapshotDto?>(null);
+            var h = new Harness(TranscriptChat.For("claude"), accountReadings: readings, usageClock: Observable.Return(StripReadings.Now));
+            try {
+                await PushLaunchLabelAsync(h);
+                var seen = new List<(string? Label, string? Percent)>();
+                h.Chat.PropertyChanged += (_, _) => seen.Add((h.Chat.AccountLabel, h.Chat.AccountStripUsage?.Bars[0].PercentText));
+
+                readings.OnNext(StripReadings.Snapshot(LabelledRow("first@x", ReadingAt(42))));
+                await WaitUntilAsync(() => h.Chat.AccountLabel == "first@x", what: "the first row");
+                readings.OnNext(StripReadings.Snapshot(LabelledRow("second@x", ReadingAt(17))));
+                await WaitUntilAsync(() => h.Chat.AccountLabel == "second@x", what: "the second row");
+                readings.OnNext(StripReadings.Snapshot());
+                await WaitUntilAsync(() => h.Chat.AccountLabel == "old@x", what: "the fallback");
+
+                (string?, string?)[] whole = [("first@x", "42%"), ("second@x", "17%"), ("old@x", null)];
+                await Assert.That(seen.Where(p => !whole.Contains(p))).IsEmpty();
+                await Assert.That(seen.Distinct()).IsEquivalentTo(whole);
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Account_label_is_never_empty_beside_the_directory_while_the_row_catches_up() {
+        await RunOnUiAsync(async () => {
+            var readings = new BehaviorSubject<AccountsSnapshotDto?>(null);
+            var h = new Harness(TranscriptChat.For("claude"), accountReadings: readings, usageClock: Observable.Return(StripReadings.Now));
+            try {
+                readings.OnNext(StripReadings.Snapshot(
+                    LabelledRow("new@x", ReadingAt(42)),
+                    StripReadings.Account("a2", ReadingAt(17)) with { Label = "second@x" }));
+                var seen = new List<(string? Label, string? Percent)>();
+                h.Chat.PropertyChanged += (_, _) => {
+                    if (h.Chat.AccountDirectory is not null) seen.Add((h.Chat.AccountLabel, h.Chat.AccountStripUsage?.Bars[0].PercentText));
+                };
+
+                await PushLaunchLabelAsync(h);
+                await WaitUntilAsync(() => h.Chat.AccountLabel == "new@x", what: "the row's label");
+                await h.PushAsync(Dto(null) with { AccountDirectory = StripReadings.Directory, AccountId = "a2", AccountLabel = "other@x" });
+                await WaitUntilAsync(() => h.Chat.AccountLabel == "second@x", what: "the second account's row");
+
+                (string?, string?)[] whole = [("old@x", null), ("new@x", "42%"), ("other@x", null), ("second@x", "17%")];
+                await Assert.That(seen.Where(p => !whole.Contains(p))).IsEmpty();
+                await Assert.That(seen.Distinct()).IsEquivalentTo(whole);
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Same_account_relabel_keeps_the_bars() {
+        await RunOnUiAsync(async () => {
+            var readings = new BehaviorSubject<AccountsSnapshotDto?>(null);
+            var h = new Harness(TranscriptChat.For("claude"), accountReadings: readings, usageClock: Observable.Return(StripReadings.Now));
+            try {
+                readings.OnNext(StripReadings.Snapshot(LabelledRow("mid@x", ReadingAt(42))));
+                await PushLaunchLabelAsync(h);
+                await WaitUntilAsync(() => h.Chat.AccountLabel == "mid@x", what: "the row's label");
+
+                readings.OnNext(StripReadings.Snapshot(LabelledRow("new@x", ReadingAt(42))));
+                await WaitUntilAsync(() => h.Chat.AccountLabel == "new@x", what: "the relabelled row");
+                await h.PushAsync(Dto(null) with { AccountDirectory = StripReadings.Directory, AccountId = "a1", AccountLabel = "new@x" });
+                await SettleAsync();
+
+                await Assert.That(h.Chat.AccountStripUsage).IsNotNull();
+                await Assert.That(h.Chat.AccountLabel).IsEqualTo("new@x");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_stale_emission_for_the_previous_account_is_dropped() {
+        await RunOnUiAsync(async () => {
+            var readings = new BehaviorSubject<AccountsSnapshotDto?>(null);
+            var h = new Harness(TranscriptChat.For("claude"), accountReadings: readings, usageClock: Observable.Return(StripReadings.Now));
+            try {
+                readings.OnNext(StripReadings.Snapshot(
+                    LabelledRow("first@x", ReadingAt(42)),
+                    StripReadings.Account("a2", ReadingAt(17)) with { Label = "second@x" }));
+                await PushLaunchLabelAsync(h);
+                await WaitUntilAsync(() => h.Chat.AccountLabel == "first@x", what: "the first account's row");
+
+                var seen = new List<(string? Label, string? Percent)>();
+                h.Chat.PropertyChanged += (_, _) => seen.Add((h.Chat.AccountLabel, h.Chat.AccountStripUsage?.Bars[0].PercentText));
+
+                // A snapshot off the UI thread is computed for the account current at that moment and then
+                // posted; the switch applies on the UI thread before that post runs.
+                var emitted = Task.Run(() => readings.OnNext(StripReadings.Snapshot(
+                    LabelledRow("first@x", ReadingAt(99)),
+                    StripReadings.Account("a2", ReadingAt(17)) with { Label = "second@x" })));
+                SpinWait.SpinUntil(() => emitted.IsCompleted);
+                h.Daemon.Agents.AddOrUpdate(Dto(null) with { AccountDirectory = StripReadings.Directory, AccountId = "a2", AccountLabel = "other@x" });
+                await WaitUntilAsync(() => h.Chat.AccountLabel == "second@x", what: "the second account's row");
+                await SettleAsync();
+
+                await Assert.That(seen.Where(p => p.Label == "first@x" || p.Percent is "99%" or "42%")).IsEmpty();
+                await Assert.That(h.Chat.AccountLabel).IsEqualTo("second@x");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Unchanged_account_pushes_leave_the_strip_alone() {
+        await RunOnUiAsync(async () => {
+            var readings = new BehaviorSubject<AccountsSnapshotDto?>(null);
+            var h = new Harness(TranscriptChat.For("claude"), accountReadings: readings, usageClock: Observable.Return(StripReadings.Now));
+            try {
+                readings.OnNext(StripReadings.Snapshot(LabelledRow("new@x", ReadingAt(42))));
+                await PushLaunchLabelAsync(h);
+                await WaitUntilAsync(() => h.Chat.AccountLabel == "new@x", what: "the row's label");
+
+                var changes = 0;
+                h.Chat.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(ChatTabViewModel.AccountStripUsage)) changes++; };
+                await h.PushAsync(Dto(null) with { AccountDirectory = StripReadings.Directory, AccountId = "a1", AccountLabel = "old@x", Model = "other-model" });
+                await SettleAsync();
+
+                await Assert.That(changes).IsEqualTo(0);
+                await Assert.That(h.Chat.AccountLabel).IsEqualTo("new@x");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Account_label_without_readings_source_is_the_launch_label() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(TranscriptChat.For("claude"));
+            try {
+                await PushLaunchLabelAsync(h);
+
+                await Assert.That(h.Chat.AccountLabel).IsEqualTo("old@x");
+                await Assert.That(h.Chat.AccountStripUsage).IsNull();
+            } finally { await h.TeardownAsync(); }
         });
     }
 

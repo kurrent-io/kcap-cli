@@ -17,6 +17,11 @@ public static class LocalBuiltinOffer {
         return ReleaseManifest.IsValidVersion(version) ? await offer.LookupAsync(version, ct) : null;
     }
 
+    /// The installed bundle pins the required model set. The recorded set can belong to an older version.
+    public static bool InstalledModelReady(LocalRoot root) =>
+        LocalEndpoints.Read(root).Active?.Version is { } version && ReleaseManifest.IsValidVersion(version)
+        && LocalModelSets.Bundled(root, version) is { } model && LocalModelSets.IsPresent(root, model);
+
     /// The installed version on a re-run, else the one the bundled CLI installs, which shares this app's build.
     public static string TargetVersion(LocalRoot root) => LocalEndpoints.Read(root).Active?.Version ?? LocalBundleClient.RequestedVersion();
 }

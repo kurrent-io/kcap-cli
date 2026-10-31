@@ -1,6 +1,8 @@
+using System.Text.Json;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Accounts.Readings;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.LocalEdition;
 using Microsoft.Extensions.Time.Testing;
 using static Capacitor.Cli.Core.Tests.Unit.Accounts.Readings.ReadingFixtures;
@@ -40,11 +42,21 @@ public class AccountRefreshTests {
     static ReadingObservation Limits(int at, double used, int windowMinutes = 300) =>
         Obs(at, fresh: true, windows: [W("codex", windowMinutes, used, At(at + windowMinutes))]);
 
-    bool Seed(string session, long generation = 0, double used = 50) =>
-        Store.Readings.TryRecord("a", generation, session, f => f with {
+    bool Seed(string session, double used = 50) =>
+        Store.Readings.TryRecord("a", (f, _) => f with {
             Reading  = ReadingMerge.Apply(f.Reading, Limits(0, used)),
             Sessions = [.. f.Sessions, new ReadingSession(session, null)],
         });
+
+    bool RecordStatusLine(long counter, double used, string session = "S") {
+        var payload = JsonDocument.Parse($$"""
+            { "session_id": "{{session}}", "cost": { "total_api_duration_ms": {{counter}} },
+              "rate_limits": { "seven_day": { "used_percentage": {{used}}, "resets_at": 1793000000 } } }
+            """).RootElement;
+        var now = _time.GetUtcNow();
+
+        return Store.Readings.TryRecord("a", (held, account) => ClaudeStatusLineReading.Apply(held, payload, account.HasSwitched, now));
+    }
 
     /// <summary>The older refresh takes its sequence number first and answers last.</summary>
     async Task Overlap(ProbeResult older, ProbeResult newer) {
@@ -74,24 +86,28 @@ public class AccountRefreshTests {
         await Assert.That(account.SignIn).IsEqualTo(SignInStates.SignedIn);
         await Assert.That(account.Label).IsEqualTo("a@example.com");
         await Assert.That(account.LabelSetByUser == false).IsTrue();
-        await Assert.That(account.RetiredSessions ?? []).IsEmpty();
+        await Assert.That(account.GenerationStartedAt).IsNull();
         await Assert.That(account.RefreshError).IsNull();
         await Assert.That(account.CommittedProbeSeq).IsEqualTo(1L);
+        await Assert.That(account.ProbeStartedAt).IsEqualTo(T0);
         await Assert.That(Reading!.Sessions.Single().SessionId).IsEqualTo("s1");
     }
 
     [Test]
-    public async Task Login_change_bumps_generation_deletes_reading_and_retires_sessions() {
+    public async Task Login_change_bumps_generation_and_deletes_reading() {
         Register(Claude("a@example.com", "org-a"));
         Seed("s1");
         Seed("s2");
 
-        var outcome = await Refresh(Identity("b@example.com", orgId: "org-b"));
+        var probe = new FakeAccountProbe { BeforeReturn = () => _time.Advance(TimeSpan.FromMinutes(1)) };
+        probe.Complete(Identity("b@example.com", orgId: "org-b"));
+        var outcome = await Refresh(probe);
 
         var account = Account;
         await Assert.That(outcome.Steps.Select(s => s.Name)).IsEquivalentTo(["identity"]);
         await Assert.That(account.Generation).IsEqualTo(1L);
-        await Assert.That(account.RetiredSessions).IsEquivalentTo(["s1", "s2"]);
+        await Assert.That(account.GenerationStartedAt).IsEqualTo(T0);
+        await Assert.That(account.RefreshedAt).IsEqualTo(T0.AddMinutes(1));
         await Assert.That(account.Email).IsEqualTo("b@example.com");
         await Assert.That(account.OrgId).IsEqualTo("org-b");
         await Assert.That(account.Label).IsEqualTo("b@example.com");
@@ -209,6 +225,73 @@ public class AccountRefreshTests {
         await Assert.That(Account.RefreshedAt).IsEqualTo(At(1));
     }
 
+    static readonly TimeSpan Interval = TimeSpan.FromMinutes(10);
+
+    Task<RefreshOutcome?> RefreshIfDue(IAccountProbe probe) =>
+        AccountRefresh.RunIfDueAsync(Store, "a", probe, _time, Interval, CancellationToken.None);
+
+    [Test]
+    public async Task RunIfDue_skips_a_home_refreshed_within_the_interval() {
+        Register(Codex() with { RefreshedAt = T0.AddMinutes(-5), ProbeSeq = 3 });
+        var probe = FakeAccountProbe.Returning(Identity("a@example.com"));
+
+        var outcome = await RefreshIfDue(probe);
+
+        await Assert.That(outcome).IsNull();
+        await Assert.That(Account.ProbeSeq).IsEqualTo(3L);
+        await Assert.That(probe.Started.IsCompleted).IsFalse();
+    }
+
+    [Test]
+    public async Task RunIfDue_skips_a_home_whose_probe_started_within_the_interval() {
+        Register(Codex() with { RefreshedAt = T0.AddMinutes(-30), ProbeStartedAt = T0.AddMinutes(-1), ProbeSeq = 3 });
+        var probe = FakeAccountProbe.Returning(Identity("a@example.com"));
+
+        var outcome = await RefreshIfDue(probe);
+
+        await Assert.That(outcome).IsNull();
+        await Assert.That(Account.ProbeSeq).IsEqualTo(3L);
+        await Assert.That(probe.Started.IsCompleted).IsFalse();
+    }
+
+    [Test]
+    public async Task RunIfDue_probes_a_due_home_and_stamps_probe_started_at() {
+        Register(Codex() with { RefreshedAt = T0 - Interval, ProbeStartedAt = T0.AddMinutes(-11) });
+        var probe = new FakeAccountProbe { BeforeReturn = () => _time.Advance(TimeSpan.FromMinutes(1)) };
+        probe.Complete(Identity("a@example.com"));
+
+        var outcome = await RefreshIfDue(probe);
+
+        await Assert.That(outcome!.Found).IsTrue();
+        await Assert.That(Account.ProbeSeq).IsEqualTo(1L);
+        await Assert.That(Account.ProbeStartedAt).IsEqualTo(T0);
+        await Assert.That(Account.RefreshedAt).IsEqualTo(At(1));
+    }
+
+    [Test]
+    public async Task RunIfDue_probes_a_home_never_refreshed() {
+        Register(Codex());
+        var probe = FakeAccountProbe.Returning(Identity("a@example.com"));
+
+        var outcome = await RefreshIfDue(probe);
+
+        await Assert.That(outcome!.Found).IsTrue();
+        await Assert.That(probe.Started.IsCompleted).IsTrue();
+        await Assert.That(Account.ProbeStartedAt).IsEqualTo(T0);
+    }
+
+    [Test]
+    public async Task RunIfDue_probes_a_home_whose_last_refresh_is_in_the_future() {
+        Register(Codex() with { RefreshedAt = T0.AddHours(2), ProbeStartedAt = T0.AddHours(1) });
+        var probe = FakeAccountProbe.Returning(Identity("a@example.com"));
+
+        var outcome = await RefreshIfDue(probe);
+
+        await Assert.That(outcome!.Found).IsTrue();
+        await Assert.That(probe.Started.IsCompleted).IsTrue();
+        await Assert.That(Account.ProbeStartedAt).IsEqualTo(T0);
+    }
+
     [Test]
     public async Task Refresh_of_an_unknown_account_is_not_found() {
         Register(Codex());
@@ -233,26 +316,24 @@ public class AccountRefreshTests {
     }
 
     [Test]
-    public async Task Retired_session_late_observation_is_dropped() {
+    public async Task A_session_seen_before_the_switch_records_into_the_new_generation() {
         Register(Codex("a@example.com", "idA"));
         Seed("s1");
 
         await Refresh(Identity("b@example.com", "idB"));
 
-        await Assert.That(Seed("s1", generation: 1)).IsFalse();
-        await Assert.That(Seed("s1", generation: 0)).IsFalse();
-        await Assert.That(Seed("s2", generation: 1)).IsTrue();
+        await Assert.That(Seed("s1")).IsTrue();
     }
 
     [Test]
-    public async Task Producer_committing_just_before_retirement_has_its_session_retired() {
-        Register(Codex("a@example.com", "idA"));
+    public async Task Producer_committing_just_before_the_switch_records_only_fresh_payloads_afterwards() {
+        Register(Claude("a@example.com", "org-a"));
         using var holding  = new ManualResetEventSlim();
         Task<bool>? producer = null;
 
         var probe = new FakeAccountProbe {
             BeforeReturn = () => {
-                producer = Task.Run(() => Seed("S"));
+                producer = Task.Run(() => RecordStatusLine(1000, 80));
                 holding.Wait(TimeSpan.FromSeconds(10));
             },
         };
@@ -260,14 +341,105 @@ public class AccountRefreshTests {
             holding.Set();
             Thread.Sleep(300);
         };
-        probe.Complete(Identity("b@example.com", "idB"));
+        probe.Complete(Identity("b@example.com", orgId: "org-b"));
 
         await Refresh(probe);
         Store.Readings.AfterMembershipCheck = null;
 
         await Assert.That(await producer!).IsTrue();
-        await Assert.That(Account.RetiredSessions).IsEquivalentTo(["S"]);
         await Assert.That(Reading).IsNull();
+        await Assert.That(Account.GenerationStartedAt).IsNotNull();
+
+        await Assert.That(RecordStatusLine(1000, 80)).IsTrue();
+        await Assert.That(Reading!.Reading.Windows).IsEmpty();
+
+        await Assert.That(RecordStatusLine(1500, 8)).IsTrue();
+        await Assert.That(Reading!.Reading.Windows.Single().UsedPercent).IsEqualTo(8d);
+    }
+
+    [Test]
+    public async Task Legacy_switched_account_replay_does_not_merge() {
+        Tmp.CreateFile("accounts/accounts.json", """
+            { "version": 1, "revision": 2, "accounts": [
+                { "id": "a", "vendor": "Claude", "directory": "/h/.claude-a", "label": "a@example.com",
+                  "added_at": "2026-01-01T00:00:00Z", "generation": 1, "retired_sessions": ["A"],
+                  "email": "a@example.com", "org_id": "org-a" }
+            ] }
+            """);
+
+        await Refresh(Identity("a@example.com", orgId: "org-a"));
+        await Assert.That(Account.GenerationStartedAt).IsEqualTo(T0);
+
+        await Assert.That(RecordStatusLine(1000, 80, session: "A")).IsTrue();
+        await Assert.That(Reading!.Reading.Windows).IsEmpty();
+    }
+
+    const string LegacySwitchedRegistry = """
+        { "version": 1, "revision": 2, "accounts": [
+            { "id": "a", "vendor": "Claude", "directory": "/h/.claude-a", "label": "a@example.com",
+              "added_at": "2026-01-01T00:00:00Z", "generation": 1, "retired_sessions": ["A"],
+              "email": "a@example.com", "org_id": "org-a" }
+        ] }
+        """;
+
+    [Test]
+    public async Task Unchanged_refresh_backfills_the_probe_start_of_a_switched_account_without_one() {
+        Tmp.CreateFile("accounts/accounts.json", LegacySwitchedRegistry);
+        var probe = new FakeAccountProbe { BeforeReturn = () => _time.Advance(TimeSpan.FromMinutes(1)) };
+        probe.Complete(Identity("a@example.com", orgId: "org-a"));
+
+        await Refresh(probe);
+
+        var account = Account;
+        await Assert.That(account.Generation).IsEqualTo(1L);
+        await Assert.That(account.GenerationStartedAt).IsEqualTo(T0);
+        await Assert.That(account.RefreshedAt).IsEqualTo(T0.AddMinutes(1));
+    }
+
+    [Test]
+    public async Task Unchanged_refresh_keeps_an_existing_generation_start() {
+        Register(Claude("a@example.com", "org-a") with { Generation = 1, GenerationStartedAt = At(-30) });
+
+        await Refresh(Identity("a@example.com", orgId: "org-a"));
+
+        await Assert.That(Account.GenerationStartedAt).IsEqualTo(At(-30));
+    }
+
+    [Test]
+    public async Task Login_change_retires_the_old_readings_sessions_for_older_builds_and_deletes_it() {
+        Register(Claude("a@example.com", "org-a") with { RetiredSessions = ["old"] });
+        Seed("s1");
+        Seed("s2");
+
+        await Refresh(Identity("b@example.com", orgId: "org-b"));
+
+        await Assert.That(Account.RetiredSessions).IsEquivalentTo(["old", "s1", "s2"]);
+        await Assert.That(Reading).IsNull();
+    }
+
+    [Test]
+    public async Task Retired_sessions_are_distinct_and_capped_at_the_latest_256() {
+        Register(Claude("a@example.com", "org-a") with { RetiredSessions = [.. Enumerable.Range(0, 300).Select(i => $"old{i}")] });
+        Seed("old299");
+        Seed("fresh");
+
+        await Refresh(Identity("b@example.com", orgId: "org-b"));
+
+        var retired = Account.RetiredSessions!;
+        await Assert.That(retired.Length).IsEqualTo(256);
+        await Assert.That(retired.Distinct().Count()).IsEqualTo(256);
+        await Assert.That(retired[^1]).IsEqualTo("fresh");
+        await Assert.That(retired).Contains("old299");
+    }
+
+    [Test]
+    public async Task Retired_sessions_survive_a_write_that_does_not_change_the_login() {
+        Tmp.CreateFile("accounts/accounts.json", LegacySwitchedRegistry);
+
+        await Refresh(Identity("a@example.com", orgId: "org-a"));
+
+        await Assert.That(Account.RetiredSessions).IsEquivalentTo(["A"]);
+        await Assert.That(File.ReadAllText(Store.RegistryPath)).Contains("\"retired_sessions\"");
     }
 
     [Test]
@@ -344,7 +516,7 @@ public class AccountRefreshTests {
     }
 
     [Test]
-    public async Task Email_change_without_id_then_id_arrives_retires_once() {
+    public async Task Email_change_without_id_then_id_arrives_bumps_generation_once() {
         Register(Codex("a@example.com", "idA"));
 
         await Refresh(Identity("b@example.com"));
@@ -417,7 +589,7 @@ public class AccountRefreshTests {
     sealed class SimulatedCrash : Exception;
 
     [Test]
-    public async Task Failed_registry_save_leaves_reading_and_retirement_untouched() {
+    public async Task Failed_registry_save_leaves_reading_and_generation_untouched() {
         Register(Codex("a@example.com", "idA"));
         Seed("s1");
         var saves = 0;
@@ -430,7 +602,7 @@ public class AccountRefreshTests {
 
         var account = Account;
         await Assert.That(account.Generation).IsEqualTo(0L);
-        await Assert.That(account.RetiredSessions).IsNull();
+        await Assert.That(account.GenerationStartedAt).IsNull();
         await Assert.That(account.Email).IsEqualTo("a@example.com");
         await Assert.That(Reading!.Reading.Generation).IsEqualTo(0L);
         await Assert.That(Reading!.Sessions.Single().SessionId).IsEqualTo("s1");
@@ -440,7 +612,7 @@ public class AccountRefreshTests {
     [Test]
     public async Task Refresh_after_crash_resets_an_older_generation_reading() {
         Register(Codex(generation: 1));
-        await Assert.That(Seed("s1", generation: 1, used: 90)).IsTrue();
+        await Assert.That(Seed("s1", used: 90)).IsTrue();
         Store.Mutate(r => (r with { Accounts = [Codex(generation: 2)] }, 0));
 
         await Refresh(Identity("a@example.com", "idA", Limits(10, 5, windowMinutes: 10080)));

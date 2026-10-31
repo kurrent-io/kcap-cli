@@ -8,7 +8,8 @@ public class HookSpoolTests {
 
     /// <summary>The one classification every live post and drain poster shares. A 401 is retryable
     /// because <c>kcap login</c> repairs it; a 4xx that rejects the payload itself is not, since a
-    /// replay would be rejected the same way.</summary>
+    /// replay would be rejected the same way. Neither is the 410 a session its owner deleted on the
+    /// server answers: the session is gone for good.</summary>
     [Test]
     [Arguments(401, true)]
     [Arguments(408, true)]
@@ -18,6 +19,7 @@ public class HookSpoolTests {
     [Arguments(400, false)]
     [Arguments(403, false)]
     [Arguments(404, false)]
+    [Arguments(410, false)]
     [Arguments(422, false)]
     public async Task retryable_statuses_stop_the_drain_and_the_rest_drop(int status, bool retryable) {
         await Assert.That(HookSpool.IsRetryable(status)).IsEqualTo(retryable);

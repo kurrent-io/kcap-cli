@@ -8,6 +8,7 @@ using Capacitor.App.Services.Mutation;
 using Capacitor.App.ViewModels;
 using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.LocalIpc;
@@ -103,6 +104,8 @@ internal sealed record WizardGraphOptions(
     Func<CancellationToken, Task<VisibilityOptionsResponse?>>?                   ReadVisibilityOptions = null,
     // Brings any other kcap the local installer would refuse up to date; null finds nothing to update.
     Func<CancellationToken, Task<ClientRepairOutcome>>?                          RepairClients = null,
+    // Opens a support email with this report as its body; null offers no support email.
+    Func<string, FeedbackMailOutcome>?                                           MailSupport = null,
     // This app sent the user to kcap.ai's sign-up and no sign-in has committed since.
     bool                                                                         ResumeWebSignUp = false);
 
@@ -261,6 +264,14 @@ internal static class WizardComposition {
             },
             locked: () => signedInAtStart || Installed() || Pending() || CommittedLocal());
         bool OnLocalPath() => edition.Choice == EditionChoice.Local || Pending() || CommittedLocal();
+        // The edition decides what an unmade usage-data choice means: the cloud edition's notice, or the local edition's
+        // question. Settled ahead of the funnel event that reports the choice, so a cloud choice sends what was held with it.
+        edition.WhenAnyValue(x => x.Choice).Where(choice => choice is not null)
+            .Subscribe(choice => SettleUsageData(local: choice == EditionChoice.Local));
+        void SettleUsageData(bool local) {
+            options.Bridges.Telemetry.SettleEdition(local);
+            options.UsageNotice?.Restate();
+        }
         var installStep = new InstallStepViewModel(
             install,
             appProfile: () => options.ResolveIdentity()?.Profile ?? options.ProfileOverride,
@@ -272,6 +283,8 @@ internal static class WizardComposition {
             builtinOffer: options.BuiltinOffer,
             recorded: () => LocalEmbeddingFile.Read(root),
             repairClients: options.RepairClients,
+            time: options.Time,
+            mailSupport: options.MailSupport is { } mail ? failures => mail(InstallSupportReport.Build(failures, root)) : null,
             resuming: Pending);
         var connect  = new ConnectChoiceViewModel();
         var signIn   = new SignInStepViewModel(
@@ -283,7 +296,7 @@ internal static class WizardComposition {
             : null;
         // The name persists to the same fresh identity the enabler gates on, falling back to ActiveProfile.
         var machineName = new MachineNameViewModel(options.Root, options.DefaultDaemonName, () => options.ResolveIdentity()?.Profile);
-        var machine     = MachineLabel(Environment.MachineName);
+        var machine     = MachineLabel(Environment.MachineName, HostName());
         // ONE detection feed for both vendor steps: two would probe the login shell twice for the
         // same answer, and the two steps' vendor lists could then disagree.
         var detect = options.DetectionFeed(options.Probe);
@@ -298,8 +311,7 @@ internal static class WizardComposition {
             () => options.ResolveIdentity()?.Profile, options.ShutdownToken,
             onLocalPath: OnLocalPath,
             visibilityOptions: options.ReadVisibilityOptions);
-        var history = new HistoryStepViewModel(
-            cli, () => harnesses.Recording, options.Bridges.Post, machine, options.Time, OnLocalPath);
+        var history = new HistoryStepViewModel(cli, options.Bridges.Post, machine, options.Time, OnLocalPath);
         var daemon = new DaemonEnabler(
             cli, options.RunMutation,
             // Gated on a committed sign-in or local install and resolved fresh per call, never the startup-cached profile.
@@ -349,7 +361,8 @@ internal static class WizardComposition {
                 local,
                 local ? LocalEndpoints.Read(root).Active?.ServerUrl : null,
                 daemon.Busy,
-                options.Surface.AttentionText ?? options.Surface.StatusText);
+                options.Surface.AttentionText ?? options.Surface.StatusText,
+                harnesses.PathResolved);
         }, options.UrlOpener, PrepareWorkspaceAsync, serviceChanged,
             // The same page Help and support → Set up kcap leads through to connect an agent.
             addAgent: () => shell?.TryGoTo(WizardStepId.Harnesses));
@@ -364,8 +377,10 @@ internal static class WizardComposition {
         var startAt = options.ResumeWebSignUp && !signedInAtStart && !OnLocalPath() && !Installed()
             ? WizardStepId.SignIn
             : (WizardStepId?)null;
+        if (startAt == WizardStepId.SignIn) SettleUsageData(local: false);
         var wizard = shell = new OnboardingViewModel(
-            steps, options.ShutdownToken, options.Surface, startAt, canFinishLater, durable.Select(_ => Unit.Default));
+            steps, options.ShutdownToken, options.Surface, startAt, canFinishLater,
+            preflight: new HarnessPreflight(detect), restate: durable.Select(_ => Unit.Default));
         signIn.SignUpExpired += () => {
             edition.ShowNotice(SignInStepViewModel.SignUpExpiredNotice);
             wizard.TryGoTo(WizardStepId.Edition);
@@ -425,10 +440,28 @@ internal static class WizardComposition {
         return name == configured ? null : name;
     }
 
-    /// The machine's own name as a person would say it: no ".local", lower case.
-    internal static string MachineLabel(string machineName) {
-        var name = machineName.EndsWith(".local", StringComparison.OrdinalIgnoreCase) ? machineName[..^6] : machineName;
+    internal const string UnnamedMachine = "this machine";
 
-        return name.ToLowerInvariant();
+    /// The machine's own name as a person would say it: no ".local", lower case. Windows reports its
+    /// NetBIOS name, cut to 15 characters, so the host name it was cut from wins. A generated name of
+    /// hex digits and dashes, as a sandbox or a container gets, reads like an error code in a sentence.
+    internal static string MachineLabel(string machineName, string? hostName = null) {
+        var label = hostName?.Split('.')[0] is { } host && host.Length > machineName.Length
+            && host.StartsWith(machineName, StringComparison.OrdinalIgnoreCase) ? host : machineName;
+        if (label.EndsWith(".local", StringComparison.OrdinalIgnoreCase)) label = label[..^6];
+        label = label.ToLowerInvariant();
+
+        return label.Length == 0 || LooksGenerated(label) ? UnnamedMachine : label;
+    }
+
+    static bool LooksGenerated(string label) =>
+        label.Length >= 8 && label.Any(char.IsAsciiDigit) && label.All(c => char.IsAsciiHexDigitLower(c) || c == '-');
+
+    static string? HostName() {
+        try {
+            return System.Net.Dns.GetHostName();
+        } catch (System.Net.Sockets.SocketException) {
+            return null;
+        }
     }
 }

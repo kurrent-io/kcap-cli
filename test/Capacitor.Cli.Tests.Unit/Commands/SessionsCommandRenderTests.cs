@@ -40,12 +40,11 @@ public class SessionsCommandRenderTests {
         await Assert.That(text).DoesNotContain("STARTED");
         await Assert.That(text).DoesNotContain("REPO");
 
-        var lines     = text.Split('\n');
-        var branchCol = lines[0].IndexOf("BRANCH", StringComparison.Ordinal);
-        var s2Line    = lines.Single(l => l.Contains("s-2"));
+        var lines  = text.Split('\n');
+        var s2Line = lines.Single(l => l.Contains("s-2"));
 
         await Assert.That(s2Line).DoesNotContain("main");
-        await Assert.That(s2Line.Substring(branchCol, 24).Trim()).IsEmpty();
+        await Assert.That(Cell(lines[0], s2Line, "BRANCH")).IsEmpty();
     }
 
     [Test]
@@ -128,13 +127,59 @@ public class SessionsCommandRenderTests {
 
         var text = SessionsCommand.Render(page, "any repository", Options("all", "all", allRepos: true));
 
-        var lines   = text.Split('\n');
-        var repoCol = lines[0].IndexOf("REPO", StringComparison.Ordinal);
+        var lines = text.Split('\n');
 
-        await Assert.That(repoCol).IsGreaterThan(0);
-        await Assert.That(lines.Single(l => l.Contains("s-1")).Substring(repoCol, 24).Trim()).IsEqualTo("acme/widgets");
-        await Assert.That(lines.Single(l => l.Contains("s-2")).Substring(repoCol, 24).Trim()).IsEqualTo("0badf00d12345678");
-        await Assert.That(lines.Single(l => l.Contains("s-3")).Substring(repoCol, 24).Trim()).IsEmpty();
+        await Assert.That(lines[0].IndexOf("REPO", StringComparison.Ordinal)).IsGreaterThan(0);
+        await Assert.That(Cell(lines[0], lines.Single(l => l.Contains("s-1")), "REPO")).IsEqualTo("acme/widgets");
+        await Assert.That(Cell(lines[0], lines.Single(l => l.Contains("s-2")), "REPO")).IsEqualTo("0badf00d12345678");
+        await Assert.That(Cell(lines[0], lines.Single(l => l.Contains("s-3")), "REPO")).IsEmpty();
+    }
+
+    /// <summary>The text under <paramref name="column"/>, up to where the next header starts.</summary>
+    static string Cell(string header, string line, string column) {
+        var start = header.IndexOf(column, StringComparison.Ordinal);
+        var end   = header.IndexOf(' ', start + column.Length);
+
+        while (end >= 0 && end < header.Length && header[end] == ' ') end++;
+
+        return line[start..Math.Min(end < 0 ? line.Length : end, line.Length)].Trim();
+    }
+
+    [Test]
+    public async Task A_cut_cell_ends_in_an_ellipsis_the_output_can_carry() {
+        var page = new RepoSessionsResponse([Row("s-1", "ended", "full", "capacitor/agent-c88662f0c1d2e3f4a5b6")], 1, 20, 0);
+
+        var unicode = SessionsCommand.Render(page, "acme/widgets", Options("all"));
+        var plain   = SessionsCommand.Render(page, "acme/widgets", Options("all"), encodable: false);
+
+        await Assert.That(unicode).Contains("capacitor/agent-c88662f…");
+        await Assert.That(plain).Contains("capacitor/agent-c8866...");
+        await Assert.That(plain).DoesNotContain("…");
+    }
+
+    [Test]
+    [Arguments(false, false)]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    public async Task No_row_is_wider_than_a_120_column_terminal(bool allRepos, bool windowed) {
+        var row = Row("8c1f6e2a9b3d4c5e8f7a6b5c4d3e2f1a", "ended", "overview", "capacitor/agent-c88662f0c1d2e3f4",
+            repo: new(Hash, "acme-testbench", "billing-service")) with {
+            Title = "Investigate why the nightly billing export drops rows for accounts migrated last quarter"
+        };
+        var page = new RepoSessionsResponse([row], 1, 20, 0, windowed ? Since : null);
+
+        var text = SessionsCommand.Render(
+            page, "acme/widgets", Options("all", allRepos ? "all" : null, allRepos, windowed ? Since : null), width: 120);
+
+        foreach (var line in text.Split('\n')) await Assert.That(line.TrimEnd('\r').Length).IsLessThan(120);
+    }
+
+    [Test]
+    public async Task Redirected_output_keeps_the_whole_title() {
+        var title = new string('t', 200);
+        var page  = new RepoSessionsResponse([Row("s-1", "ended", "full", "main") with { Title = title }], 1, 20, 0);
+
+        await Assert.That(SessionsCommand.Render(page, "acme/widgets", Options("all"))).Contains(title);
     }
 
     [Test]

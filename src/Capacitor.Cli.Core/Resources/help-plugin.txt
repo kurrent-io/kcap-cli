@@ -80,6 +80,8 @@ Options:
                       ~/.codex/config.toml) so kcap skills work. The
                       --if-installed refresh path never touches this, so the npm
                       postinstall hook leaves config.toml alone.
+                      `remove --codex` puts back each key kcap changed that
+                      still holds kcap's value, and names any it keeps and why.
   --skip-cursor-skills
                       With --cursor: skip installing the kcap skills into
                       ~/.agents/skills.
@@ -215,6 +217,15 @@ Notes:
   ~/.gemini/skills, and the bare (Claude) install uses the plugin bundle.
   The --if-installed refresh only tops up skills you already have: `plugin remove
   --skills` stays removed until you install a vendor again explicitly.
+
+  ~/.agents/skills/.kcap-consumers.json records which integrations use the shared
+  skills. Every agent reading that folder loads all of it, so no vendor can turn
+  them off for itself alone: `remove --<vendor>` or `install --<vendor>
+  --skip-<vendor>-skills` drops that vendor, and the skills stay, naming who still
+  uses them, until the last one goes. Only skills kcap installed are deleted then:
+  a kcap-* folder you edited is kept and named. --skip-kiro-skills and
+  --skip-antigravity-skills take kcap's skills back out of those vendors' own
+  folders. `remove --skills` removes the shared skills whoever still uses them.
 
   --codex also writes hooks to ~/.codex/hooks.json (or <repo>/.codex/hooks.json
   with --project). Codex runs only hooks you have trusted: the next `codex`

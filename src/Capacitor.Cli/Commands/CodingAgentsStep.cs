@@ -1,4 +1,6 @@
+using System.Collections.Frozen;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Antigravity;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Kiro;
@@ -104,7 +106,9 @@ internal static class CodingAgentsStep {
             Func<TomlConfigFile.Outcome>?                           RegisterVibeMcp = null,
             Func<string /*hooksJsonPath*/, bool>?                    InstallGrokHooks = null,
             Func<string /*settingsPath*/, bool>?                     InstallMuseHooks = null,
-            Func<JsonMcpConfigWriter.Change>?                        RegisterMuseMcp = null
+            Func<JsonMcpConfigWriter.Change>?                        RegisterMuseMcp = null,
+            Func<string /*skillsDir*/, IReadOnlySet<string>>?        ReadAgentSkillsConsumers = null,
+            Action<string /*skillsDir*/, IEnumerable<string>>?       WriteAgentSkillsConsumers = null
         );
 
     internal record Result(
@@ -289,7 +293,7 @@ internal static class CodingAgentsStep {
         // for a Codex the user turned down.
         var skillsAudience = SkillsAudience(options, detected);
 
-        var agentSkillsInstalled  = HandleAgentSkills(skillsAudience, paths, installers, writeLine);
+        var agentSkillsInstalled  = HandleAgentSkills(skillsAudience, detected, paths, installers, writeLine);
 
         return Task.FromResult(
             new Result(
@@ -361,7 +365,7 @@ internal static class CodingAgentsStep {
         // same precheck as the Cursor/Copilot branches. No kcap → neither hooks nor MCP.
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Kiro integration skipped — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
+            writeLine("    [dim]" + Markup.Escape(InstallProvenance.NotOnPathHint()) + "[/]");
 
             return false;
         }
@@ -570,7 +574,7 @@ internal static class CodingAgentsStep {
         // on Copilot finding it on PATH — same precheck as the Cursor branch.
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Copilot hooks not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
+            writeLine("    [dim]" + Markup.Escape(InstallProvenance.NotOnPathHint()) + "[/]");
 
             return false;
         }
@@ -635,7 +639,7 @@ internal static class CodingAgentsStep {
         // on Gemini finding it on PATH — same precheck as the Cursor/Copilot branch.
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Gemini hooks not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
+            writeLine("    [dim]" + Markup.Escape(InstallProvenance.NotOnPathHint()) + "[/]");
 
             return false;
         }
@@ -698,7 +702,7 @@ internal static class CodingAgentsStep {
         // hooks.toml writes the bare "kcap hook --mistral-vibe" command and relies on Vibe finding it on PATH.
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Vibe hooks not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
+            writeLine("    [dim]" + Markup.Escape(InstallProvenance.NotOnPathHint()) + "[/]");
 
             return false;
         }
@@ -750,7 +754,7 @@ internal static class CodingAgentsStep {
         // The hook file names the bare "kcap hook --grok" command, so Grok must find kcap on PATH.
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Grok hooks not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
+            writeLine("    [dim]" + Markup.Escape(InstallProvenance.NotOnPathHint()) + "[/]");
 
             return false;
         }
@@ -821,7 +825,7 @@ internal static class CodingAgentsStep {
         // settings.json writes the bare "kcap hook --muse" command and relies on Muse finding it on PATH.
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Muse hooks not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
+            writeLine("    [dim]" + Markup.Escape(InstallProvenance.NotOnPathHint()) + "[/]");
 
             return false;
         }
@@ -915,7 +919,7 @@ internal static class CodingAgentsStep {
         // Cursor/Copilot branches).
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Pi extension not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
+            writeLine("    [dim]" + Markup.Escape(InstallProvenance.NotOnPathHint()) + "[/]");
 
             return false;
         }
@@ -1041,7 +1045,7 @@ internal static class CodingAgentsStep {
         // precheck as the Pi/Cursor/Copilot branches).
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] OpenCode plugin not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
+            writeLine("    [dim]" + Markup.Escape(InstallProvenance.NotOnPathHint()) + "[/]");
 
             return false;
         }
@@ -1107,7 +1111,7 @@ internal static class CodingAgentsStep {
         // Antigravity must find kcap on PATH (same precheck as the OpenCode/Pi branches).
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Antigravity hooks not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
+            writeLine("    [dim]" + Markup.Escape(InstallProvenance.NotOnPathHint()) + "[/]");
 
             return false;
         }
@@ -1247,68 +1251,88 @@ internal static class CodingAgentsStep {
     }
 
     /// <summary>
-    /// installs the agent-agnostic kcap skills to <c>~/.agents/skills/</c>,
-    /// decoupled from Codex. Every non-Claude coding agent reads (or may read) the
-    /// cross-agent skills tree, so install once when any is detected — independent of
-    /// whether that agent's hooks were installed. Claude is excluded: it gets skills
-    /// through the bundled plugin, not this directory. Idempotent: skips the copy when the
-    /// on-disk skills already match this build. The legacy
-    /// <c>~/.codex/skills</c> sweep stays Codex-specific.
-    /// </summary>
-    /// <summary>
     /// Which detected vendors count as an audience for the shared <c>~/.agents/skills</c> tree.
     ///
     /// <para>The whole set on the terminal path, where one prompt consented to skills for everything
-    /// detected. On the browser path — <see cref="Options.ToolsIndependentOfCapture"/> — a vendor the
-    /// user turned down entirely drops out: the screen asked per vendor, so writing a tree only a
-    /// declined agent reads is a write nobody asked for. A vendor kept for its tools alone stays in,
-    /// since the skills are what steer it toward them.</para>
+    /// detected. On the browser path — <see cref="Options.ToolsIndependentOfCapture"/> — a vendor
+    /// whose tools were turned off drops out, whether or not it records: the skills are tools, and
+    /// <c>kcap plugin install</c> skips them for the same answer.</para>
     /// </summary>
     static DetectedAgents SkillsAudience(Options options, DetectedAgents detected) {
         if (!options.ToolsIndependentOfCapture) return detected;
 
-        static bool Wanted(bool isDetected, bool skipHooks, bool skipMcp) => isDetected && !(skipHooks && skipMcp);
-
         return detected with {
-            Codex    = Wanted(detected.Codex, options.SkipCodex, options.SkipCodex),
-            Cursor   = Wanted(detected.Cursor, options.SkipCursor, options.SkipCursorMcp),
-            Copilot  = Wanted(detected.Copilot, options.SkipCopilot, options.SkipCopilotMcp),
-            Gemini   = Wanted(detected.Gemini, options.SkipGemini, options.SkipGeminiMcp),
-            Pi       = Wanted(detected.Pi, options.SkipPi, options.SkipPiMcp),
-            OpenCode = Wanted(detected.OpenCode, options.SkipOpenCode, options.SkipOpenCodeMcp),
-            Vibe     = Wanted(detected.Vibe, options.SkipMistralVibe, options.SkipMistralVibeMcp),
-            Grok     = Wanted(detected.Grok, options.SkipGrok, options.SkipGrok),
-            Muse     = Wanted(detected.Muse, options.SkipMuse, options.SkipMuseMcp)
+            Codex    = detected.Codex && !options.SkipCodex,
+            Cursor   = detected.Cursor && !options.SkipCursorMcp,
+            Copilot  = detected.Copilot && !options.SkipCopilotMcp,
+            Gemini   = detected.Gemini && !options.SkipGeminiMcp,
+            Pi       = detected.Pi && !options.SkipPiMcp,
+            OpenCode = detected.OpenCode && !options.SkipOpenCodeMcp,
+            Vibe     = detected.Vibe && !options.SkipMistralVibeMcp,
+            Grok     = detected.Grok && !options.SkipGrok,
+            Muse     = detected.Muse && !options.SkipMuseMcp
         };
     }
 
+    /// <summary>The detected vendors that read <c>~/.agents/skills</c>. Kiro and Antigravity read
+    /// their own trees, and Claude gets its skills from the plugin.</summary>
+    static IEnumerable<HarnessId> SharedSkillsReaders(DetectedAgents d) {
+        if (d.Codex) yield return HarnessId.Codex;
+        if (d.Cursor) yield return HarnessId.Cursor;
+        if (d.Copilot) yield return HarnessId.Copilot;
+        if (d.Gemini) yield return HarnessId.Gemini;
+        if (d.Pi) yield return HarnessId.Pi;
+        if (d.OpenCode) yield return HarnessId.OpenCode;
+        if (d.Vibe) yield return HarnessId.MistralVibe;
+        if (d.Grok) yield return HarnessId.Grok;
+        if (d.Muse) yield return HarnessId.Muse;
+    }
+
+    /// <summary>
+    /// Installs the shared kcap skills once for every vendor in <paramref name="audience"/>, and records
+    /// those vendors as the tree's consumers. Idempotent: current skills are not copied again.
+    /// </summary>
     static bool HandleAgentSkills(
+            DetectedAgents     audience,
             DetectedAgents     detected,
             Paths              paths,
             Installers         installers,
             Action<string>     writeLine
         ) {
-        // Antigravity AND Kiro are intentionally EXCLUDED here: they read their own skills dirs
-        // (~/.gemini/skills via HandleAntigravitySkills, ~/.kiro/skills via HandleKiroSkills), NOT the
-        // agent-agnostic ~/.agents/skills — so their presence alone must not trigger a ~/.agents/skills
-        // install they can't see.
-        var anyNonClaudeDetected =
-            detected.Codex || detected.Cursor || detected.Copilot || detected.Gemini
-         || detected.Pi    || detected.OpenCode || detected.Vibe || detected.Grok || detected.Muse;
+        var readers = SharedSkillsReaders(audience).ToList();
 
-        // Nothing that reads ~/.agents/skills/ is present (Claude-only or nothing) — the
-        // Claude plugin install handles Claude's skills, so there's nothing to do here.
-        if (!anyNonClaudeDetected) return false;
+        if (readers.Count == 0) return false;
 
-        // Idempotent: a marker matching this build means the on-disk skills are already
-        // current — no re-copy (mirrors PluginCommand's npm-postinstall fast path).
+        var consumersBefore = installers.ReadAgentSkillsConsumers?.Invoke(paths.AgentsSkillsDir);
+        var installed       = PlaceSharedSkills(audience, paths, installers, writeLine);
+
+        if (installed is null) return false;
+
+        installers.WriteAgentSkillsConsumers?.Invoke(
+            paths.AgentsSkillsDir, (consumersBefore ?? FrozenSet<string>.Empty).Concat(readers.Select(r => r.VendorId)));
+
+        // Every reader discovers the whole folder, so one left out still sees what the others asked for.
+        var leftOut = SharedSkillsReaders(detected).Except(readers).ToList();
+        if (leftOut.Count > 0)
+            writeLine($"    [dim]{Markup.Escape(string.Join(", ", leftOut.Select(HarnessRegistry.LabelOf)))} "
+                    + $"{(leftOut.Count == 1 ? "reads" : "read")} the same shared folder, so the kcap skills stay visible there too.[/]");
+
+        return installed.Value;
+    }
+
+    /// <summary>True when this run copied the skills, false when they were already current, null when
+    /// they could not be put in place.</summary>
+    static bool? PlaceSharedSkills(
+            DetectedAgents     detected,
+            Paths              paths,
+            Installers         installers,
+            Action<string>     writeLine
+        ) {
         // Checked before the plugin-dir probe: current skills need no source.
         if (installers.AgentSkillsCurrent?.Invoke(paths.AgentsSkillsDir) == true) {
             writeLine("  [dim]· Agent skills already up to date — no change needed[/]");
 
-            // The shared skills are in place, so still sweep any stale legacy
-            // ~/.codex/skills (Codex-only) — a Cursor-first install could have made the
-            // marker current without ever running this Codex-specific cleanup.
+            // A Cursor-first install can make the marker current without ever running this sweep.
             SweepLegacyCodexSkills(detected, paths, installers);
 
             return false;
@@ -1317,7 +1341,7 @@ internal static class CodingAgentsStep {
         if (paths.PluginDir is null) {
             writeLine("  [yellow]⚠[/] Agent skills could not be installed (plugin directory not found).");
 
-            return false;
+            return null;
         }
 
         var src = Path.Combine(paths.PluginDir, "skills");
@@ -1326,12 +1350,10 @@ internal static class CodingAgentsStep {
         if (!ok) {
             writeLine($"  [yellow]⚠[/] Agent skills could not be copied to {Markup.Escape(paths.AgentsSkillsDir)}");
 
-            return false;
+            return null;
         }
 
         writeLine($"  [green]✓[/] Agent skills installed (user: {Markup.Escape(paths.AgentsSkillsDir)})");
-        // Derived from the installer's own list — a hand-maintained copy here had already
-        // drifted (missing review-flows' prefix) by the time guided-tour was added.
         writeLine($"    [dim]{string.Join(", ", AgentsSkillsInstaller.SourceNames.Select(n => "kcap-" + n))}[/]");
 
         SweepLegacyCodexSkills(detected, paths, installers);
@@ -1511,7 +1533,7 @@ internal static class CodingAgentsStep {
         // instead. Mirror of PluginCommand.InstallCursor's precheck.
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Cursor hooks not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
+            writeLine("    [dim]" + Markup.Escape(InstallProvenance.NotOnPathHint()) + "[/]");
 
             return false;
         }
@@ -1803,8 +1825,8 @@ internal static class CodingAgentsStep {
         }
 
         if (paths.PluginDir is null) {
-            writeLine("  [yellow]⚠[/] Plugin directory not found. Re-install kcap:");
-            writeLine("    [cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
+            writeLine("  [yellow]⚠[/] Plugin directory not found.");
+            writeLine("    [dim]" + Markup.Escape(InstallProvenance.ReinstallHint()) + "[/]");
 
             return false;
         }

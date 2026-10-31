@@ -140,6 +140,25 @@ public sealed class HarnessRegistry : IReadOnlyList<IHarness>, IHarnessDetection
     public string? ResolveExecutable(HarnessId id) =>
         ById(id) is { } harness ? _binaries.Resolve(harness.CliBinary) : null;
 
+    /// <summary><see cref="ResolveExecutable"/>, else the CLI the vendor's desktop app bundles. For a
+    /// caller about to spawn the CLI; one comparing search paths keeps to the PATH-only answer.</summary>
+    public string? ResolveLaunchable(HarnessId id) =>
+        ResolveExecutable(id) ?? ById(id)?.Signals.FindBundledCli(_apps);
+
+    /// <summary>
+    /// What to spawn for a configured <paramref name="command"/>: the command itself, unless it is the
+    /// vendor's bare default name and that is not on the search path, when the desktop app's bundled
+    /// CLI stands in. A path the operator configured is never second-guessed. Asked per launch, since
+    /// a bundled CLI's path can change with each app update.
+    /// </summary>
+    public string LaunchCommand(HarnessId id, string command) =>
+        ById(id) is { } harness
+     && string.Equals(command, harness.CliBinary, StringComparison.Ordinal)
+     && !_binaries.Finds(command)
+     && harness.Signals.FindBundledCli(_apps) is { } bundled
+            ? bundled
+            : command;
+
     public int      Count           => _harnesses.Count;
     public IHarness this[int index] => _harnesses[index];
 

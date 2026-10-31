@@ -7,8 +7,11 @@ namespace Capacitor.App.ViewModels;
 public static class SessionFactText {
     public const string Unknown = "—";
 
+    /// "12.3k in · 4.5k out": cache reads and writes are left out, they dwarf the real traffic.
     public static string Tokens(SessionStatsDto? stats) =>
-        stats is { TokenUsageByModel.Count: > 0 } ? Count(stats.TokenUsageByModel.Sum(t => t.Total)) : Unknown;
+        stats is { TokenUsageByModel: { Count: > 0 } usage }
+            ? $"{Count(usage.Sum(t => t.InputTokens))} in · {Count(usage.Sum(t => t.OutputTokens))} out"
+            : Unknown;
 
     public static string Cost(SessionStatsDto? stats) =>
         stats?.EstimatedCostUsd is { } usd ? "≈ $" + usd.ToString("0.00", CultureInfo.InvariantCulture) : Unknown;

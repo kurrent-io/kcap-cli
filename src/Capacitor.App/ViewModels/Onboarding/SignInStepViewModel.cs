@@ -182,7 +182,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
 
     public string? Lede => Phase switch {
         SignInPhase.SignUp =>
-            "Create your workspace on the kcap.ai page that just opened. When it says your workspace is ready, " +
+            "Create your workspace on the sign-up page opening in your browser. When it says your workspace is ready, " +
             "continue here and setup carries on.",
         SignInPhase.Start or SignInPhase.Waiting =>
             "Use your work account. It finds the kcap workspaces you belong to.",
@@ -356,7 +356,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
         }
     }
 
-    // A relaunch while the workspace is being created on kcap.ai opens on sign-in rather than on the edition choice.
+    // A relaunch while the workspace is being created in the browser opens on sign-in rather than on the edition choice.
     void RememberWebSignUp(DateTimeOffset? openedAt) {
         _ = PersistAsync();
 
@@ -539,16 +539,16 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
         }
     }
 
-    internal const string WorkspaceNotCreated = "kcap.ai couldn't finish creating your workspace";
+    internal const string WorkspaceNotCreated = "kcap couldn't finish creating your workspace";
 
     internal static string WorkspaceNotCreatedDetail(string workspace) =>
-        $"{workspace} didn't finish setting up. Its page on kcap.ai says what happened";
+        $"{workspace} didn't finish setting up. The sign-up page in your browser says what happened";
 
     internal const string WorkspaceStillSettingUpDetail =
-        "It's taking longer than usual. Sign in again in a few minutes, once kcap.ai says it's ready";
+        "It's taking longer than usual. Sign in again in a few minutes, once the sign-up page says it's ready";
 
     internal static string WorkspaceSettingUpDetail(string workspace) =>
-        $"{workspace} is still being created on kcap.ai. It usually takes a few minutes, and sign-in carries on by itself once it's ready";
+        $"{workspace} is still being created. It usually takes a few minutes, and sign-in carries on by itself once it's ready";
 
     static string CommittedStatus(AuthResult.Committed committed) =>
         committed.Provider == AuthProvider.None

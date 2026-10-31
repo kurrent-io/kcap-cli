@@ -8,7 +8,7 @@ namespace Capacitor.App.Services;
 /// before <see cref="DaemonInfoDto.Profile"/> existed, which an installed service can still be running,
 /// reports no profile and is judged on its name and server alone.
 internal static class AttachedIdentity {
-    /// What differs, as one sentence, or null when nothing the app can see does.
+    /// What differs, a headline and then the detail, or null when nothing the app can see does.
     public static string? Mismatch(DaemonInfoDto daemon, string expectedName, string? expectedServer, string? expectedProfile) {
         var actual   = new List<string>();
         var expected = new List<string>();
@@ -26,7 +26,8 @@ internal static class AttachedIdentity {
             actual.Add($"name {daemon.Name}");
             expected.Add($"name {expectedName}");
         }
-        return actual.Count == 0 ? null : $"Daemon {expectedName} is running for {string.Join(", ", actual)}, not {string.Join(", ", expected)}.";
+        return actual.Count == 0 ? null
+            : $"Daemon {expectedName} doesn't match this app. It's running for {string.Join(", ", actual)}, not {string.Join(", ", expected)}.";
     }
 
     /// Two servers named so a reader can tell them apart: by host, or in full when only the scheme, port or
@@ -46,6 +47,7 @@ internal static class AttachedIdentity {
 
     /// The fix when the app cannot offer one: the unit captures the invoking environment, so a server
     /// override inherited from the shell would be baked into the replacement and outrank the profile again.
+    /// The commands come last, in backticks, so a notice can lift them out as copyable code.
     /// The install keeps the configured name, which the daemon reports, unless it would read as a flag; the
     /// uninstall targets the service id. On Windows the quoting is PowerShell's, which cmd.exe does not share.
     internal static string ManualRepair(string daemonName, string? profile, bool windows, bool verifiedReplace) {
@@ -54,9 +56,10 @@ internal static class AttachedIdentity {
         var target    = $"--name {name} --profile {(profile is null ? "<profile>" : Quote(profile, windows))}";
         var commands  = verifiedReplace
             ? $"`kcap daemon service install --replace --verify {target}`"
-            : $"`kcap daemon service uninstall --name {serviceId}`, then `kcap daemon service install {target}`";
-        var placeholder = profile is null ? ", with <profile> replaced by a profile for the server this app uses," : "";
-        return $"To fix it, run {commands}{placeholder} in {(windows ? "PowerShell" : "a shell")} where KCAP_URL is unset, then restart the app.";
+            : $"`kcap daemon service uninstall --name {serviceId}` `kcap daemon service install {target}`";
+        var placeholder = profile is null ? "Replace <profile> with a profile for this app's server. " : "";
+        var these       = verifiedReplace ? "this" : "these";
+        return $"{placeholder}Run {these} in {(windows ? "PowerShell" : "a shell")} without KCAP_URL set, then restart kcap: {commands}";
     }
 
     // Quoted only when the value needs it.

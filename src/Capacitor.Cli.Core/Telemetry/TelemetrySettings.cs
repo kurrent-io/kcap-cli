@@ -9,12 +9,17 @@ public readonly record struct TelemetryDecision(bool Enabled, string Reason);
 /// table is testable without mutating the real process environment.
 ///
 /// Precedence, highest first: KCAP_TELEMETRY (explicit, either direction) > DO_NOT_TRACK >
-/// persisted config > enabled. KCAP_TELEMETRY deliberately outranks DO_NOT_TRACK in both
-/// directions: it is the kcap-specific, deliberate statement, and the only way a user with a
-/// blanket DO_NOT_TRACK in their shell profile can opt back in.
+/// persisted config > what the edition makes of no choice (<see cref="UnsavedConsent"/>). KCAP_TELEMETRY
+/// deliberately outranks DO_NOT_TRACK in both directions: it is the kcap-specific, deliberate statement,
+/// and the only way a user with a blanket DO_NOT_TRACK in their shell profile can opt back in.
 /// </summary>
 public static class TelemetrySettings {
-    public static TelemetryDecision Resolve(IReadOnlyDictionary<string, string?> env, bool? persisted) {
+    public const string DefaultReason   = "default";
+    public const string LocalReason     = "local edition";
+    public const string NotChosenReason = "not chosen";
+
+    public static TelemetryDecision Resolve(
+            IReadOnlyDictionary<string, string?> env, bool? persisted, UnsavedConsent unsaved = UnsavedConsent.Share) {
         if (TryReadBool(env, "KCAP_TELEMETRY", out var explicitChoice))
             return new TelemetryDecision(explicitChoice, "KCAP_TELEMETRY");
 
@@ -22,12 +27,16 @@ public static class TelemetrySettings {
 
         if (persisted is { } stored) return new TelemetryDecision(stored, "config");
 
-        return new TelemetryDecision(true, "default");
+        return unsaved switch {
+            UnsavedConsent.Share    => new TelemetryDecision(true, DefaultReason),
+            UnsavedConsent.Withhold => new TelemetryDecision(false, LocalReason),
+            _                       => new TelemetryDecision(false, NotChosenReason),
+        };
     }
 
     /// <summary>Live resolution against the real environment and the persisted flag.</summary>
-    public static TelemetryDecision Resolve(bool? persisted) =>
-        Resolve(ReadEnv(), persisted);
+    public static TelemetryDecision Resolve(bool? persisted, UnsavedConsent unsaved = UnsavedConsent.Share) =>
+        Resolve(ReadEnv(), persisted, unsaved);
 
     static IReadOnlyDictionary<string, string?> ReadEnv() =>
         new Dictionary<string, string?> {

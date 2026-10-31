@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Capacitor.Models.Transcripts.Harness.Codex;
 
 namespace Capacitor.App.ViewModels;
 
@@ -18,6 +19,7 @@ public static class ToolDetail {
         "description", "command", "cmd", "file_path", "path", "notebook_path", "pattern", "query", "url", "skill", "prompt", "input",
     ];
     static readonly string[] PathKeys = ["file_path", "path", "notebook_path"];
+    static readonly string[] PatchTextKeys = ["input", "command"];
 
     public static string From(string? inputJson, string? root = null, ToolCategory category = ToolCategory.Other) {
         if (string.IsNullOrEmpty(inputJson)) return "";
@@ -32,6 +34,8 @@ public static class ToolDetail {
             }
             if (category == ToolCategory.Question && doc.RootElement.Str("prompt") is { } prompt && prompt.Trim().Length > 0)
                 return TextElision.End(FirstLine(prompt), MaxQuestionLength);
+            if (PatchTargets(doc.RootElement, category) is { } targets)
+                return PatchDetail(targets, root);
             foreach (var key in Keys) {
                 if (category == ToolCategory.Question && key == "prompt") continue;
                 if (doc.RootElement.Str(key) is { } s && s.Trim().Length > 0)
@@ -39,6 +43,42 @@ public static class ToolDetail {
             }
         } catch (JsonException) { }
         return "";
+    }
+
+    /// The files a patch call names; null when the input is not a patch, empty when it is one whose
+    /// targets cannot be read. A Codex patch rides as <c>input</c> in its rollout and as
+    /// <c>command</c> in its hook; a daemon's live edit lists <c>changes[].path</c>.
+    public static IReadOnlyList<string>? PatchTargets(string? inputJson, ToolCategory category) {
+        if (string.IsNullOrEmpty(inputJson)) return null;
+        try {
+            using var doc = JsonDocument.Parse(inputJson);
+            return doc.RootElement.IsObject ? PatchTargets(doc.RootElement, category) : null;
+        } catch (JsonException) {
+            return null;
+        }
+    }
+
+    static IReadOnlyList<string>? PatchTargets(JsonElement input, ToolCategory category) {
+        foreach (var key in PatchTextKeys)
+            if (CodexPatch.Targets(input.Str(key)) is { } targets) return targets;
+        if (category != ToolCategory.Edit || input.Arr("changes") is not { } changes) return null;
+        var paths = new List<string>();
+        foreach (var change in changes.EnumerateArray()) {
+            var path = change.Str("path")?.Trim();
+            if (!string.IsNullOrEmpty(path) && !paths.Contains(path)) paths.Add(path);
+        }
+        return paths;
+    }
+
+    /// One file reads as its path; several as a list while it fits, then the first and a count.
+    static string PatchDetail(IReadOnlyList<string> targets, string? root) {
+        if (targets.Count == 0) return "";
+        var paths = targets.Select(t => Relative(t, root)).ToList();
+        if (paths.Count == 1) return TextElision.Middle(paths[0], MaxLength);
+        var list = string.Join(", ", paths);
+        if (list.Length <= MaxLength) return list;
+        var more = $" +{paths.Count - 1} more";
+        return TextElision.Middle(paths[0], MaxLength - more.Length) + more;
     }
 
     /// The one argument a catalogued kcap row shows, first line only, elided like any detail.

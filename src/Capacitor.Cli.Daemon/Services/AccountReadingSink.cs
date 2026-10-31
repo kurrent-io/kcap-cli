@@ -43,8 +43,8 @@ internal sealed partial class AccountReadingSink : IDisposable {
         await foreach (var (account, observation) in _queue.Reader.ReadAllAsync().ConfigureAwait(false)) {
             bool recorded;
             try {
-                recorded = store.Readings.TryRecord(account.AccountId!, account.Generation, null,
-                    f => f with { Reading = ReadingMerge.Apply(f.Reading, observation) });
+                recorded = store.Readings.TryRecord(account.AccountId!, (f, entry) =>
+                    observation.ProducedAt < entry.ObservationsFrom ? null : f with { Reading = ReadingMerge.Apply(f.Reading, observation) });
             } catch (Exception ex) {
                 recorded = false;
                 LogRecordFailed(_logger, account.AccountId!, ex);
@@ -55,7 +55,7 @@ internal sealed partial class AccountReadingSink : IDisposable {
         }
     }
 
-    // A retired generation or a contended lock skips by design; the warning only says it is happening.
+    // An observation from before the current login or a contended lock skips by design; the warning only says it is happening.
     void WarnSkipped(string accountId) {
         if (_lastWarnedAt is { } last && _time.GetElapsedTime(last) < WarnInterval) return;
 

@@ -51,7 +51,7 @@
                        Foreground="{StaticResource KcapMutedBrush}" />
 
             <StackPanel x:Name="DestinationPanel" IsVisible="False" Margin="0,18,0,0" Spacing="8">
-                <TextBlock Text="Install location" Foreground="{StaticResource KcapTextBrush}" />
+                <TextBlock x:Name="DestinationLabel" Text="Install location" Foreground="{StaticResource KcapTextBrush}" />
                 <ComboBox x:Name="DestinationPicker" Classes="kcapField" HorizontalAlignment="Stretch"
                           FontSize="12"
                           PlaceholderText="Select a destination…" />

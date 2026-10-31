@@ -190,7 +190,9 @@ var baseUrl  = profiles.Resolution.ServerUrl;
 // An app-spawned CLI child must not emit CLI-labeled telemetry nor consume the one-time privacy
 // notice on an invisible stderr. Consume-and-REMOVE before anything can spawn, so no grandchild
 // (detached daemon, hosted agents) observes the marker.
-var telemetryStartup = TelemetryStartup.FromEnvironment(command, baseUrl, endpoints.SignupUrl);
+var telemetryStartup = TelemetryStartup.FromEnvironment(command, baseUrl, endpoints.SignupUrl) with {
+    Unsaved = CommandUsageData.For(command, args, config, localRoot, Capacitor.Cli.LocalEdition.LocalPlatform.Current().SupportsLocalEdition),
+};
 
 // Composition root. Every context resolved above is registered once here; the dispatch switch below
 // asks for a command rather than handing each one its arguments.
@@ -829,7 +831,9 @@ switch (command) {
         // The detached import already opened its log, redirected output and detached at startup
         // (before this potentially slow resolution) so a parent exit can't truncate it.
         try {
-            return await Run<ImportCommand>().HandleImport(
+            ImportCommand.ImportRunOutcome? outcome = null;
+
+            var exit = await Run<ImportCommand>().HandleImport(
                 filterCwd,
                 filterSession,
                 minLines,
@@ -847,7 +851,11 @@ switch (command) {
                 reimport:                reimport,
                 skipTitle:               skipTitle,
                 discoverOnly:            discoverOnly,
-                discoverJson:            discoverJson);
+                discoverJson:            discoverJson,
+                onFinished:              o => outcome = o,
+                skip:                    resolveResult.Skip);
+
+            return exit != 0 ? exit : outcome?.ExitCode ?? 0;
         } finally {
             detachedImportLog?.Dispose();
         }

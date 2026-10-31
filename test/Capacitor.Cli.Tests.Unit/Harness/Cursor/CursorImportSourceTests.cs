@@ -277,6 +277,34 @@ public class CursorImportSourceTests {
     }
 
     [Test]
+    public async Task classify_marks_deleted_when_the_server_answers_410() {
+        using var fx = new ProjectsDirFixture();
+
+        fx.AddSession(
+            "Users-me-proj",
+            "11111111-1111-1111-1111-111111111111",
+            "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n"
+        );
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
+
+        using var handler = new StubHandler(
+            getResponse: _ => new HttpResponseMessage(HttpStatusCode.Gone) {
+                Content = new StringContent("""{"error":"session_deleted"}""")
+            }
+        );
+        using var client = new HttpClient(handler);
+
+        var classified = await src.ClassifyAsync(
+            await src.DiscoverAsync(Filters(), CancellationToken.None),
+            Ctx(client, minLines: 1),
+            CancellationToken.None
+        );
+
+        await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.Deleted);
+        await Assert.That(classified[0].ProbeErrorReason).IsNull();
+    }
+
+    [Test]
     public async Task classify_marks_too_short_below_min_lines() {
         using var fx = new ProjectsDirFixture();
         fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{\"a\":1}\n");

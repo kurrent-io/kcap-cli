@@ -1,5 +1,9 @@
+using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
+using Avalonia.Threading;
+using Capacitor.App.Services;
 using Capacitor.App.Services.Onboarding;
+using Capacitor.Cli.Core.Http;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
@@ -207,5 +211,65 @@ public class ProfilesSettingsViewModelTests {
         var bound = Make(AuthFixtures.NewTokenStore(Config.Root), bound: "default");
         await bound.RefreshAsync();
         await Assert.That(bound.ListedRows.Any(r => r.Name == "default")).IsTrue();
+    });
+
+    /// In use is not connected and a stored credential is not either: the bound row carries the app's own live
+    /// connection, the daemon's row its own, and a row neither uses carries none.
+    [Test]
+    public Task The_rows_in_use_carry_live_connection_state_apart_from_their_credential() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var lane = new BehaviorSubject<ServerLaneStatus>(new(ServerLaneState.Connected));
+        var daemon = new FakeDaemonClientService();
+        daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+        daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "reconnecting", profile: "work"));
+        var tokens = await Seed();
+        using var vm = new ProfilesSettingsViewModel(Config.Root, tokens,
+            new OnboardingGate(Config.Root, tokens, ProfileOverrides.None, NoLocalInstallation.Root, TimeProvider.System), "work",
+            (_, _, _) => Task.CompletedTask, (_, _) => Task.FromResult(true), appLane: lane, daemon: daemon);
+        await vm.RefreshAsync();
+        Dispatcher.UIThread.RunJobs();
+
+        var work = vm.Rows.Single(r => r.Name == "work");
+        await Assert.That(work.UsageLabel).IsEqualTo("In use");
+        await Assert.That(work.Connection).IsEqualTo("This app: connected · Daemon: reconnecting");
+        await Assert.That(work.ConnectionNeedsAttention).IsTrue();
+        await Assert.That(vm.Rows.Single(r => r.Name == "other").Connection).IsNull();
+
+        lane.OnNext(new(ServerLaneState.Retrying, "Connection refused", Failure: ConnectionFailure.Refused));
+        daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "connected", profile: "work"));
+        Dispatcher.UIThread.RunJobs();
+
+        work = vm.Rows.Single(r => r.Name == "work");
+        await Assert.That(work.Connection).IsEqualTo("This app: can't reach the server (connection refused) · Daemon: connected");
+        await Assert.That(work.ConnectionNeedsAttention).IsTrue();
+        await Assert.That(work.Status).IsEqualTo(ProfileCredentialStatus.SignedIn).Because("an outage is not a credential problem");
+    });
+
+    /// Only the bound row takes the app's connection, and the daemon's only the row it reports running on.
+    [Test]
+    [Arguments(ServerLaneState.Connected, "This app: connected", false)]
+    [Arguments(ServerLaneState.Connecting, "This app: connecting", false)]
+    [Arguments(ServerLaneState.Retrying, "This app: reconnecting", false)]
+    [Arguments(ServerLaneState.SignedOut, "This app: sign-in rejected", true)]
+    [Arguments(ServerLaneState.Dormant, null, false)]
+    public async Task Connection_text_follows_whoever_uses_the_row(ServerLaneState state, string? text, bool attention) {
+        var unbound = ProfilesSettingsViewModel.ConnectionFor("other", bound: false, (state, null), ("work", "signed out"));
+        await Assert.That(unbound.Text).IsNull();
+
+        var mine = ProfilesSettingsViewModel.ConnectionFor("work", bound: true, (state, null), ("other", "signed out"));
+        await Assert.That(mine.Text).IsEqualTo(text);
+        await Assert.That(mine.Attention).IsEqualTo(attention);
+    }
+
+    /// A no-auth local server's row says it needs no sign-in, plainly and without warning colour.
+    [Test]
+    public Task A_server_without_sign_in_says_so_without_attention() => AvaloniaSession.RunOnUiAsync(async () => {
+        var vm = Make(await Seed(), bound: "open");
+        await vm.RefreshAsync();
+
+        var open = vm.Rows.Single(r => r.Name == "open");
+        await Assert.That(open.ShowsStatus).IsTrue();
+        await Assert.That(open.StatusLabel).IsEqualTo("No sign-in needed");
+        await Assert.That(open.StatusNeedsAttention).IsFalse();
+        await Assert.That(open.NeedsSignIn).IsFalse();
     });
 }

@@ -38,6 +38,36 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
         }
     }
 
+    public PaneLayout Panes { get; } = new();
+
+    ColumnDefinition RailColumn => SessionsSurface.ColumnDefinitions[0];
+
+    // Wide enough on macOS to hold the window buttons, which overlay the window's top-left corner.
+    static readonly double RailStripWidth = OperatingSystem.IsMacOS() ? 78 : 44;
+
+    void OnRailSplitterDragDelta(object? sender, VectorEventArgs e) =>
+        SessionRail.Opacity = PaneLayout.HidesAt(RailColumn.ActualWidth, PaneLayout.RailMinWidth) ? PaneLayout.HidingOpacity : 1;
+
+    // A drag resizes the column live; Panes takes the width once, when it ends. Released below the
+    // minimum, the rail hides and reopens at the minimum.
+    void OnRailSplitterDragCompleted(object? sender, VectorEventArgs e) {
+        SessionRail.Opacity = 1;
+        var width = RailColumn.ActualWidth;
+        var hides = PaneLayout.HidesAt(width, PaneLayout.RailMinWidth);
+        Panes.RailWidth = hides ? PaneLayout.RailMinWidth : width;
+        if (hides) Panes.RailCollapsed = true;
+    }
+
+    void OnRailExpandClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => Panes.RailCollapsed = false;
+
+    void ApplyRail() {
+        var collapsed = Panes.RailCollapsed;
+        RailColumn.Width = new GridLength(collapsed ? RailStripWidth : Panes.RailWidth);
+        SessionRail.IsVisible = !collapsed;
+        RailSplitter.IsVisible = !collapsed;
+        RailStrip.IsVisible = collapsed;
+    }
+
     WindowNotificationManager? _notifications;
     IDisposable? _notifierSubscription;
     IAppNotifier? _notifier;
@@ -82,20 +112,53 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
         ScaleHost.LayoutTransform = scale == UiScale.Default ? null : new ScaleTransform(scale, scale);
         ApplyMinimumSize();
         ApplyCaptionInset();
+        if (Onboarding is not null) KeepOnboardingOnScreen();
     }
 
-    // A closed window has no platform window to ask a screen about.
+    // A larger minimum grows the frame from its top-left corner, which can push setup's footer off
+    // the screen; the frame is pulled back inside the work area.
+    void KeepOnboardingOnScreen() {
+        if (!IsVisible || WindowState != WindowState.Normal || double.IsNaN(Width) || double.IsNaN(Height)) return;
+        if ((Screens?.ScreenFromWindow(this) ?? Screens?.Primary) is not { } screen) return;
+        var size = new Size(Math.Max(Width, MinWidth), Math.Max(Height, MinHeight));
+        if (WindowRestore.FitOnScreen(Position, size, [new ScreenArea(screen.Bounds, screen.WorkingArea, screen.Scaling)]) is not { } fit) return;
+        Position = fit.Position;
+        Width = fit.Size.Width;
+        Height = fit.Size.Height;
+    }
+
+    // A closed window has no platform window to ask a screen about. The minimum depends on the
+    // screen at any scale, since it never exceeds the work area.
     void RefreshMinimumSize() {
-        if (_scale != UiScale.Default && PlatformImpl is not null) ApplyMinimumSize();
+        if (PlatformImpl is not null) ApplyMinimumSize();
     }
 
     // Bounded by the screen the window is on.
     void ApplyMinimumSize() {
         var area = Screens?.ScreenFromWindow(this) ?? Screens?.Primary;
         var available = area is null ? (Size?)null : area.WorkingArea.Size.ToSize(area.Scaling);
-        var onboarding = Onboarding is not null;
-        MinWidth  = UiScale.Minimum(onboarding ? WindowSizeMemory.OnboardingMinWidth : WindowSizeMemory.MinWidth, _scale, available?.Width);
-        MinHeight = UiScale.Minimum(onboarding ? WindowSizeMemory.OnboardingMinHeight : WindowSizeMemory.MinHeight, _scale, available?.Height);
+        var minimum = Onboarding is not null
+            ? WizardPlacement.Minimum(_scale, available)
+            : WindowSizeMemory.Minimum(new Size(WindowSizeMemory.MinWidth, WindowSizeMemory.MinHeight), _scale, available);
+        MinWidth  = minimum.Width;
+        MinHeight = minimum.Height;
+    }
+
+    /// Call before the first Show(): sizes setup to the work area of the screen it opens on and centres it there.
+    public void PlaceOnboarding() {
+        var scale = _contentScale?.Current ?? _scale;
+        if ((Screens?.ScreenFromWindow(this) ?? Screens?.Primary) is not { } screen) {
+            Width = WizardPlacement.PreferredWidth;
+            Height = WizardPlacement.PreferredHeight;
+            WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            return;
+        }
+
+        var (position, size) = WizardPlacement.Place(scale, new ScreenArea(screen.Bounds, screen.WorkingArea, screen.Scaling));
+        WindowStartupLocation = WindowStartupLocation.Manual;
+        Position = position;
+        Width = size.Width;
+        Height = size.Height;
     }
 
     // The inset is in window units and the pane sits inside the scale, so it is divided back out.
@@ -103,6 +166,10 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
 
     public MainWindow() {
         InitializeComponent();
+        SessionsSurface.SizeChanged += (_, e) => RailColumn.MaxWidth = e.NewSize.Width * PaneLayout.MaxShare;
+        SessionRail.CollapseRequested += (_, _) => Panes.RailCollapsed = true;
+        Panes.Changed += (_, _) => ApplyRail();
+        ApplyRail();
         KeyBindings.AddRange(ZoomShortcut.For(this));
         // A move, a display scaling change and a resized work area each change what the screen offers.
         PositionChanged += (_, _) => RefreshMinimumSize();
@@ -120,6 +187,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
             if (watchedScreens is not null) watchedScreens.Changed -= OnScreensChanged;
         };
         BindRefreshShortcuts();
+        BindSearchShortcuts();
         BindSettingsShortcut();
         KeepContentClearOfCaptionButtons();
         BindFullScreenShortcut();
@@ -153,6 +221,10 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
                     UpdateWorkspaceVisibility();
                 })
                 .DisposeWith(disposables);
+            Observable.Switch(this.WhenAnyValue(x => x.ViewModel)
+                    .Select(vm => vm?.LauncherNudges ?? Observable.Empty<System.Reactive.Unit>()))
+                .Subscribe(_ => LauncherView.Nudge())
+                .DisposeWith(disposables);
         });
     }
 
@@ -164,7 +236,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
         if (RefreshShortcut.FromTerminal is { } fromTerminal) {
             KeyBindings.Add(new KeyBinding {
                 Gesture = RefreshShortcut.Primary,
-                Command = new RefreshUnlessTerminalFocused(this),
+                Command = new UnlessTerminalFocused(this, vm => vm.RefreshWorkCommand),
             });
             Add(fromTerminal);
         }
@@ -181,6 +253,24 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
             bindings.Add(binding);
             KeyBindings.Add(binding);
         }
+    }
+
+    // ⌘K everywhere on macOS. Off macOS Ctrl+K is a terminal key, so it yields to a focused terminal.
+    void BindSearchShortcuts() {
+        var meta = new KeyBinding { Gesture = new KeyGesture(Key.K, KeyModifiers.Meta) };
+        KeyBindings.Add(meta);
+        if (!ShortcutLabels.UsesCommandKey) {
+            KeyBindings.Add(new KeyBinding {
+                Gesture = new KeyGesture(Key.K, KeyModifiers.Control),
+                Command = new UnlessTerminalFocused(this, vm => vm.OpenSearchCommand),
+            });
+        }
+
+        void Apply() {
+            if ((DataContext as MainWindowViewModel)?.OpenSearchCommand is { } command) meta.Command = command;
+        }
+        Apply();
+        DataContextChanged += (_, _) => Apply();
     }
 
     // Windows draws its caption buttons over the top-right of the extended client area, so the

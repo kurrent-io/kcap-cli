@@ -6,9 +6,12 @@
     <Border Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
             BorderThickness="1" CornerRadius="6" Padding="8,0,2,0">
         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
-            <SelectableTextBlock Text="{Binding #Root.Text}" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,4"
-                                 FontFamily="{StaticResource OnboardingMonoFont}" FontSize="12"
-                                 Foreground="{StaticResource KcapTextBrush}" />
+            <!-- Scrolls rather than wraps: a break at a flag's hyphen reads as a different command. -->
+            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" VerticalAlignment="Center">
+                <SelectableTextBlock Text="{Binding #Root.Text}" TextWrapping="NoWrap" Margin="0,4"
+                                     FontFamily="{StaticResource OnboardingMonoFont}" FontSize="12"
+                                     Foreground="{StaticResource KcapTextBrush}" />
+            </ScrollViewer>
             <Button x:Name="CopyButton" Grid.Column="1" Classes="kcapGhost kcapIcon" Padding="5" MinHeight="0"
                     Click="OnCopyClick" ToolTip.Tip="Copy"
                     AutomationProperties.Name="{Binding #Root.Text, StringFormat='Copy {0}'}">

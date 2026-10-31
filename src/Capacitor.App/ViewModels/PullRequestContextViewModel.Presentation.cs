@@ -95,7 +95,7 @@ public sealed partial class PullRequestContextViewModel {
                 // Sidebar is a verdict; Tip carries a sentence (and counts when useful). Fail and
                 // pending keep a count in Text because that changes urgency; all-green stays short.
                 return failed > 0 ? new($"{failed} failed", "failure", $"One or more checks failed ({counts}).")
-                    : pending > 0 ? new($"{pending} pending", "pending", $"Checks are still running ({counts}).")
+                    : pending > 0 ? new("Checks pending" + (rows.Any(row => row.Outcome is null or "unknown") ? "" : $" · {rows.Length - pending}/{rows.Length}"), "pending", $"Checks are still running ({counts}).")
                     : other > 0 ? new("Checks completed", Detail: $"Checks finished with mixed outcomes ({counts}).")
                     : new("Checks passing", "success", $"All checks have passed ({counts}).");
             }
@@ -103,7 +103,7 @@ public sealed partial class PullRequestContextViewModel {
                 : _overview.Checks.Rollup switch {
                     "success" => new("Checks passing", "success", "All checks have passed."),
                     "failure" => new("Checks failing", "failure", "One or more checks failed."),
-                    "pending" => new("Checks pending", "pending", "Checks are still running."),
+                    "pending" => new("Checks pending" + Progress(_overview.Checks.Counts), "pending", "Checks are still running."),
                     _ => new("Checks unknown", Detail: "GitHub has not reported a check summary yet.")
                 };
         }
@@ -143,6 +143,15 @@ public sealed partial class PullRequestContextViewModel {
 
     /// Call when the host's composer gains or loses the ability to send, so <see cref="ShowsFix"/> is read again.
     internal void FixAvailabilityChanged() => NotifyValue(ShowsFix);
+
+    // A capped list reports lower bounds, which would misstate the total, and an unknown outcome
+    // (a status with no state) may still be running, so either leaves the fraction off.
+    static string Progress(Dictionary<string, PullRequestCountDto>? counts) {
+        if (counts is not { Count: > 0 } || counts.ContainsKey("unknown") || counts.Values.Any(count => count is not { Kind: "exact", Value: not null })) return "";
+        var total = counts.Values.Sum(count => count.Value!.Value);
+        var done = total - (counts.GetValueOrDefault("pending")?.Value ?? 0);
+        return $" · {done}/{total}";
+    }
 
     void NotifyPresentation() {
         NotifyValue(HasMultipleChoices);

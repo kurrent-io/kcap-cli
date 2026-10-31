@@ -7,9 +7,10 @@ namespace Capacitor.Cli.SessionStartMemory;
 /// the bounded response bytes on a 2xx (empty array for 204), and null on any
 /// non-success status. Status mapping is deliberately left to the caller: the
 /// memory lane and the guidelines lane treat 404 differently (the guidelines visibility-race rule), so
-/// this helper carries the raw status through rather than pre-deciding.
+/// this helper carries the raw status through rather than pre-deciding. <see cref="Marked"/> says whether the
+/// response carried the marker header the caller asked about, on any status.
 /// </summary>
-internal readonly record struct SessionStartFetchOutcome(HttpStatusCode Status, byte[]? Body, TimeSpan? RetryAfter);
+internal readonly record struct SessionStartFetchOutcome(HttpStatusCode Status, byte[]? Body, bool Marked, TimeSpan? RetryAfter);
 
 /// <summary>
 /// Shared HTTP mechanics for the SessionStart context lanes: a GET read at
@@ -19,18 +20,19 @@ internal readonly record struct SessionStartFetchOutcome(HttpStatusCode Status, 
 /// </summary>
 internal static class SessionStartContextFetch {
     public static async Task<SessionStartFetchOutcome> FetchAsync(
-            HttpClient client, string url, TimeProvider time, CancellationToken ct) {
+            HttpClient client, string url, TimeProvider time, CancellationToken ct, string? markerHeader = null) {
         // Headers-read, so the bounded read below decides how much of the body is ever pulled.
         using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
 
         var retryAfter = ParseRetryAfter(response, time);
+        var marked     = markerHeader is not null && response.Headers.Contains(markerHeader);
 
         if (!response.IsSuccessStatusCode)
-            return new SessionStartFetchOutcome(response.StatusCode, Body: null, retryAfter);
+            return new SessionStartFetchOutcome(response.StatusCode, Body: null, marked, retryAfter);
 
         var bytes = await ReadBoundedAsync(response.Content, ct);
 
-        return new SessionStartFetchOutcome(response.StatusCode, bytes, RetryAfter: null);
+        return new SessionStartFetchOutcome(response.StatusCode, bytes, marked, RetryAfter: null);
     }
 
     static async Task<byte[]> ReadBoundedAsync(HttpContent content, CancellationToken ct) =>

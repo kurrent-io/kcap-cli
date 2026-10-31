@@ -82,7 +82,7 @@ public class HarnessesStepViewModelTests {
             var h = new Harness(Config.Root);
             h.Cli.DiscoverBehavior = _ => Task.FromResult<ImportDiscoveryReport?>(new(
                 [.. Enumerable.Range(0, 20).Select(i => new ImportDiscoveryRepo("org", $"repo-{i}", 3, null, null))], 0, []));
-            var history = new HistoryStepViewModel(h.Cli, () => h.Vm.Recording, a => a(), "test-mac", TimeProvider.System);
+            var history = new HistoryStepViewModel(h.Cli, a => a(), "test-mac", TimeProvider.System);
             var vm = new OnboardingViewModel([h.Vm, history]);
             await vm.PendingEnterForTesting;
             var window = new MainWindow { Onboarding = vm, Width = 1024, Height = 640 };
@@ -111,6 +111,7 @@ public class HarnessesStepViewModelTests {
                 Dispatcher.UIThread.RunJobs();
                 await Assert.That(scroll.Offset.Y > 0).IsTrue();
                 await vm.NextCommand.Execute().ToTask();
+                await vm.NextCommand.Execute().ToTask();
                 await history.Discovery;
                 Dispatcher.UIThread.RunJobs();
                 await Assert.That(scroll.Offset.Y).IsEqualTo(0);
@@ -133,9 +134,66 @@ public class HarnessesStepViewModelTests {
         });
 
         await Assert.That(labels).IsEquivalentTo(["Claude Code", "Cursor", "Pi"], CollectionOrdering.Matching);
-        await Assert.That(signals).IsEquivalentTo(["on your PATH", "config found", "on your PATH"], CollectionOrdering.Matching);
-        await Assert.That(answers.All(a => a is (true, true))).IsTrue();
+        await Assert.That(signals).IsEquivalentTo(["on your PATH", "settings folder only", "on your PATH"], CollectionOrdering.Matching);
+        await Assert.That(answers).IsEquivalentTo([(true, true), (false, false), (true, true)], CollectionOrdering.Matching);
         await Assert.That(notFound).StartsWith("Not found: Codex, Copilot");
+    }
+
+    /// A settings folder alone, Pi's agent directory included, is no consent to record: those rows start
+    /// off and the page says why, while an installed app still starts on. Next installs nothing for them.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Harnesses_found_only_by_a_settings_folder_start_off_and_the_page_says_why() {
+        var (answers, note, calls) = await AvaloniaSession.DispatchAsync(async () => {
+            var h = new Harness(Config.Root, new Dictionary<HarnessId, DetectedAgent> {
+                [HarnessId.Claude]  = new(false, true, DesktopAppFound: true),
+                [HarnessId.Cursor]  = new(false, true),
+                [HarnessId.Copilot] = new(false, true),
+                [HarnessId.Gemini]  = new(false, true),
+                [HarnessId.Pi]      = new(false, true),
+            });
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+            h.Vm.Visibility = "private";
+            var answers = h.Vm.Rows.ToDictionary(r => r.Label, r => (r.Record, r.Tools));
+            var note = h.Vm.SettingsOnlyNote;
+            await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+
+            return (answers, note, h.Cli.PluginInstallCalls.ToList());
+        });
+
+        await Assert.That(answers["Claude Code"]).IsEqualTo((true, true));
+        foreach (var label in new[] { "Copilot", "Cursor", "Gemini", "Pi" })
+            await Assert.That(answers[label]).IsEqualTo((false, false));
+        await Assert.That(note).IsEqualTo(HarnessesStepViewModel.SettingsOnlyNoteFor(["Cursor", "Copilot", "Gemini", "Pi"]));
+        await Assert.That(calls).IsEquivalentTo([(string?)null], CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task The_settings_only_note_names_each_row_it_explains() {
+        await Assert.That(HarnessesStepViewModel.SettingsOnlyNoteFor([])).IsNull();
+        await Assert.That(HarnessesStepViewModel.SettingsOnlyNoteFor(["Cursor"]))
+            .IsEqualTo("Only Cursor's settings folder was found, so it starts off. Turn it on if you use it.");
+        await Assert.That(HarnessesStepViewModel.SettingsOnlyNoteFor(["Cursor", "Copilot", "Gemini"]))
+            .IsEqualTo("Only the settings folders of Cursor, Copilot and Gemini were found, so they start off. Turn on the ones you use.");
+    }
+
+    /// No tools found sends the user to Settings → Harnesses after setup, not back through the wizard.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Nothing_found_points_at_a_relaunch_and_nothing_chosen_at_harnesses_settings() {
+        var (noneFound, declineVisible) = await AvaloniaSession.DispatchAsync(async () => {
+            var none = new Harness(Config.Root, new Dictionary<HarnessId, DetectedAgent>());
+            await none.Vm.OnEnterAsync(CancellationToken.None);
+            var unchosen = new Harness(Config.Root, new Dictionary<HarnessId, DetectedAgent> { [HarnessId.Cursor] = new(false, true) });
+            await unchosen.Vm.OnEnterAsync(CancellationToken.None);
+
+            return (none.Vm.NoneFound, unchosen.Vm.DeclineVisible);
+        });
+
+        await Assert.That(noneFound).IsTrue();
+        await Assert.That(declineVisible).IsTrue();
+        await Assert.That(SetupLocation.NoneFoundTail).Contains(SetupLocation.Relaunch);
+        await Assert.That(SetupLocation.NothingSelectedNote).Contains("Settings → Harnesses");
     }
 
     [Test]
@@ -150,7 +208,7 @@ public class HarnessesStepViewModelTests {
 
         await Assert.That(record).IsFalse();
         await Assert.That(tools).IsFalse();
-        await Assert.That(signal).IsEqualTo("config found · you turned this down before");
+        await Assert.That(signal).IsEqualTo("settings folder only · you turned this down before");
     }
 
     [Test]
@@ -183,14 +241,15 @@ public class HarnessesStepViewModelTests {
         await Assert.That(tools).IsFalse();
     }
 
+    /// The first Next turns the rows on and stays, so each row's outcome is read on the page that ran it.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Next_installs_each_selected_row_with_the_options_its_answer_needs() {
         var (flags, options, left, again, label, satisfied) = await AvaloniaSession.DispatchAsync(async () => {
             var h = new Harness(Config.Root);
             await h.Vm.OnEnterAsync(CancellationToken.None);
-            h.Row("Cursor").Record = false; // tools only
-            h.Row("Pi").Tools      = false; // capture only
+            h.Row("Cursor").Tools = true; // tools only
+            h.Row("Pi").Tools     = false; // capture only
             h.Vm.Visibility = "private";
 
             var leave = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
@@ -203,10 +262,36 @@ public class HarnessesStepViewModelTests {
         await Assert.That(options[0]).IsEmpty();
         await Assert.That(options[1]).IsEquivalentTo(["--tools-only"]);
         await Assert.That(options[2]).IsEquivalentTo(["--skip-pi-mcp", "--skip-pi-skills", "--skip-pi-instructions"]);
-        await Assert.That(left).IsTrue();
+        await Assert.That(left).IsFalse();
         await Assert.That(again).IsTrue();
         await Assert.That(label).IsEqualTo("Continue");
         await Assert.That(satisfied).IsTrue();
+    }
+
+    /// Turning harnesses on is confirmed on the page that did it: the wizard stays with the rows'
+    /// outcomes, offers only Continue, and that Continue moves on without installing again.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_clean_install_stays_on_the_page_until_continue() {
+        var (afterInstall, label, skipVisible, saved, afterContinue, calls) = await AvaloniaSession.DispatchAsync(async () => {
+            var h = new Harness(Config.Root);
+            var vm = new OnboardingViewModel([h.Vm, new DoneStepViewModel(() => DoneFacts.Empty)]);
+            await vm.PendingEnterForTesting;
+            h.Vm.Visibility = "private";
+
+            await vm.NextCommand.Execute().ToTask();
+            var stayed = (vm.Current.Id, vm.NextLabel, vm.SkipVisible, h.Vm.ConnectionsSaved);
+            await vm.NextCommand.Execute().ToTask();
+
+            return (stayed.Id, stayed.NextLabel, stayed.SkipVisible, stayed.ConnectionsSaved, vm.Current.Id, h.Cli.PluginInstallCallCount);
+        });
+
+        await Assert.That(afterInstall).IsEqualTo(WizardStepId.Harnesses);
+        await Assert.That(label).IsEqualTo("Continue");
+        await Assert.That(skipVisible).IsFalse();
+        await Assert.That(saved).IsTrue();
+        await Assert.That(afterContinue).IsEqualTo(WizardStepId.Done);
+        await Assert.That(calls).IsEqualTo(2); // Claude Code and Pi, once each
     }
 
     /// A failed row keeps the page with its own Retry; the next Next is the user carrying on.
@@ -218,6 +303,8 @@ public class HarnessesStepViewModelTests {
             h.Cli.PluginInstallBehavior = (flag, _) => Task.FromResult(
                 flag == "--cursor" ? new ProcessResult(1, "", "boom", false) : new ProcessResult(0, "", "", false));
             await h.Vm.OnEnterAsync(CancellationToken.None);
+            h.Row("Cursor").Record = true;
+            h.Row("Cursor").Tools  = true;
             h.Vm.Visibility = "private";
             var leave1 = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
             await Assert.That(h.Vm.ChoicesEditable).IsFalse();
@@ -245,6 +332,8 @@ public class HarnessesStepViewModelTests {
             h.Cli.PluginInstallBehavior = (flag, _) => Task.FromResult(
                 flag == "--cursor" && fail ? new ProcessResult(1, "", "boom", false) : new ProcessResult(0, "", "", false));
             await h.Vm.OnEnterAsync(CancellationToken.None);
+            h.Row("Cursor").Record = true;
+            h.Row("Cursor").Tools  = true;
             h.Vm.Visibility = "private";
             await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
 
@@ -407,24 +496,25 @@ public class HarnessesStepViewModelTests {
     [NotInParallel("AvaloniaSession")]
     public async Task Next_installs_the_terminal_command_then_turns_harnesses_on() {
         var (left, installed, label, calls) = await AvaloniaSession.DispatchAsync(async () => {
-            var (h, fix) = await HarnessWithPathFix(new ProcessResult(0, "", "", false));
+            var (h, fix) = await HarnessWithPathFix(failing: false);
 
             var leave = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
 
             return (leave, fix.Fixed, h.Vm.NextLabel, h.Cli.PluginInstallCallCount);
         });
 
-        await Assert.That(left).IsTrue();
+        await Assert.That(left).IsFalse(); // the outcome stays on screen until Continue
         await Assert.That(installed).IsTrue();
         await Assert.That(label).IsEqualTo("Continue");
-        await Assert.That(calls).IsEqualTo(3);
+        await Assert.That(calls).IsEqualTo(2); // Cursor, found only by its settings folder, starts off
     }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_cancelled_terminal_install_stays_and_turns_nothing_on() {
+    public async Task A_failed_terminal_install_stays_and_turns_nothing_on() {
+        Skip.When(OperatingSystem.IsWindows(), "macOS lstat semantics");
         var (left, message, calls) = await AvaloniaSession.DispatchAsync(async () => {
-            var (h, _) = await HarnessWithPathFix(new ProcessResult(1, "", "User canceled. (-128)", false));
+            var (h, _) = await HarnessWithPathFix(failing: true);
 
             var leave = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
 
@@ -432,18 +522,24 @@ public class HarnessesStepViewModelTests {
         });
 
         await Assert.That(left).IsFalse();
-        await Assert.That(message).IsEqualTo("Cancelled. Nothing changed.");
+        await Assert.That(message).StartsWith("Could not finish installing the terminal command.");
         await Assert.That(calls).IsEqualTo(0);
     }
 
-    async Task<(Harness, PathFixViewModel)> HarnessWithPathFix(ProcessResult installResult) {
+    // A failing install meets someone else's kcap where it would link.
+    async Task<(Harness, PathFixViewModel)> HarnessWithPathFix(bool failing) {
         var dir = Path.GetDirectoryName(ConfigPath)!;
+        var link = Path.Combine(dir, ".local", "bin", "kcap");
+        if (failing) {
+            Directory.CreateDirectory(Path.GetDirectoryName(link)!);
+            File.WriteAllText(link, "someone else's");
+        }
         var probe = new FakeLoginShellProbe {
             KcapOnPathBehavior = _ => Task.FromResult<bool?>(true),
-            KcapPathBehavior = _ => Task.FromResult<string?>(Path.Combine(dir, "shim-kcap")),
+            KcapPathBehavior = _ => Task.FromResult<string?>(link),
         };
         var fix = new PathFixViewModel(
-            new PathShimInstaller(new ScriptedProcessRunner(installResult), probe, Path.Combine(dir, "shim-kcap")),
+            new PathShimInstaller(probe, new UserHome(dir)),
             new WizardFixtures.NoopAppStateStore(), Path.Combine(dir, "bundled-kcap"));
         var h = new Harness(Config.Root, pathFix: fix);
         await h.Vm.OnEnterAsync(CancellationToken.None);
@@ -456,7 +552,7 @@ public class HarnessesStepViewModelTests {
     public async Task Not_now_still_leaves_while_the_terminal_cannot_run_kcap() {
         var (left, calls) = await AvaloniaSession.DispatchAsync(async () => {
             var fix = new PathFixViewModel(
-                new PathShimInstaller(new WizardFixtures.NoopProcessRunner(), new FakeLoginShellProbe()),
+                new PathShimInstaller(new FakeLoginShellProbe(), new UserHome(Path.GetDirectoryName(ConfigPath)!)),
                 new WizardFixtures.NoopAppStateStore(), "/opt/kcap/kcap");
             var h = new Harness(Config.Root, pathFix: fix);
             await h.Vm.OnEnterAsync(CancellationToken.None);
@@ -469,15 +565,6 @@ public class HarnessesStepViewModelTests {
         await Assert.That(calls).IsEqualTo(0);
     }
 
-    sealed class ScriptedProcessRunner(ProcessResult result) : IProcessRunner {
-        public Task<ProcessResult> RunAsync(string fileName, string[] args, RunOptions options, CancellationToken ct) =>
-            Task.FromResult(result);
-
-        public Task<StreamingResult> RunStreamingAsync(
-                string fileName, string[] args, RunOptions options, Action<StreamedLine> onLine, CancellationToken ct) =>
-            throw new NotSupportedException();
-    }
-
     [Test]
     [Arguments(WizardNavigation.Next, true)]
     [Arguments(WizardNavigation.Skip, true)]
@@ -488,6 +575,12 @@ public class HarnessesStepViewModelTests {
             var h = new Harness(Config.Root, detectsAgents ? null : new Dictionary<HarnessId, DetectedAgent>(), local: true);
             await h.Vm.OnEnterAsync(CancellationToken.None);
             var canLeave = await h.Vm.CanLeaveAsync(direction, CancellationToken.None);
+            // Turning detected agents on stays to show the outcome; Continue then leaves.
+            if (direction == WizardNavigation.Next && detectsAgents) {
+                await Assert.That(canLeave).IsFalse();
+                await Assert.That(h.Vm.ConnectionsSaved).IsTrue();
+                canLeave = await h.Vm.CanLeaveAsync(direction, CancellationToken.None);
+            }
 
             return (canLeave && h.Vm.CanContinue && h.Vm.CanSkip, h.Vm.VisibilityVisible,
                 ConfigMutator.LoadPure(ConfigPath).Profiles["default"].DefaultVisibility);
@@ -513,7 +606,23 @@ public class HarnessesStepViewModelTests {
             await Assert.That(text).DoesNotContain("kcap plugin");
             await Assert.That(text).DoesNotContain("kcap config");
         }
-        await Assert.That(cloud).Contains("kcap plugin remove");
+        await Assert.That(cloud).IsEqualTo(SetupLocation.DisconnectLaterNote);
+    }
+
+    /// Not now installs nothing, so the PATH change is something the user can decline; once made, it
+    /// reaches only terminals opened afterwards.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_terminal_notes_offer_not_now_and_send_the_user_to_a_new_terminal() {
+        var (skip, before, after) = await AvaloniaSession.DispatchAsync(() => {
+            var h = new Harness(Config.Root);
+
+            return Task.FromResult((h.Vm.SkipLabel, string.Concat(h.Vm.PathNote.Select(s => s.Text)),
+                string.Concat(h.Vm.PathResolvedNote.Select(s => s.Text))));
+        });
+
+        await Assert.That(before).Contains($"{skip} leaves your terminal as it is.");
+        await Assert.That(after).StartsWith("Terminals you open from now on can run kcap");
     }
 
     [Test]
@@ -567,6 +676,9 @@ public class HarnessesStepViewModelTests {
             var h = new Harness(Config.Root);
             var vm = new OnboardingViewModel([h.Vm, new DoneStepViewModel(() => DoneFacts.Empty)]);
             await vm.PendingEnterForTesting;
+            // The check mark is laid out only when checked, and Cursor starts off.
+            h.Row("Cursor").Record = true;
+            h.Row("Cursor").Tools  = true;
             if (succeeded) h.Row("Claude Code").Status = AgentInstallStatus.Succeeded;
             var window = new MainWindow { Onboarding = vm, Width = 1024, Height = 1100 };
             window.Show();
@@ -638,6 +750,7 @@ public class HarnessesStepViewModelTests {
                 scroll.Offset = new Vector(0, 400);
                 Dispatcher.UIThread.RunJobs();
                 h.Vm.Visibility = "private";
+                await vm.NextCommand.Execute().ToTask();
                 await vm.NextCommand.Execute().ToTask();
                 await Assert.That(vm.Current.Id).IsEqualTo(WizardStepId.Done);
                 Dispatcher.UIThread.RunJobs();

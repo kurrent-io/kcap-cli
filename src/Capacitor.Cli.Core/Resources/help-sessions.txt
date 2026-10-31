@@ -7,7 +7,9 @@ Usage: kcap sessions [--active | --ended | --all] [--repo <owner/name|hash|all>]
 Lists the sessions you are allowed to see. Without a period: running ones
 first, ordered by last activity. With --since or --until: the sessions
 worked on in that period, newest start first, running and ended alike.
-Below full access a row shows no branch, cwd, prompt or paths.
+Below full access a row shows no branch, cwd, prompt or paths. ACCESS is
+what you may read of a session (overview, activity or full), not who else
+can see it. On a terminal the title is cut to the window's width.
 
 Options:
   --active                Running sessions only (default without a period)

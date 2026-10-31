@@ -77,4 +77,23 @@ public class TelemetrySettingsTests {
         await Assert.That(Resolve(persisted: false).Reason).IsEqualTo("config");
         await Assert.That(Resolve().Reason).IsEqualTo("default");
     }
+
+    static TelemetryDecision Unsaved(UnsavedConsent unsaved, bool? persisted = null, params (string Key, string? Value)[] env) =>
+        TelemetrySettings.Resolve(env.ToDictionary(e => e.Key, e => e.Value), persisted, unsaved);
+
+    [Test]
+    public async Task No_choice_sends_nothing_in_the_local_edition_or_before_an_edition_is_chosen() {
+        await Assert.That(Unsaved(UnsavedConsent.Withhold)).IsEqualTo(new TelemetryDecision(false, TelemetrySettings.LocalReason));
+        await Assert.That(Unsaved(UnsavedConsent.Pending)).IsEqualTo(new TelemetryDecision(false, TelemetrySettings.NotChosenReason));
+        await Assert.That(Unsaved(UnsavedConsent.Share)).IsEqualTo(new TelemetryDecision(true, TelemetrySettings.DefaultReason));
+    }
+
+    [Test]
+    [Arguments(UnsavedConsent.Withhold)]
+    [Arguments(UnsavedConsent.Pending)]
+    public async Task A_saved_choice_and_the_environment_outrank_the_edition(UnsavedConsent unsaved) {
+        await Assert.That(Unsaved(unsaved, persisted: true)).IsEqualTo(new TelemetryDecision(true, "config"));
+        await Assert.That(Unsaved(unsaved, null, ("KCAP_TELEMETRY", "1")).Enabled).IsTrue();
+        await Assert.That(Unsaved(unsaved, true, ("DO_NOT_TRACK", "1")).Enabled).IsFalse();
+    }
 }

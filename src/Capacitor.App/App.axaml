@@ -156,6 +156,24 @@
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="8" />
         </Style>
+        <!-- A button drawn as a field: it opens a surface rather than taking text. -->
+        <Style Selector="Button.kcapField">
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="7" />
+            <Setter Property="Padding" Value="11,7" />
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
+        <Style Selector="Button.kcapField /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        </Style>
+        <Style Selector="Button.kcapField:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.kcapField:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderStrongBrush}" />
+        </Style>
         <Style Selector="NumericUpDown.kcapField">
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
@@ -653,6 +671,13 @@
              the resting brush cannot stay behind in the view either. -->
         <Style Selector="Border.attachTarget">
             <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        </Style>
+        <Style Selector="Border.goalNudgeRing">
+            <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
+            <Setter Property="Opacity" Value="0" />
+        </Style>
+        <Style Selector="Border.goalNudgeRing.on">
+            <Setter Property="Opacity" Value="1" />
         </Style>
         <Style Selector="Border.attachTarget.dragOver">
             <Setter Property="BorderBrush" Value="{StaticResource KcapPrimaryBrush}" />

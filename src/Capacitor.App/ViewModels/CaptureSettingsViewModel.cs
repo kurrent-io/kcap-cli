@@ -12,8 +12,11 @@ public sealed class CaptureSettingsViewModel : ReactiveObject, IDisposable {
     readonly SettingsProfileStore _store;
     readonly CancellationTokenSource _lifetime;
     readonly Func<CancellationToken, Task<VisibilityOptionsRead?>>? _visibilityOptions;
-    readonly string _storedVisibility;
+    string _storedVisibility;
+    // What the page last selected on its own; a selection differing from it is the user's unsaved choice.
+    string? _shownVisibility;
     string? _visibility;
+    string? _visibilityNote;
     string _allowedRepos;
     string _excludedRepos;
     string _allowedPaths;
@@ -32,7 +35,7 @@ public sealed class CaptureSettingsViewModel : ReactiveObject, IDisposable {
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(appLifetime);
         var profile = store.LoadProfile();
         _storedVisibility = NormalizeVisibility(profile.DefaultVisibility);
-        _visibility = _storedVisibility;
+        _visibility = _shownVisibility = _storedVisibility;
         _allowedRepos = string.Join('\n', profile.AllowedRepos);
         _excludedRepos = string.Join('\n', profile.ExcludedRepos);
         _allowedPaths = string.Join('\n', profile.AllowedPaths);
@@ -44,6 +47,8 @@ public sealed class CaptureSettingsViewModel : ReactiveObject, IDisposable {
     public bool VisibilityVisible { get; }
     public IReadOnlyList<VisibilityOption> VisibilityOptions { get; private set; } = HarnessesStepViewModel.AllVisibilityOptions;
     public string? Visibility { get => _visibility; set => this.RaiseAndSetIfChanged(ref _visibility, value); }
+    /// Why the selection is not the saved audience as written: this server does not offer it.
+    public string? VisibilityNote { get => _visibilityNote; private set => this.RaiseAndSetIfChanged(ref _visibilityNote, value); }
     public string AllowedRepos { get => _allowedRepos; set => this.RaiseAndSetIfChanged(ref _allowedRepos, value); }
     public string ExcludedRepos { get => _excludedRepos; set => this.RaiseAndSetIfChanged(ref _excludedRepos, value); }
     public string AllowedPaths { get => _allowedPaths; set => this.RaiseAndSetIfChanged(ref _allowedPaths, value); }
@@ -77,19 +82,63 @@ public sealed class CaptureSettingsViewModel : ReactiveObject, IDisposable {
                 return;
             }
             VisibilityEditable = true;
-            var visibility = Visibility;
+            var unsaved = Visibility != _shownVisibility ? Visibility : null;
             VisibilityOptions = answered.Offer is { } offer
                 ? [.. offer.Options.Select(o => new VisibilityOption(o.Key!, o.Label!, o.Detail ?? ""))]
                 : HarnessesStepViewModel.AllVisibilityOptions;
             this.RaisePropertyChanged(nameof(VisibilityOptions));
             // Replacing the items clears the view's two-way selection before it can select the new item.
-            Visibility = VisibilityOptions.Any(o => o.Value == visibility) ? visibility : null;
+            SelectSaved();
+            if (unsaved is not null && VisibilityOptions.Any(o => o.Value == unsaved)) Visibility = unsaved;
         } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) {
         } catch (Exception ex) {
             VisibilityEditable = false;
             Console.Error.WriteLine($"kcap: settings visibility options read failed: {ex.Message}");
         } finally { Loading = false; }
     }
+
+    /// Picks up an audience saved outside this page, such as a <c>kcap config set</c>, unless the selection holds an
+    /// unsaved choice.
+    public async Task ReloadSavedVisibilityAsync() {
+        if (!VisibilityVisible || Busy || Loading) return;
+        string stored;
+        try {
+            stored = NormalizeVisibility((await Task.Run(_store.LoadProfile, _lifetime.Token)).DefaultVisibility);
+        } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) {
+            return;
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"kcap: settings profile reload failed: {ex.Message}");
+            return;
+        }
+        if (stored == _storedVisibility || Busy || Loading) return;
+        var unsaved = Visibility != _shownVisibility;
+        _storedVisibility = stored;
+        if (!unsaved) SelectSaved();
+    }
+
+    /// Selects what the saved audience means on this server, which is the saved audience itself wherever it is offered.
+    void SelectSaved() {
+        var effective = Effective(_storedVisibility, VisibilityOptions);
+        Visibility = _shownVisibility = effective;
+        VisibilityNote = effective == _storedVisibility ? null
+            : effective is null ? $"Your saved answer, “{Label(_storedVisibility)}”, is not offered by this server. Choose who can read new sessions."
+            : $"Your saved answer, “{Label(_storedVisibility)}”, is not offered by this server. Here it reaches the same readers as the answer selected below, and Save stores that one.";
+    }
+
+    /// <c>org_public</c> on a server with no organization owner resolves through the project rule alone, and
+    /// <c>project</c> on a server without projects through none, which leaves the owner. Null when nothing offered
+    /// matches the saved audience.
+    internal static string? Effective(string stored, IReadOnlyList<VisibilityOption> offered) {
+        string[] candidates = stored switch {
+            "org_public" => ["org_public", "project", "private"],
+            "project"    => ["project", "private"],
+            _            => [stored],
+        };
+        return candidates.FirstOrDefault(c => offered.Any(o => o.Value == c));
+    }
+
+    static string Label(string visibility) =>
+        HarnessesStepViewModel.AllVisibilityOptions.FirstOrDefault(o => o.Value == visibility)?.Label ?? visibility;
 
     internal async Task SaveAsync() {
         if (Busy || Loading) return;
@@ -116,6 +165,11 @@ public sealed class CaptureSettingsViewModel : ReactiveObject, IDisposable {
                 DefaultVisibility = visibility, AllowedRepos = allowedRepos, ExcludedRepos = excludedRepos,
                 AllowedPaths = allowedPaths, ExcludedPaths = excludedPaths,
             }, _lifetime.Token, keepVisibility: VisibilityVisible && !VisibilityEditable);
+            if (VisibilityVisible && VisibilityEditable) {
+                _storedVisibility = visibility;
+                _shownVisibility = visibility;
+                VisibilityNote = null;
+            }
             Message = "Sessions already on the server are unchanged.";
             Saved = true;
         } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) {

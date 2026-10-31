@@ -23,8 +23,8 @@ public sealed class PrivacySettingsViewModel : ReactiveObject, IDisposable {
         _notice    = notice;
         _notice.TurnedOff += OnTurnedOff;
 
-        // A choice that cannot be read sends nothing, so the switch shows it off.
-        var decision = TelemetrySettings.Resolve(TelemetryState.TryRead(config) is { } saved ? saved.Enabled : false);
+        // A choice that cannot be read sends nothing, so the switch shows it off; no choice reads as the edition says.
+        var decision = TelemetrySettings.Resolve(TelemetryState.TryRead(config) is { } saved ? saved.Enabled : false, telemetry.Unsaved);
         _send      = decision.Enabled;
         Overridden = decision.Reason is "KCAP_TELEMETRY" or "DO_NOT_TRACK"
             ? $"{decision.Reason} is set where kcap was started, so it decides this. Unset it and relaunch kcap to choose here."
@@ -49,10 +49,13 @@ public sealed class PrivacySettingsViewModel : ReactiveObject, IDisposable {
             if (!CanChange || value == _send) return;
 
             if (value) {
-                // This process's facade is already off; a live one is only built at startup.
+                // A facade that is off stays off until the app opens again; only one still waiting for a choice resumes now.
                 var saved = TelemetryState.SetEnabled(true, _config);
                 // Raised either way: the switch already moved, and an unsaved choice must move it back.
-                if (saved) _send = true;
+                if (saved) {
+                    _send = true;
+                    _telemetry.OptedIn(_config);
+                }
                 this.RaisePropertyChanged();
                 Hint = saved ? TakesEffectOnRelaunch : CouldNotSave;
             } else {

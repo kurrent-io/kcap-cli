@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
+using Avalonia.Platform.Storage;
 using Avalonia.VisualTree;
 using Capacitor.App.ViewModels;
 
@@ -14,6 +15,11 @@ public partial class WorkContextView : UserControl {
     public WorkContextView() {
         InitializeComponent();
     }
+
+    /// Shown only where something can bring the pane back, so set by <see cref="ContextPaneSizing"/>.
+    public event EventHandler? HideRequested;
+
+    void OnHideClick(object? sender, RoutedEventArgs e) => HideRequested?.Invoke(this, EventArgs.Empty);
 
     // Drag only from empty chrome — never from the refresh button (or any other Button in the strip).
     void OnHeaderPointerPressed(object? sender, PointerPressedEventArgs e) {
@@ -30,6 +36,16 @@ public partial class WorkContextView : UserControl {
     async void OnCopyTextClick(object? sender, RoutedEventArgs e) {
         if (sender is not Control { Tag: string { Length: > 0 } text } control) return;
         await CopyTextAsync(control, text);
+    }
+
+    async void OnOpenWorktreeClick(object? sender, RoutedEventArgs e) {
+        if (DataContext is not WorkContextViewModel { CanOpenWorktree: true, WorktreePath: { Length: > 0 } path }) return;
+        if (TopLevel.GetTopLevel(this)?.Launcher is not { } launcher) return;
+        try {
+            await launcher.LaunchDirectoryInfoAsync(new DirectoryInfo(path));
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"kcap app: opening the worktree folder failed: {ex.Message}");
+        }
     }
 
     async Task CopyTextAsync(Control? control, string text) {
