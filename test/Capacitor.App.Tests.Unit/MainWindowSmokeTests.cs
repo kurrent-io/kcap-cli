@@ -1229,7 +1229,7 @@ public class MainWindowSmokeTests {
         });
     }
 
-    /// Cmd+N / Ctrl+N: the window binds the advertised New session shortcut to CloseWorkspaceCommand,
+    /// Cmd+N / Ctrl+N: the window binds the advertised New session shortcut to NewSessionCommand,
     /// which drops an open workspace back to the launcher (the new-session empty state).
     [Test]
     [NotInParallel("AvaloniaSession")]

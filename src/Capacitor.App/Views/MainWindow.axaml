@@ -17,8 +17,8 @@
                      Background="{StaticResource KcapCanvasBrush}"
                      ExtendClientAreaToDecorationsHint="True">
     <Window.KeyBindings>
-        <KeyBinding Gesture="Meta+N" Command="{Binding CloseWorkspaceCommand}" />
-        <KeyBinding Gesture="Ctrl+N" Command="{Binding CloseWorkspaceCommand}" />
+        <KeyBinding Gesture="Meta+N" Command="{Binding NewSessionCommand}" />
+        <KeyBinding Gesture="Ctrl+N" Command="{Binding NewSessionCommand}" />
     </Window.KeyBindings>
     <!-- Rail | launcher-or-workspace. The right pane's empty state IS the launcher.
          Workspace content is a template so the terminal is only built once a session opens.

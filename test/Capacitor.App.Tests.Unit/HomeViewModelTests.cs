@@ -5,6 +5,7 @@ using System.Reactive.Subjects;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Remote.Models;
 using DynamicData;
@@ -2929,6 +2930,96 @@ public class HomeViewModelTests {
 
             await vm.SelectMachineAsync(daemon.DaemonName, isLocal: true);
             await Assert.That(vm.BannerMessage).IsEqualTo(startMessageText);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Permission_mode_is_remembered_per_repository_across_launchers() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var path = Tmp.PathTo("app-state.json");
+            var vm = Build(out _, out _, path);
+
+            await vm.SelectRepositoryAsync("/repo/a");
+            await vm.ChoosePermissionModeAsync(ClaudePermissionModes.BypassPermissions);
+            await vm.SelectRepositoryAsync("/repo/b");
+            await Assert.That(vm.SelectedPermissionMode).IsEqualTo(HomeViewModel.DefaultPermissionMode);
+
+            await vm.SelectRepositoryAsync("/repo/a");
+            await Assert.That(vm.SelectedPermissionMode).IsEqualTo(ClaudePermissionModes.BypassPermissions);
+
+            var fresh = Build(out _, out _, path);
+            await fresh.SelectRepositoryAsync("/repo/a");
+            await Assert.That(fresh.SelectedPermissionMode).IsEqualTo(ClaudePermissionModes.BypassPermissions);
+        });
+    }
+
+    /// A stored token the catalog does not know falls back to the default rather than riding a launch.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_unknown_stored_permission_mode_restores_the_default() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var vm = Build(out _, out var store, Tmp.PathTo("app-state.json"));
+            await store.UpdateAsync(s => s with {
+                PermissionModeByRepo = new Dictionary<string, string> { ["/repo/a"] = "yolo" } });
+
+            await vm.SelectRepositoryAsync("/repo/a");
+            await Assert.That(vm.SelectedPermissionMode).IsEqualTo(HomeViewModel.DefaultPermissionMode);
+        });
+    }
+
+    static AgentRow LocalRow(string repoPath) =>
+        AgentRow.FromLocal(WorkspaceFixtures.Agent("a1", "claude", false, repoPath), new RepoIdentity("path:" + repoPath, "repo"));
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_local_session_in_a_worktree_selects_its_main_repository() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            string main = Tmp.CreateDir("main");
+            string gitDir = Tmp.CreateDir("main", ".git", "worktrees", "wt");
+            string worktree = Tmp.CreateDir("wt");
+            Tmp.CreateFile(["wt", ".git"], $"gitdir: {gitDir}\n");
+            var vm = Build(out _, out _, Tmp.PathTo("app-state.json"));
+
+            await vm.SelectRepositoryOfAsync(LocalRow(worktree));
+
+            await Assert.That(vm.SelectedRepoPath).IsEqualTo(PlatformPaths.Normalize(main));
+        });
+    }
+
+    /// A server row's path names a directory on whichever machine ran it; one that is not here is not a pick.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_session_whose_path_is_not_on_this_machine_keeps_the_selection() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var vm = Build(out _, out _, Tmp.PathTo("app-state.json"));
+            await vm.SelectRepositoryAsync("/repo/a");
+
+            await vm.SelectRepositoryOfAsync(LocalRow(Tmp.PathTo("missing")) with { Origin = AgentOrigin.Server });
+
+            await Assert.That(vm.SelectedRepoPath).IsEqualTo("/repo/a");
+        });
+    }
+
+    [Test]
+    [Arguments("u1", true)]
+    [Arguments("someone-else", false)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_remote_session_selects_its_machine_and_repository_only_when_the_viewer_owns_the_machine(
+            string owner, bool adopted) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var daemon = new FakeDaemonClientService();
+            Connect(daemon);
+            var remote = new FakeRemoteAgents();
+            remote.DaemonsSubject.OnNext([Box(owner)]);
+            using var vm = new HomeViewModel(daemon, new AppStateStore(Tmp.PathTo("app-state.json")), new RecordingLaunchClient(),
+                Known(), TimeProvider.System, daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"));
+            await vm.SelectRepositoryAsync("/repo/a");
+
+            await vm.SelectRepositoryOfAsync(LocalRow("/srv/repo") with { Origin = AgentOrigin.Remote, MachineBadge = "box" });
+
+            await Assert.That(vm.RemoteMachineSelected).IsEqualTo(adopted);
+            await Assert.That(vm.SelectedRepoPath).IsEqualTo(adopted ? "/srv/repo" : "/repo/a");
         });
     }
 }

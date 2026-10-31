@@ -332,7 +332,7 @@ public partial class LauncherPaneView : UserControl {
             var token = mode.Token;
             var selected = string.Equals(vm.SelectedPermissionMode, token, StringComparison.Ordinal);
             rows.Children.Add(ChoiceRow(mode.Label, selected, () => {
-                vm.SelectedPermissionMode = token;
+                _ = vm.ChoosePermissionModeAsync(token);
                 flyout.Hide();
             }));
         }

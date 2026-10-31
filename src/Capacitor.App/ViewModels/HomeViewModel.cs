@@ -200,8 +200,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     }
 
     string _selectedPermissionMode = DefaultPermissionMode;
-    /// A ClaudePermissionModes token. Session-scoped like the effort and kept across vendor
-    /// changes; PermissionModeFor decides whether it rides a given launch.
+    /// A ClaudePermissionModes token, remembered per repository like the harness and kept across
+    /// vendor changes; PermissionModeFor decides whether it rides a given launch.
     public string SelectedPermissionMode {
         get => _selectedPermissionMode;
         set => this.RaiseAndSetIfChanged(ref _selectedPermissionMode, value);
@@ -1154,6 +1154,38 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         await _state.UpdateAsync(s => s with { HarnessByRepo = WithEntry(s.HarnessByRepo, repoPath, vendor) });
     }
 
+    /// Same persistence rule as ChooseHarnessAsync.
+    public async Task ChoosePermissionModeAsync(string mode) {
+        SelectedPermissionMode = mode;
+        if (RemoteMachineSelected) return;
+
+        var repoPath = SelectedRepoPath;
+        await _state.UpdateAsync(s => s with { PermissionModeByRepo = WithEntry(s.PermissionModeByRepo, repoPath, mode) });
+    }
+
+    static string KnownPermissionMode(string? token) =>
+        HostedHarnessCatalog.PermissionModes.Any(m => string.Equals(m.Token, token, StringComparison.Ordinal))
+            ? token! : DefaultPermissionMode;
+
+    /// Points the launcher at the repository of the session the user had open. A row on a machine
+    /// the viewer cannot launch on, or a server row whose path is not on this machine, changes nothing.
+    public async Task SelectRepositoryOfAsync(AgentRow row) {
+        if (row.RepoPath is not { Length: > 0 } path) return;
+
+        if (row.Origin == AgentOrigin.Remote) {
+            if (row.MachineBadge is not { Length: > 0 } machine) return;
+            bool OnMachine() => RemoteMachineSelected && string.Equals(SelectedMachine, machine, StringComparison.Ordinal);
+            if (!OnMachine()) await SelectMachineAsync(machine, isLocal: false);
+            if (OnMachine()) await SelectRepositoryAsync(path);
+            return;
+        }
+
+        var root = await Task.Run(() => Directory.Exists(path) ? PlatformPaths.Normalize(GitRepository.ResolveMainRepoRoot(path)) : "");
+        if (root.Length == 0) return;
+        if (RemoteMachineSelected) await SelectMachineAsync(_daemon.DaemonName, isLocal: true);
+        await SelectRepositoryAsync(root);
+    }
+
     /// The repository chip's menu, assembled per open rather than kept as a live projection — the
     /// flyout is transient, so reading at click time is always fresh with no extra subscription.
     /// Sources: remembered HarnessByRepo keys, distinct agent RepoPaths, the daemon's persisted
@@ -1440,6 +1472,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
         var saved = await _state.LoadAsync();
         SetVendor(Lookup(saved.HarnessByRepo, SelectedRepoPath) ?? DefaultVendor);
+        SelectedPermissionMode = KnownPermissionMode(Lookup(saved.PermissionModeByRepo, SelectedRepoPath));
         RevalidateVendor(Harnesses);
     }
 

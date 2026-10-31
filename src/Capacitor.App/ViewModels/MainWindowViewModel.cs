@@ -206,6 +206,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// the coordinator's close paths route through.
     public ReactiveCommand<Unit, Unit> CloseWorkspaceCommand { get; }
 
+    /// Closes the workspace like CloseWorkspaceCommand and points the launcher at the repository of
+    /// the session selected in the rail.
+    public ReactiveCommand<Unit, Unit> NewSessionCommand { get; }
+
     /// The header refresh on the open workspace. Disabled with no workspace, no session
     /// id, or a refresh the user already asked for still running — the same intervals the button is.
     public ReactiveCommand<Unit, Unit> RefreshWorkCommand { get; }
@@ -381,6 +385,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         Rail = rail;
         TenantName = ProfileLabelForRail(tenantName);
         CloseWorkspaceCommand = ReactiveCommand.Create(CloseWorkspace);
+        NewSessionCommand = ReactiveCommand.CreateFromTask(NewSessionAsync);
         var canRefreshWork = Observable.Switch(this.WhenAnyValue(x => x.CurrentWorkspace)
             .Select(CanRefreshOpenWork))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
@@ -725,6 +730,13 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// The coordinator's close paths. Before shutdown, even a close-to-hide with no workspace
     /// open must retire an in-flight launch's captured generation. Shutdown already released the
     /// workspace; its final window-close notification must not touch disposed dependencies.
+    async Task NewSessionAsync() {
+        var selected = Rail?.SelectedSessionKey is { } key && _directory?.Rows.Lookup(key) is { HasValue: true } row
+            ? row.Value : null;
+        CloseWorkspace();
+        if (selected is not null && Home is { } home) await home.SelectRepositoryOfAsync(selected);
+    }
+
     public void CloseWorkspace() {
         if (_shutdownLatched || _navigation.ShutdownLatched) return;
         SwapTo(null);

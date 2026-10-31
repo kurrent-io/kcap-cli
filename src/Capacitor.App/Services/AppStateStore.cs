@@ -33,6 +33,8 @@ public sealed record AppState(
     // Vendor id -> whether kcap's tools were last installed for it from Settings. Nothing on disk
     // says so, unlike hooks, so this is the only record of that answer.
     IReadOnlyDictionary<string, bool>? HarnessToolsByVendor = null,
+    // Absolute repo path -> ClaudePermissionModes token, keyed like HarnessByRepo.
+    IReadOnlyDictionary<string, string>? PermissionModeByRepo = null,
     // A setup attempt is unverified until its command and recording check both succeed.
     IReadOnlyList<string>? UnverifiedHarnessSetups = null);
 
