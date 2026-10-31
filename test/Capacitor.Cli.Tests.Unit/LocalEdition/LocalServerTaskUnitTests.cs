@@ -11,16 +11,19 @@ public class LocalServerTaskUnitTests {
         new(@"C:\Users\u\.kcap\local\bin\current\kcap-server.exe", new LocalRoot(root), 51234);
 
     const string Wrapper = @"C:\Users\u\.config\kcap\kcap-local.cmd";
+    const string Marker  = @"C:\Users\u\.config\kcap\kcap-local.stop";
 
+    /// <summary>A stop ends only the task's conhost, so the marker is what keeps the loop from launching again.</summary>
     [Test]
-    public async Task The_wrapper_runs_the_server_into_its_log_and_relaunches_it_only_after_a_failure() {
+    public async Task The_wrapper_runs_the_server_into_its_log_and_relaunches_it_only_after_a_failure_and_no_stop() {
         var unit  = Unit();
-        var lines = LocalServerTaskUnit.Wrapper(unit).Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
+        var lines = LocalServerTaskUnit.Wrapper(unit, Marker).Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
 
         await Assert.That(lines).Contains(@"set ""KCAP_LOCAL_ROOT=C:\Users\u\.kcap\local""");
         await Assert.That(lines).Contains(@"set ""Local__Port=51234""");
         await Assert.That(lines[Array.IndexOf(lines, ":run")..]).IsEquivalentTo(new[] {
             ":run",
+            $@"if exist ""{Marker}"" exit /b 0",
             $@"""{unit.ServerBinary}"" >>""{unit.OutputLog}"" 2>&1",
             "if %ERRORLEVEL% EQU 0 exit /b 0",
             $@"call ""%SystemRoot%\System32\PING.EXE"" -n {WindowsTaskUnit.RelaunchPauseSeconds + 1} 127.0.0.1 >nul",
@@ -31,7 +34,7 @@ public class LocalServerTaskUnitTests {
     /// <summary>The owner is read back from the wrapper, so a root that needs escaping must survive the round trip.</summary>
     [Test]
     public async Task The_root_reads_back_from_the_wrapper_with_a_percent_in_it() {
-        var env = WindowsTaskUnit.EnvFromWrapper(LocalServerTaskUnit.Wrapper(Unit(@"C:\Users\a%PATH%b\local")));
+        var env = WindowsTaskUnit.EnvFromWrapper(LocalServerTaskUnit.Wrapper(Unit(@"C:\Users\a%PATH%b\local"), Marker));
 
         await Assert.That(env[LocalRoot.EnvVar]).IsEqualTo(@"C:\Users\a%PATH%b\local");
     }
@@ -40,7 +43,7 @@ public class LocalServerTaskUnitTests {
     public async Task A_value_the_wrapper_cannot_carry_is_refused_naming_setup() {
         var unit = Unit() with { Embedding = LocalEmbeddingSetting.Ollama("nomic\"&calc") };
 
-        await Assert.That(() => LocalServerTaskUnit.Wrapper(unit)).Throws<InvalidOperationException>().WithMessageContaining("kcap setup --local");
+        await Assert.That(() => LocalServerTaskUnit.Wrapper(unit, Marker)).Throws<InvalidOperationException>().WithMessageContaining("kcap setup --local");
     }
 
     [Test]

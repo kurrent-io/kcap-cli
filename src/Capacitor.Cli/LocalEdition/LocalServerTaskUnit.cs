@@ -29,7 +29,11 @@ static class LocalServerTaskUnit {
 
     public static string XmlPath(UserHome home, LocalServerUnit unit) => Path.ChangeExtension(WrapperPath(home, unit), ".task.xml");
 
-    public static string Wrapper(LocalServerUnit unit) {
+    /// <summary>Present from a stop until the next start. Ending the task ends only its conhost; the wrapper's cmd lives
+    /// on and would relaunch the server, so the wrapper checks this before every launch.</summary>
+    public static string StopMarkerPath(UserHome home, LocalServerUnit unit) => Path.ChangeExtension(WrapperPath(home, unit), ".stop");
+
+    public static string Wrapper(LocalServerUnit unit, string stopMarker) {
         var sb = new StringBuilder();
         sb.Append("@echo off\r\n");
         // cmd decodes the file line by line in the console code page; both lines above the first non-ASCII one are ASCII.
@@ -44,6 +48,7 @@ static class LocalServerTaskUnit {
         // A variable named ERRORLEVEL would shadow cmd's dynamic exit code.
         sb.Append("set \"ERRORLEVEL=\"\r\n");
         sb.Append(":run\r\n");
+        sb.Append($"if exist {WindowsTaskUnit.ExecValue("the stop marker path", stopMarker, Rerun)} exit /b 0\r\n");
         var server = WindowsTaskUnit.ExecValue("the server path", unit.ServerBinary, Rerun);
         var log    = WindowsTaskUnit.ExecValue("the server log path", unit.OutputLog, Rerun);
         sb.Append($"{server} >>{log} 2>&1\r\n");

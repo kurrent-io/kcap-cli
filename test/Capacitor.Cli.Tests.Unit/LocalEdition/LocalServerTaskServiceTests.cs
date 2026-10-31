@@ -17,6 +17,10 @@ public class LocalServerTaskServiceTests {
 
     string WrapperPath => LocalServerTaskUnit.WrapperPath(Home, Unit);
 
+    string StopMarker => LocalServerTaskUnit.StopMarkerPath(Home, Unit);
+
+    string WrapperText => LocalServerTaskUnit.Wrapper(Unit, StopMarker);
+
     /// <summary>Records every schtasks call; a call not given a result succeeds, except that the task is not
     /// registered: its queries fail and the listing leaves it out.</summary>
     sealed class Schtasks {
@@ -56,7 +60,7 @@ public class LocalServerTaskServiceTests {
             $"/Create /TN kcap-local /XML {LocalServerTaskUnit.XmlPath(Home, Unit)} /F",
             "/Run /TN kcap-local",
         }, CollectionOrdering.Matching);
-        await Assert.That(File.ReadAllText(WrapperPath)).IsEqualTo(LocalServerTaskUnit.Wrapper(Unit));
+        await Assert.That(File.ReadAllText(WrapperPath)).IsEqualTo(WrapperText);
         await Assert.That(File.Exists(LocalServerTaskUnit.XmlPath(Home, Unit))).IsFalse();
     }
 
@@ -81,7 +85,7 @@ public class LocalServerTaskServiceTests {
 
         service.Install(Unit);
 
-        await Assert.That(order).IsEquivalentTo(new[] { "break 4242", "/End", "write .cmd", "write .xml", "/Create", "/Run" },
+        await Assert.That(order).IsEquivalentTo(new[] { "write .stop", "break 4242", "/End", "write .cmd", "write .xml", "/Create", "/Run" },
             CollectionOrdering.Matching);
     }
 
@@ -109,6 +113,28 @@ public class LocalServerTaskServiceTests {
         await Assert.That(schtasks.Calls).Contains("/End /TN kcap-local");
     }
 
+    /// <summary>The server lets go of the root before its process exits, so a stack that reads down is not yet a server
+    /// that has finished.</summary>
+    [Test]
+    public async Task The_task_is_ended_only_once_the_servers_process_has_exited() {
+        var exitingFor = 3;
+        var aliveAtEnd = (bool?)null;
+        var broken     = false;
+        int? Server(LocalServerUnit _) => !broken || exitingFor-- > 0 ? 4242 : null;
+
+        var service = new LocalServerTaskService(Home, TimeProvider.System, args => {
+            if (args[0] == "/End") aliveAtEnd = exitingFor > 0;
+            return new Schtasks().Run(args);
+        }, Write, _ => null, Server, _ => {
+            broken = true;
+            return null;
+        });
+
+        await service.StopAsync(Unit, CancellationToken.None);
+
+        await Assert.That(aliveAtEnd).IsFalse();
+    }
+
     /// <summary>Ending the task without the break would close the console under the server before it stops Postgres.</summary>
     [Test]
     public async Task A_server_that_cannot_be_asked_to_stop_is_a_failed_stop_and_the_task_is_not_ended() {
@@ -134,17 +160,35 @@ public class LocalServerTaskServiceTests {
     [Test]
     public async Task Uninstall_removes_the_task_and_its_wrapper() {
         var schtasks = new Schtasks();
-        Write(WrapperPath, LocalServerTaskUnit.Wrapper(Unit));
+        Write(WrapperPath, WrapperText);
 
         await Service(schtasks).UninstallAsync(Unit, CancellationToken.None);
 
         await Assert.That(schtasks.Calls).Contains("/Delete /TN kcap-local /F");
         await Assert.That(File.Exists(WrapperPath)).IsFalse();
+        await Assert.That(File.Exists(StopMarker)).IsFalse();
+    }
+
+    /// <summary>Ending the task leaves the wrapper's cmd running, so only the marker keeps it from launching again.</summary>
+    [Test]
+    public async Task A_stop_marks_the_wrapper_stopped_before_the_break_and_a_start_clears_it() {
+        var markedAtBreak = false;
+        var service = Service(new Schtasks(), _ => markedAtBreak ? null : 4242, _ => {
+            markedAtBreak = File.Exists(StopMarker);
+            return null;
+        });
+
+        await service.StopAsync(Unit, CancellationToken.None);
+        await Assert.That(markedAtBreak).IsTrue();
+        await Assert.That(File.Exists(StopMarker)).IsTrue();
+
+        service.Start(Unit);
+        await Assert.That(File.Exists(StopMarker)).IsFalse();
     }
 
     [Test]
     public async Task The_owner_is_the_root_the_wrapper_the_task_runs_names() {
-        Write(WrapperPath, LocalServerTaskUnit.Wrapper(Unit));
+        Write(WrapperPath, WrapperText);
         var schtasks = new Schtasks { Results = { ["/Query /TN kcap-local /XML"] = (0, LocalServerTaskUnit.TaskXml(Unit, WrapperPath, @"CORP\u"), "") } };
 
         var owner = Service(schtasks).Owner(Unit);
@@ -185,6 +229,10 @@ public class LocalServerTaskServiceTests {
         await Assert.That(Read(LocalServerTaskUnit.TerminatedResult)).IsEqualTo(UnitActivity.Stopped.Instance);
         await Assert.That(Read(0)).IsEqualTo(new UnitActivity.Exited(0));
         await Assert.That(Service(new Schtasks()).Activity(Unit)).IsEqualTo(UnitActivity.Stopped.Instance);
+
+        // The wrapper ends cleanly after a stop, which is a stop, not the server's own exit.
+        Write(StopMarker, "");
+        await Assert.That(Read(0)).IsEqualTo(UnitActivity.Stopped.Instance);
     }
 
     [Test]
@@ -201,5 +249,15 @@ public class LocalServerTaskServiceTests {
 
         await Assert.That(LocalServerTaskService.TaskServer(table, Image, binary)).IsEqualTo(12);
         await Assert.That(LocalServerTaskService.TaskServer(table.Where(p => p.Key is not (10 or 11 or 12)).ToDictionary(), Image, binary)).IsNull();
+    }
+
+    /// <summary>The OS reports the image with <c>bin\current</c> resolved, and a server started before an upgrade moved
+    /// it runs the previous version.</summary>
+    [Test]
+    public async Task A_task_server_running_another_version_under_this_root_is_still_its_server() {
+        var exe   = Path.GetFileName(Unit.ServerBinary);
+        var table = new Dictionary<int, WindowsProcessEntry> { [10] = new(1, "conhost.exe"), [11] = new(10, "cmd.exe"), [12] = new(11, exe) };
+
+        await Assert.That(LocalServerTaskService.TaskServer(table, _ => Tmp.PathTo($"local/bin/1.2.0/{exe}"), Unit.ServerBinary)).IsEqualTo(12);
     }
 }

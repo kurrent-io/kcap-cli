@@ -13,7 +13,8 @@ namespace Capacitor.Cli.LocalEdition;
 ///
 /// <para>A stop is a Ctrl+Break on the task's console, which the server takes as a graceful shutdown and Postgres,
 /// on a console of its own, never sees. <c>schtasks /End</c> alone would close that console under the server and end
-/// it before it stops Postgres. cmd outlives the break, so the task is ended once the stack is down.</para>
+/// it before it stops Postgres. Ending the task ends only its conhost, never the wrapper's cmd, so a stop first leaves a
+/// marker the wrapper checks before every launch.</para>
 /// </summary>
 sealed class LocalServerTaskService(
     UserHome home,
@@ -28,6 +29,11 @@ sealed class LocalServerTaskService(
     static readonly TimeSpan StopBudget = TimeSpan.FromSeconds(90);
 
     static readonly TimeSpan BreakBudget = TimeSpan.FromSeconds(15);
+
+    /// <summary>From the stack going down to the server's process exiting; past it, the task is ended regardless.</summary>
+    static readonly TimeSpan ExitBudget = TimeSpan.FromSeconds(15);
+
+    static readonly TimeSpan ExitPollGap = TimeSpan.FromMilliseconds(250);
 
     readonly Func<string[], (int ExitCode, string StdOut, string StdErr)> _schtasks = schtasks ?? (args => ServiceProcess.Run("schtasks", args));
     readonly UnitFileWriter _writeUnit = writeUnit ?? ((path, content, encoding) => ServiceFiles.WriteOwnerOnly(path, content, encoding, durable: true, home: home));
@@ -88,6 +94,7 @@ sealed class LocalServerTaskService(
                 : new UnitActivity.Unknown($"schtasks /Query of {unit.TaskName} failed (exit {exit}): {err.Trim()}");
 
         return LocalServerTaskUnit.LastResult(query) switch {
+            _ when File.Exists(StopMarker(unit)) => UnitActivity.Stopped.Instance,
             // The wrapper is up and the server is not: between a failure and its relaunch, or not yet started.
             LocalServerTaskUnit.RunningResult => new UnitActivity.Restarting(null),
             null or LocalServerTaskUnit.NeverRunResult or LocalServerTaskUnit.TerminatedResult => UnitActivity.Stopped.Instance,
@@ -103,7 +110,7 @@ sealed class LocalServerTaskService(
 
         var wrapper  = LocalServerTaskUnit.WrapperPath(home, unit);
         var previous = File.Exists(wrapper) ? File.ReadAllText(wrapper) : null;
-        _writeUnit(wrapper, LocalServerTaskUnit.Wrapper(unit), WindowsScheduledTaskServiceManager.WrapperEncoding);
+        _writeUnit(wrapper, LocalServerTaskUnit.Wrapper(unit, StopMarker(unit)), WindowsScheduledTaskServiceManager.WrapperEncoding);
 
         var xml = LocalServerTaskUnit.XmlPath(home, unit);
         _writeUnit(xml, LocalServerTaskUnit.TaskXml(unit, wrapper), Encoding.Unicode);
@@ -119,7 +126,14 @@ sealed class LocalServerTaskService(
             throw Failed(LocalServerTaskUnit.CreateArgs(unit, xml), exit, err);
         }
 
+        ClearStop(unit);
         Check(LocalServerTaskUnit.RunArgs(unit));
+    }
+
+    string StopMarker(LocalServerUnit unit) => LocalServerTaskUnit.StopMarkerPath(home, unit);
+
+    void ClearStop(LocalServerUnit unit) {
+        if (File.Exists(StopMarker(unit))) File.Delete(StopMarker(unit));
     }
 
     bool Running(LocalServerUnit unit) =>
@@ -127,6 +141,7 @@ sealed class LocalServerTaskService(
      || _schtasks(LocalServerTaskUnit.QueryArgs(unit)) is (0, var query, _) && LocalServerTaskUnit.LastResult(query) == LocalServerTaskUnit.RunningResult;
 
     public void Start(LocalServerUnit unit) {
+        ClearStop(unit);
         Check(LocalServerTaskUnit.EnableArgs(unit));
         Check(LocalServerTaskUnit.RunArgs(unit));
     }
@@ -138,13 +153,19 @@ sealed class LocalServerTaskService(
         await Stop(unit, ct);
     }
 
-    /// <summary>Breaks the server, waits for the stack to go down, then ends whatever the task still runs: the wrapper
-    /// after a break, or one pausing before a relaunch.</summary>
+    /// <summary>Marks the stop so the wrapper launches nothing more, breaks the server, waits for the stack to go down,
+    /// then ends the task's console.</summary>
     async Task Stop(LocalServerUnit unit, CancellationToken ct) {
+        _writeUnit(StopMarker(unit), "", null);
+
         if (_findServer(unit) is { } pid && _breakConsole(pid) is { } error)
             throw new LocalLifecycleException($"The local server (pid {pid}) could not be asked to stop: {error}");
 
         await LocalStackProbe.WaitUntilDownAsync(unit.Root, StopBudget, time, ct, findLive);
+
+        // The server lets go of the root before its process exits, and ending the task under it would cut that short.
+        var deadline = time.GetUtcNow() + ExitBudget;
+        while (_findServer(unit) is not null && time.GetUtcNow() < deadline) await Task.Delay(ExitPollGap, time, ct);
 
         var (exit, _, err) = _schtasks(LocalServerTaskUnit.EndArgs(unit));
         // /End fails for a task that is not running; only one still running, or one that cannot be read, is a failure.
@@ -160,10 +181,11 @@ sealed class LocalServerTaskService(
         var (exit, _, err) = _schtasks(LocalServerTaskUnit.DeleteArgs(unit));
         if (exit != 0 && !ConfirmedAbsent(unit)) throw Failed(LocalServerTaskUnit.DeleteArgs(unit), exit, err);
 
-        var wrapper = LocalServerTaskUnit.WrapperPath(home, unit);
-        if (File.Exists(wrapper)) {
-            File.Delete(wrapper);
-            FaultPoints.Hit($"unlink:{wrapper}");
+        foreach (var file in new[] { LocalServerTaskUnit.WrapperPath(home, unit), StopMarker(unit) }) {
+            if (!File.Exists(file)) continue;
+
+            File.Delete(file);
+            FaultPoints.Hit($"unlink:{file}");
         }
     }
 
@@ -175,18 +197,23 @@ sealed class LocalServerTaskService(
     static LocalLifecycleException Failed(string[] args, int exit, string err) =>
         new($"schtasks {string.Join(' ', args)} failed (exit {exit}): {err.Trim()}");
 
-    /// <summary>The server the task runs: this unit's binary under the wrapper's cmd, under the task's conhost. A server
+    /// <summary>The server the task runs: this root's binary under the wrapper's cmd, under the task's conhost. A server
     /// started by hand has neither above it, and one serving another root runs another binary.</summary>
+    /// <remarks>The OS reports an image path with links resolved, so <c>bin\current</c> never appears in it: the image
+    /// is this unit's binary resolved, or any version under this root's <c>bin</c>, which a server started before an
+    /// upgrade moved <c>current</c> still runs.</remarks>
     internal static int? TaskServer(IReadOnlyDictionary<int, WindowsProcessEntry> table, Func<int, string?> imagePath, string serverBinary) {
-        var expected = Path.GetFullPath(serverBinary);
+        var expected = CanonicalPath.Resolve(serverBinary);
+        var bin      = Path.GetDirectoryName(Path.GetDirectoryName(serverBinary))!;
 
         foreach (var (pid, entry) in table) {
-            if (!IsImage(entry, Path.GetFileName(expected))
+            if (!IsImage(entry, Path.GetFileName(serverBinary))
              || !table.TryGetValue(entry.ParentPid, out var wrapper) || !IsImage(wrapper, "cmd.exe")
              || !table.TryGetValue(wrapper.ParentPid, out var host) || !IsImage(host, "conhost.exe"))
                 continue;
 
-            if (imagePath(pid) is { } path && string.Equals(Path.GetFullPath(path), expected, StringComparison.OrdinalIgnoreCase)) return pid;
+            if (imagePath(pid) is { } path && (PathComparison.Equal(CanonicalPath.Resolve(path), expected) || CanonicalPath.IsWithin(path, bin)))
+                return pid;
         }
 
         return null;

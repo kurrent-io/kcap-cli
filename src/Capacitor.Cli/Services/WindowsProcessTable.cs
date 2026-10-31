@@ -26,13 +26,15 @@ static unsafe partial class WindowsProcessTable {
         return table;
     }
 
-    /// <summary>The path the process's image was opened by, a link in it unresolved; null when the process is gone or
-    /// not this user's to query.</summary>
+    /// <summary>The live process's image path, with links resolved; null when the process is not this user's to query
+    /// or has exited. An exited process stays in a snapshot, image and all, while anything holds a handle to it.</summary>
     public static string? ImagePath(int pid) {
-        var process = OpenProcess(QueryLimitedInformation, false, (uint)pid);
+        var process = OpenProcess(QueryLimitedInformation | Synchronize, false, (uint)pid);
         if (process == 0) return null;
 
         try {
+            if (WaitForSingleObject(process, 0) != WaitTimeout) return null;
+
             var buffer = new char[MaxPath];
             var size   = (uint)buffer.Length;
             fixed (char* chars = buffer)
@@ -43,6 +45,8 @@ static unsafe partial class WindowsProcessTable {
     }
 
     const uint QueryLimitedInformation = 0x1000;
+    const uint Synchronize             = 0x00100000;
+    const uint WaitTimeout             = 0x102;
     const int  MaxPath                 = 32768;
 
     const uint SnapProcess = 0x00000002;
@@ -79,6 +83,9 @@ static unsafe partial class WindowsProcessTable {
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     private static partial nint OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint processId);
+
+    [LibraryImport("kernel32.dll")]
+    private static partial uint WaitForSingleObject(nint handle, uint milliseconds);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
