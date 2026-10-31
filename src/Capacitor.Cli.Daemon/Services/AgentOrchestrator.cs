@@ -890,6 +890,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _logger            = logger;
         _consentGate       = consentGate;
         _statusNotifier    = statusNotifier ?? new();
+        if (accounts is not null) accounts.Changed += OnAccountsChanged;
         _subagentExpiry    = _time.CreateTimer(
             _ => RescheduleSubagentExpiry(announce: false), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         _quietTurn = _time.CreateTimer(
@@ -1743,6 +1744,24 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <summary>The host's accounts as last published; the per-account catalogs follow it.</summary>
     internal Func<AccountsSnapshotDto?> AccountsSnapshot { get; set; }
 
+    /// <summary>The label the registry gives <paramref name="accountId"/> now; <paramref name="launchLabel"/>
+    /// when the snapshot has no such row.</summary>
+    string? CurrentAccountLabel(string? accountId, string? launchLabel) =>
+        accountId is not null && AccountsSnapshot()?.Accounts.FirstOrDefault(a => string.Equals(a.Id, accountId, StringComparison.Ordinal)) is { } row
+            ? row.Label
+            : launchLabel;
+
+    (string Id, string Label)[]? _accountLabels;
+
+    /// <summary>Status rows carry <see cref="CurrentAccountLabel"/>, so a relabel must wake status subscribers.
+    /// Only a label change pulses: reading updates republish the snapshot every few seconds.</summary>
+    internal void OnAccountsChanged(AccountsSnapshotDto snapshot) {
+        (string Id, string Label)[] labels = [.. snapshot.Accounts.Select(a => (a.Id, a.Label))];
+        var previous = _accountLabels;
+        _accountLabels = labels;
+        if (previous is null || !previous.SequenceEqual(labels)) _statusNotifier.Pulse();
+    }
+
     readonly AccountReadingSink? _readings;
 
     /// <summary>
@@ -2163,7 +2182,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 LaunchStage:  a.Status == "Starting" ? a.ActivityClock.LaunchStage : null,
                 AccountDirectory: a.Account?.Directory,
                 AccountId:        a.Account?.AccountId,
-                AccountLabel:     a.Account?.Label))
+                AccountLabel:     CurrentAccountLabel(a.Account?.AccountId, a.Account?.Label)))
             .ToList();
 
         foreach (var p in _pendingLaunches.Values) {
@@ -2179,7 +2198,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 LaunchStage:  p.ActivityClock.LaunchStage,
                 AccountDirectory: p.Account?.Directory,
                 AccountId:        p.Account?.AccountId,
-                AccountLabel:     p.Account?.Label));
+                AccountLabel:     CurrentAccountLabel(p.Account?.AccountId, p.Account?.Label)));
         }
 
         return live;
@@ -5373,7 +5392,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         if (agent.IsPrivate) return AgentRegisteredResponse.Accepted;
 
         var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle, agent.ContinuesAgentId,
-            agent.Account?.Directory, agent.Account?.AccountId, agent.Account?.Label);
+            agent.Account?.Directory, agent.Account?.AccountId, CurrentAccountLabel(agent.Account?.AccountId, agent.Account?.Label));
 
         if (!registration.Registered) {
             agent.RegistrationRefused = true;
@@ -5872,7 +5891,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             for (var attempt = 1; ; attempt++) {
                 try {
                     var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle, agent.ContinuesAgentId,
-                        agent.Account?.Directory, agent.Account?.AccountId, agent.Account?.Label);
+                        agent.Account?.Directory, agent.Account?.AccountId, CurrentAccountLabel(agent.Account?.AccountId, agent.Account?.Label));
 
                     // A refusal is the server's answer, not a transient failure: it is not retried, and the agent is
                     // left out of later re-registrations too. A status sent for the refused id could clear the

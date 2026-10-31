@@ -37,7 +37,13 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
     public readonly Queue<Func<PullRequestSubjectDto, CancellationToken, Task<PullRequestRead<PullRequestOverviewDto>>>> OverviewResponses = new();
     public readonly List<CancellationToken> OverviewTokens = [];
     public PullRequestCapabilityKind Capability = PullRequestCapabilityKind.Supported;
-    public Task<PullRequestCapability> DiscoverAsync(bool refresh, CancellationToken ct) => Task.FromResult(new PullRequestCapability(Capability, 1));
+    /// The backoff a failed discovery hands back, as the server source does after an unreachable server.
+    public DateTime? CapabilityRetryAt;
+    public int Discoveries;
+    public Task<PullRequestCapability> DiscoverAsync(bool refresh, CancellationToken ct) {
+        Interlocked.Increment(ref Discoveries);
+        return Task.FromResult(new PullRequestCapability(Capability, 1, RetryAt: CapabilityRetryAt));
+    }
     public void ResetSession(string sessionId) { Resets++; }
     public async Task<PullRequestRead<PullRequestLinkListDto>> ListAsync(string sessionId, CancellationToken ct) {
         Lists++;

@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -6,6 +7,7 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Capture;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Harness.Cursor;
 
@@ -65,14 +67,17 @@ static class SessionImporter {
         // subagent_type from the parent Task-tool invocation (for canonical fidelity).
         Dictionary<string, int>     agentFirstLine;
         Dictionary<string, string?> agentTypes;
+        Dictionary<string, string>  spawnCalls;
 
         if (isCodex) {
             agentFirstLine = new Dictionary<string, int>(StringComparer.Ordinal);
             agentTypes     = new Dictionary<string, string?>(StringComparer.Ordinal);
+            spawnCalls     = new Dictionary<string, string>(StringComparer.Ordinal);
         } else {
             var scan = ScanAgentLifecycle(transcriptPath);
             agentFirstLine = scan.FirstLineByAgent;
             agentTypes     = scan.AgentTypeByAgent;
+            spawnCalls     = scan.SpawnCallByAgent;
         }
 
         // Track which agents were sent inline
@@ -99,7 +104,8 @@ static class SessionImporter {
 
                     // Send agent lifecycle: start → transcript → stop
                     agentTypes.TryGetValue(agentId, out var agentType);
-                    await SendAgentLifecycle(httpClient, baseUrl, sessionId, agentId, agentType, agentPath, cwd, transcriptPath, progress, time);
+                    await SendAgentLifecycle(httpClient, baseUrl, sessionId, agentId, agentType, spawnCalls.GetValueOrDefault(agentId),
+                        agentPath, cwd, transcriptPath, progress, time);
                     sentAgents.Add(agentId);
                     agentIds.Add(agentId);
                 }
@@ -127,7 +133,8 @@ static class SessionImporter {
         foreach (var (agentId, agentPath) in agentTranscripts) {
             if (!sentAgents.Contains(agentId)) {
                 agentTypes.TryGetValue(agentId, out var agentType);
-                await SendAgentLifecycle(httpClient, baseUrl, sessionId, agentId, agentType, agentPath, cwd, transcriptPath, progress, time);
+                await SendAgentLifecycle(httpClient, baseUrl, sessionId, agentId, agentType, spawnCalls.GetValueOrDefault(agentId),
+                    agentPath, cwd, transcriptPath, progress, time);
                 sentAgents.Add(agentId);
                 agentIds.Add(agentId);
             }
@@ -144,7 +151,7 @@ static class SessionImporter {
         // lets chat/trace nest it), strict transcript delivery, and no subagent-stop after a
         // failed tail — a re-import retries (deterministic event ids make that idempotent).
         if (isCodex) {
-            var spawnCalls = CodexSubagentDiscovery.ReadSpawnCalls(transcriptPath);
+            var codexSpawnCalls = CodexSubagentDiscovery.ReadSpawnCalls(transcriptPath);
 
             foreach (var sub in CodexSubagentDiscovery.EnumerateDescendantRollouts(transcriptPath, sessionId)) {
                 var subType    = CodexSubagentDiscovery.AgentTypeFrom(sub.AgentPath, sub.AgentNickname);
@@ -152,7 +159,7 @@ static class SessionImporter {
 
                 if (!await PostSubagentHookAsync(httpClient, baseUrl, "subagent-start",
                         CodexSubagentDiscovery.BuildStartPayload(sessionId, subAgentId, subType, sub.FilePath,
-                            CodexSubagentDiscovery.SpawnCallFor(spawnCalls, sub.AgentPath)), time)) {
+                            CodexSubagentDiscovery.SpawnCallFor(codexSpawnCalls, sub.AgentPath)), time)) {
                     continue;
                 }
 
@@ -199,12 +206,14 @@ static class SessionImporter {
     }
 
     /// <summary>
-    /// Result of a single-pass transcript scan that resolves both the interleave
-    /// position and the subagent type for every agent referenced from the parent.
+    /// Result of a single-pass transcript scan that resolves the interleave position and the
+    /// subagent type for every agent referenced from the parent, and the Agent/Task call that
+    /// spawned each agent the evidence ties to exactly one call.
     /// </summary>
     internal sealed record AgentLifecycleScan(
             Dictionary<string, int>     FirstLineByAgent,
-            Dictionary<string, string?> AgentTypeByAgent
+            Dictionary<string, string?> AgentTypeByAgent,
+            Dictionary<string, string>  SpawnCallByAgent
         );
 
     /// <summary>
@@ -236,6 +245,7 @@ static class SessionImporter {
         // toolUseResult.agentId entries, carrying the subagent_type through.
         var toolUsePositions = new Dictionary<string, int>(StringComparer.Ordinal);
         var toolUseTypes     = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var links            = new List<(string AgentId, string CallId)>();
 
         try {
             using var fs     = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
@@ -245,7 +255,7 @@ static class SessionImporter {
 
             while (reader.ReadLine() is { } line) {
                 if (!string.IsNullOrWhiteSpace(line)) {
-                    TryExtractAgentReference(line, lineIndex, firstLine, toolUsePositions, toolUseTypes, agentTypes);
+                    TryExtractAgentReference(line, lineIndex, firstLine, toolUsePositions, toolUseTypes, agentTypes, links);
                 }
 
                 lineIndex++;
@@ -254,7 +264,38 @@ static class SessionImporter {
             // Best effort — if we can't scan, agents will be sent at the end
         }
 
-        return new AgentLifecycleScan(firstLine, agentTypes);
+        // The meta file Claude Code writes beside each subagent transcript names the call that
+        // started it, which ties the agent to its call when the parent's result does not.
+        foreach (var (toolUseId, agentId) in ClaudeSubagentFiles.Starts(transcriptPath, FrozenSet<string>.Empty))
+            links.Add((agentId, toolUseId));
+
+        var spawnCalls = SpawnCalls(links, toolUsePositions);
+
+        foreach (var (agentId, callId) in spawnCalls) {
+            firstLine.TryAdd(agentId, toolUsePositions[callId]);
+            if (toolUseTypes.TryGetValue(callId, out var subagentType)) agentTypes.TryAdd(agentId, subagentType);
+        }
+
+        return new AgentLifecycleScan(firstLine, agentTypes, spawnCalls);
+    }
+
+    /// <summary>
+    /// Each agent paired with the Agent/Task call this transcript holds for it, when every piece of
+    /// evidence names that one call and the call names no other agent. Anything less stays
+    /// unpaired: a wrong pairing would open one subagent's transcript from another's row.
+    /// </summary>
+    static Dictionary<string, string> SpawnCalls(List<(string AgentId, string CallId)> links, Dictionary<string, int> toolUsePositions) {
+        // A link to a call this transcript does not hold still disagrees, so it is checked before that filter.
+        var distinct = links.Distinct().ToList();
+        var paired   = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var group in distinct.GroupBy(l => l.AgentId, StringComparer.Ordinal)) {
+            var calls = group.Select(l => l.CallId).Distinct(StringComparer.Ordinal).ToList();
+            if (calls.Count == 1 && toolUsePositions.ContainsKey(calls[0]) && distinct.Count(l => l.CallId == calls[0]) == 1)
+                paired[group.Key] = calls[0];
+        }
+
+        return paired;
     }
 
     /// <summary>
@@ -270,7 +311,8 @@ static class SessionImporter {
             Dictionary<string, int>     result,
             Dictionary<string, int>     toolUsePositions,
             Dictionary<string, string?> toolUseTypes,
-            Dictionary<string, string?> agentTypes
+            Dictionary<string, string?> agentTypes,
+            List<(string AgentId, string CallId)> links
         ) {
         try {
             using var doc  = JsonDocument.Parse(line);
@@ -287,11 +329,11 @@ static class SessionImporter {
 
                     break;
                 case "result":
-                    TryExtractFromAsyncLaunched(root, lineIndex, result, toolUsePositions, toolUseTypes, agentTypes);
+                    TryExtractFromAsyncLaunched(root, lineIndex, result, toolUsePositions, toolUseTypes, agentTypes, links);
 
                     break;
                 case "user":
-                    TryExtractFromToolUseResult(root, lineIndex, result, toolUsePositions, toolUseTypes, agentTypes);
+                    TryExtractFromToolUseResult(root, lineIndex, result, toolUsePositions, toolUseTypes, agentTypes, links);
 
                     break;
             }
@@ -358,7 +400,8 @@ static class SessionImporter {
             Dictionary<string, int>     result,
             Dictionary<string, int>     toolUsePositions,
             Dictionary<string, string?> toolUseTypes,
-            Dictionary<string, string?> agentTypes
+            Dictionary<string, string?> agentTypes,
+            List<(string AgentId, string CallId)> links
         ) {
         var tr = root.Obj("tool_result");
 
@@ -371,6 +414,8 @@ static class SessionImporter {
             return;
 
         var toolUseId = root.Str("tool_use_id");
+
+        if (toolUseId is not null) links.Add((agentId, toolUseId));
 
         // Always try to propagate subagent_type — an earlier agent_progress reference
         // may already have locked in FirstLineByAgent, but this can still be our first
@@ -400,7 +445,8 @@ static class SessionImporter {
             Dictionary<string, int>     result,
             Dictionary<string, int>     toolUsePositions,
             Dictionary<string, string?> toolUseTypes,
-            Dictionary<string, string?> agentTypes
+            Dictionary<string, string?> agentTypes,
+            List<(string AgentId, string CallId)> links
         ) {
         var tur = root.Obj("toolUseResult");
 
@@ -423,6 +469,8 @@ static class SessionImporter {
                 if (block.Str("type") != "tool_result"
                  || block.Str("tool_use_id") is not { } toolUseId)
                     continue;
+
+                links.Add((agentId, toolUseId));
 
                 if (!alreadyPositioned && toolUsePositions.TryGetValue(toolUseId, out var toolUsePos))
                     position = toolUsePos;
@@ -455,6 +503,7 @@ static class SessionImporter {
             string                     sessionId,
             string                     agentId,
             string?                    agentType,
+            string?                    spawnCallId,
             string                     agentPath,
             string                     cwd,
             string                     sessionTranscriptPath,
@@ -472,6 +521,9 @@ static class SessionImporter {
             ["agent_id"]        = agentId,
             ["agent_type"]      = resolvedAgentType
         };
+
+        // Names the call that started the agent, so the server can seat the start at it and link the two.
+        if (spawnCallId is not null) agentStartHook["spawn_call_id"] = spawnCallId;
 
         try {
             using var agentStartContent = new StringContent(agentStartHook.ToJsonString(), Encoding.UTF8, "application/json");

@@ -489,7 +489,7 @@ partial class WatchCommand(
         state.LastActivityAt = time.GetUtcNow();
 
         var titleStore = HarnessTitleStores.For(vendor, agentId, sessionId, transcriptPath, harnesses, accounts.TryLoad(), home);
-        if (vendor == "codex" && CodexRolloutReadings.For(accounts, transcriptPath, sessionId, home) is { } codexReadings) state.ObserveCodexReadings = lines => codexReadings.Observe(lines);
+        if (vendor == "codex" && CodexRolloutReadings.For(accounts, transcriptPath, home) is { } codexReadings) state.ObserveCodexReadings = lines => codexReadings.Observe(lines);
         if (titleStore is not null) state.TitleTracker = new HarnessTitleTracker(titleStore.RecordsChangeTime);
 
         // Task 11 (D0) — one runtime rewrite-guard instance for this watcher's whole
@@ -612,26 +612,8 @@ partial class WatchCommand(
         }
 
 
-        // Antigravity posts /hooks/session-start BEFORE the watcher spawns, so the session is
-        // already committed server-side — the below-threshold buffering (which exists to avoid
-        // junk sessions the server hasn't seen) doesn't apply. Treat it as past-threshold from
-        // the start so short conversations stream live and still idle-end + post session-end
-        // (otherwise a <10-line conversation would never reach threshold, never idle-end, and
-        // leave the session Active with the watcher lingering — the IDE process outlives it).
-        //
-        // Cursor's own sessionStart hook ALSO posts (and spawns this very
-        // watcher) before any transcript line is ever read, so the same reasoning applies: the
-        // generic 10-line buffer exists only to avoid polluting the server with a session it has
-        // never heard of, which isn't true for Cursor either. Without this, a top-level Cursor
-        // watcher re-added its still-unread lines to BufferedLines every poll (the line cursor
-        // never advances while buffering) until they eventually flushed as duplicates, and — worse
-        // — a watcher that force-quit before crossing the artificial threshold skipped its final
-        // drain AND shutdown spool (below) entirely, and was permanently ineligible for the Cursor
-        // idle ceiling (ShouldEndOnIdle's `isSessionWatcher` branch requires ThresholdReached).
-        // Scoped to session (agentId is null) AND child watchers alike — child watchers never
-        // consult ThresholdReached in the buffering switch below (it only matches `agentId: null`
-        // cases) or in the final-drain/end-synthesis gates (both explicitly agentId-is-null-gated
-        // too), so setting it unconditionally here is a no-op for them either way.
+        // These vendors stream from the first line, and their session watchers are eligible for the
+        // idle ceiling from the start (ShouldEndOnIdle requires ThresholdReached). A no-op for child watchers.
         if (SkipsThresholdBuffering(vendor)) state.ThresholdReached = true;
         var idleTimeout = ResolveIdleWindow(vendor, isSessionWatcher: agentId is null, Environment.GetEnvironmentVariable);
         var idleExit = false;
@@ -827,6 +809,8 @@ partial class WatchCommand(
 
         // Register with server and get resume position
         state.LinesProcessed = await hubConnection.InvokeAsync<int>("WatcherConnect", sessionId, agentId, cts.Token);
+        // Lines the server already holds were flushed by an earlier watcher, so the tail is never held back.
+        if (state.LinesProcessed > 0) state.ThresholdReached = true;
         PublishAckedLines(sessionId, agentId, vendor, state);
         Log(time, $"Connected via SignalR, resuming from line {state.LinesProcessed}");
         TouchHeartbeat();
@@ -1124,11 +1108,22 @@ partial class WatchCommand(
             state.BufferedLineNumbers.Clear();
         }
 
-        // Final drain before exit
+        // The turn may have landed after the last poll, so the unsent lines are read again here.
+        if (agentId is null && !state.ThresholdReached && UnsentLinesHoldRealTurn(transcriptPath, state.LinesProcessed, vendor, time)) {
+            Log(time, "Session ended below the buffering threshold with a real turn; draining it");
+            state.ThresholdReached = true;
+            state.BufferedLines.Clear();
+            state.BufferedLineNumbers.Clear();
+
+            if (state is { InitialTitleSent: false, FirstUserText: not null }) {
+                state.InitialTitleSent = true;
+                _                      = SendInitialTitleAsync(hubConnection, sessionId, TruncateForTitle(state.FirstUserText, 80), time);
+            }
+        }
+
         if (agentId is null && !state.ThresholdReached) {
-            // Session watcher never reached threshold — short-lived session.
-            // Skip sending buffered lines so the server can clean up the empty session.
-            Log(time, $"Session below threshold ({state.BufferedLines.Count}/{WatchState.TranscriptThreshold} lines), skipping final drain");
+            // No turn means no lines to send. The session still ends: below, or through the vendor's own end hook.
+            Log(time, $"Session ended with no real turn ({state.BufferedLines.Count} line(s) buffered); not sending its lines");
         } else {
             Log(time, "Draining remaining lines...");
 
@@ -1219,12 +1214,9 @@ partial class WatchCommand(
 
         // Parent coding-agent died without firing session-end. Take over the role:
         // POST /hooks/session-end so the server writes SessionEnded (otherwise the
-        // session stays "active" forever in the read model). Mirrors what the daemon
-        // already does for hosted agents via EndAgentSessionAsync. Skipped for:
-        //   - agent watchers (agentId != null) — their lifecycle is handled by the
-        //     parent session's own session-end hook plus the daemon path.
-        //   - below-threshold sessions — no transcript lines were ever sent, so the
-        //     server may not have a meaningful session to end.
+        // session stays "active" forever in the read model). Agent watchers skip it: the
+        // parent session's own end covers them. A session with no real turn is posted too —
+        // its start hook already registered it, so skipping the end leaves it Live for good.
         // Runs after SignalR dispose so the server's StopAndDrainAsync skips the
         // 10s drain wait (no live watcher connection to signal).
         var endReason = DecideEndReason(
@@ -1272,7 +1264,7 @@ partial class WatchCommand(
                     await RetryOrUnclaimHandedEndAsync(sessionId, transcriptPath, cwd, vendor, state.Repository, handedEnd);
                     break;
             }
-        } else if (endReason is not null && agentId is null && state.ThresholdReached && !cursorSuppressesEndPost) {
+        } else if (PostsOwnSessionEnd(endReason, agentId, cursorSuppressesEndPost)) {
             // A resumed session's hooks claim its new process; the end of the one this watcher followed
             // is then not the session's end, and the new process is left without a watcher.
             var claimant = LiveClaimant(sessionId);
@@ -2021,11 +2013,9 @@ partial class WatchCommand(
 
         if (!eligible) return false;
 
-        // A CHILD (subagent) watcher never buffers and so never sets ThresholdReached
-        // (WatchState.ThresholdReached only ever flips true on the agentId==null buffering-flush
-        // branch in DrainNewLines) — requiring it here would make every child watcher permanently
-        // ineligible. Session watchers keep the gate: a below-threshold session was never flushed
-        // to the server, so there's nothing to end.
+        // A child watcher never buffers, so requiring ThresholdReached would make it permanently
+        // ineligible. A session watcher keeps the gate: a session nobody has taken a turn in has not
+        // gone idle, and its end comes from the parent's exit instead.
         if (isSessionWatcher && !thresholdReached) return false;
 
         return now - lastActivityAt - disconnectedSinceActivity > idleTimeout && !toolInFlight;
@@ -2043,18 +2033,63 @@ partial class WatchCommand(
     internal static bool CursorSuppressesEndPost(string vendor, bool idleExit) => vendor == "cursor" && idleExit;
 
     /// <summary>
-    /// vendors whose sessionStart hook (or, for Antigravity, an
-    /// equivalent pre-spawn POST) commits the session server-side BEFORE the tailing watcher
-    /// itself ever reads a transcript line, so the generic below-threshold buffer (which exists
-    /// solely to avoid polluting the server with a session it has never heard of) does not apply.
-    /// Before this fix, only Antigravity got this treatment — a top-level Cursor watcher re-added
-    /// its still-unread lines to <see cref="WatchState.BufferedLines"/> every poll (the line
-    /// cursor never advances while buffering) until they eventually flushed as duplicates, and a
-    /// watcher that exited before crossing the artificial threshold skipped its final drain AND
-    /// shutdown spool entirely, and was permanently ineligible for the Cursor idle ceiling
-    /// (<see cref="ShouldEndOnIdle"/>'s <c>isSessionWatcher</c> branch requires
-    /// <see cref="WatchState.ThresholdReached"/>). Pure so it's unit-testable; see
-    /// <see cref="RunWatch"/>'s call site.
+    /// Whether the watcher posts the session's end itself. Whether the session had a real turn does not
+    /// enter into it: the start hook registered the session before this watcher read a line, so a
+    /// turnless one left without its end stays Live for good.
+    /// </summary>
+    internal static bool PostsOwnSessionEnd([System.Diagnostics.CodeAnalysis.NotNullWhen(true)] string? endReason, string? agentId, bool cursorSuppressesEndPost) =>
+        endReason is not null && agentId is null && !cursorSuppressesEndPost;
+
+    /// <summary>
+    /// A prompt the user typed or a reply from the agent. Slash commands, injected preludes and
+    /// session headers are not turns, so a session holding only those sends no lines.
+    /// </summary>
+    internal static bool IsRealTurnLine(string line, string vendor, TimeProvider time) =>
+        vendor == "gemini"
+            ? GeminiImportSource.IsImportRelevantLine(line)
+            : TryExtractAssistantText(line, vendor) is not null
+           || (TryExtractUserText(line, time, vendor) is { } prompt && !string.IsNullOrWhiteSpace(prompt) && !CommandNameRegex.IsMatch(prompt))
+           || (vendor == "claude" && IsClaudeImagePrompt(line));
+
+    /// <summary>A Claude prompt that is only an attached image has no text to extract, yet is the user's turn.</summary>
+    static bool IsClaudeImagePrompt(string line) {
+        if (!line.Contains("\"image\"", StringComparison.Ordinal)) return false;
+
+        try {
+            using var doc  = JsonDocument.Parse(line);
+            var       root = doc.RootElement;
+
+            return root.Str("type") == "user"
+                && root.Bool("isMeta") != true
+                && root.Obj("message")?.Arr("content") is { } content
+                && content.EnumerateArray().Any(block => block.Str("type") == "image");
+        } catch (JsonException) {
+            return false;
+        }
+    }
+
+    /// <summary>Whether a session watcher's held-back lines go to the server: once they hold a real turn, or
+    /// reach <see cref="WatchState.TranscriptThreshold"/> whatever they hold.</summary>
+    internal static bool ShouldFlushBuffer(IReadOnlyList<string> buffered, string vendor, TimeProvider time) =>
+        buffered.Count >= WatchState.TranscriptThreshold || buffered.Any(line => IsRealTurnLine(line, vendor, time));
+
+    /// <summary>
+    /// Whether the transcript from <paramref name="fromLine"/> on holds a real turn. Read at shutdown, so a
+    /// turn written after the last poll still counts; a transcript that was never written holds none.
+    /// </summary>
+    internal static bool UnsentLinesHoldRealTurn(string transcriptPath, int fromLine, string vendor, TimeProvider time) {
+        try {
+            return File.ReadLinesShared(transcriptPath).Skip(fromLine)
+                .Any(line => !string.IsNullOrWhiteSpace(line) && IsRealTurnLine(line, vendor, time));
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Vendors whose watcher sends from the first line instead of holding lines back until a real turn.
+    /// Their start hook (or Antigravity's pre-spawn POST) registers the session before the watcher reads
+    /// anything. See <see cref="RunWatch"/>'s call site.
     /// </summary>
     internal static bool SkipsThresholdBuffering(string vendor) => vendor is "antigravity" or "cursor" or "mistral-vibe" or "grok" or "muse";
 
@@ -2823,26 +2858,28 @@ partial class WatchCommand(
 
             switch (agentId) {
                 // ── Buffering for session watchers ──────────────────────────────
-                // Hold lines until threshold is reached to avoid polluting the server
-                // with short-lived sessions (e.g. <local-command-caveat> prompts).
-                // Subagent watchers (agentId != null) skip buffering entirely.
+                // A session nobody took a turn in sends no lines (e.g. one that only ran
+                // <local-command-caveat> commands). The cursor stays put while buffering, so every
+                // poll re-reads all the unsent lines: the buffer is replaced, never appended to, or
+                // it would fill with copies. Subagent watchers (agentId != null) never buffer.
                 case null when !state.ThresholdReached && newLines.Count > 0: {
+                    var previouslyBuffered = state.BufferedLines.Count;
+                    state.BufferedLines.Clear();
                     state.BufferedLines.AddRange(newLines);
+                    state.BufferedLineNumbers.Clear();
                     state.BufferedLineNumbers.AddRange(newLineNumbers);
                     state.LinesReadAhead = linesRead;
 
-                    if (state.BufferedLines.Count < WatchState.TranscriptThreshold) {
-                        Log(time, $"Buffering {newLines.Count} line(s) ({state.BufferedLines.Count}/{WatchState.TranscriptThreshold} threshold)");
+                    if (!ShouldFlushBuffer(state.BufferedLines, vendor, time)) {
+                        if (state.BufferedLines.Count != previouslyBuffered) {
+                            Log(time, $"Buffering {state.BufferedLines.Count}/{WatchState.TranscriptThreshold} line(s) until a real turn");
+                        }
 
                         return newLines;
                     }
 
-                    // Threshold reached — flush the entire buffer
-                    Log(time, $"Threshold reached ({state.BufferedLines.Count} lines), flushing buffer");
+                    Log(time, $"Flushing {state.BufferedLines.Count} buffered line(s)");
                     state.ThresholdReached = true;
-                    newLines               = [..state.BufferedLines];
-                    newLineNumbers         = [..state.BufferedLineNumbers];
-                    linesRead              = state.LinesReadAhead;
                     state.BufferedLines.Clear();
                     state.BufferedLineNumbers.Clear();
 

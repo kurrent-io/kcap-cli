@@ -42,7 +42,7 @@
                         <TextBox x:Name="SignUpServerInputBox" Classes="onboardingField" PlaceholderText="acme  ·  https://acme.kcap.ai"
                                  AutomationProperties.Name="Workspace name or URL"
                                  Text="{Binding Connect.ServerInputText, Mode=TwoWay}" />
-                        <Button Grid.Column="1" x:Name="SignUpContinueWithUrlButton" Classes="onboardingSecondary" Content="Continue"
+                        <Button Grid.Column="1" x:Name="SignUpContinueWithUrlButton" Classes="onboardingSecondary" Content="Connect"
                                 Command="{Binding ContinueWithUrlCommand}" />
                     </Grid>
                     <TextBlock Classes="onboardingError" Text="{Binding Connect.InputError}"
@@ -126,7 +126,7 @@
                         <TextBox x:Name="ServerInputBox" Classes="onboardingField" PlaceholderText="acme  ·  https://acme.kcap.ai"
                                  AutomationProperties.Name="Workspace name or URL"
                                  Text="{Binding Connect.ServerInputText, Mode=TwoWay}" />
-                        <Button Grid.Column="1" x:Name="ContinueWithUrlButton" Classes="onboardingSecondary" Content="Continue"
+                        <Button Grid.Column="1" x:Name="ContinueWithUrlButton" Classes="onboardingSecondary" Content="Connect"
                                 Command="{Binding ContinueWithUrlCommand}" IsEnabled="{Binding Idle}" />
                     </Grid>
                     <TextBlock x:Name="ConnectErrorText" Classes="onboardingError" Text="{Binding Connect.InputError}"

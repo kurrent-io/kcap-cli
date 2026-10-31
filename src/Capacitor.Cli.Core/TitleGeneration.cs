@@ -72,6 +72,13 @@ static partial class TitleGeneration {
             string            vendor = "claude",
             CancellationToken ct     = default
         ) {
+        // Titling kcap's own title prompt would start a helper run over the last one, without end.
+        if (userText.StartsWith(TitlePromptPrefix, StringComparison.Ordinal)) {
+            log("Skipping title generation: the session is kcap's own title run");
+
+            return null;
+        }
+
         var prompt = BuildPrompt(userText, assistantText);
 
         // Codex sessions go through `codex exec` so a user with only Codex

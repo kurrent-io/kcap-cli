@@ -14,6 +14,15 @@ any legacy ~/.codex/skills/kcap-* folders), removes the kcap git hook from
 
 Non-kcap entries in shared files (settings.json, hooks.json) are preserved.
 
+kcap itself stays installed: the installer, npm, the snap or the desktop app
+owns the program, so uninstall leaves it. The plan ends by naming where it
+is and how to remove it.
+
+Codex sandbox network keys kcap set in Codex's config.toml (under CODEX_HOME
+when set, otherwise ~/.codex) stay: they are your security posture, not kcap
+state. Review [sandbox_workspace_write] and [features.network_proxy] there to
+undo them.
+
 Also removes Mistral Vibe hooks/MCP, kcap caches, legacy Cursor pending
 recordings and retired vendor-specific skills.
 
@@ -44,6 +53,11 @@ Options:
   --yes, -y           Skip the confirmation prompt.
 
 Notes:
+  Deleting the config directory deletes your capture exclusions: paths from
+  `kcap ignore`, excluded repos, and allow lists. The prompt lists them, since
+  a later setup and import capture those projects again. --keep-config keeps
+  them.
+
   A local server (kcap setup --local) is purged as `kcap local uninstall --purge`
   does: its service, binaries, data and logs are deleted, with every session
   it recorded. The prompt names it; with --yes, pass --purge-local. A failure

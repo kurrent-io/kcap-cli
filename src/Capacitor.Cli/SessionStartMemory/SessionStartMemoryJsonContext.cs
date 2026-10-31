@@ -20,7 +20,7 @@ namespace Capacitor.Cli.SessionStartMemory;
 [JsonSerializable(typeof(AntigravityMemoryEnvelope))]
 internal partial class SessionStartMemoryJsonContext : JsonSerializerContext;
 
-/// <summary>Shape of <c>GET /api/repositories/{hash}/guidelines</c>.
+/// <summary>Shape of <c>GET /api/repositories/{hash}/guidelines/delivery</c>; each row's <c>scope</c> is not read.
 /// The response is snake_case (<c>JsonNamingPolicy.SnakeCaseLower</c> server-side);
 /// pinned server-side by the guidelines endpoint's wire-contract test.</summary>
 internal sealed record GuidelinesResponse(

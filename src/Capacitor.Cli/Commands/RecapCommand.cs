@@ -83,7 +83,7 @@ class RecapCommand(
             return 0;
         }
 
-        return full ? PrintFull(entries, chain) : await PrintSummaryWithOutline(entries, chain, sessionId);
+        return full ? await PrintFull(entries, chain, sessionId) : await PrintSummaryWithOutline(entries, chain, sessionId);
     }
 
     async Task<int> PrintSummaryWithOutline(List<RecapEntry> entries, bool chain, string sessionId) {
@@ -128,7 +128,7 @@ class RecapCommand(
             var outline = await FetchTurnOutline(sid);
 
             if (outline.Length > 0) {
-                Console.Out.WriteLine(outline);
+                Console.Out.WriteLine(StatusGlyphs.ForConsole(outline));
                 printedAnything = true;
             }
         }
@@ -139,7 +139,7 @@ class RecapCommand(
             return 0;
         }
 
-        Console.Out.WriteLine(DrillDownPointer(sessionIds));
+        Console.Out.WriteLine(StatusGlyphs.ForConsole(DrillDownPointer(sessionIds)));
 
         return 0;
     }
@@ -183,110 +183,38 @@ class RecapCommand(
         }
     }
 
-    static int PrintFull(List<RecapEntry> entries, bool chain) {
-        string? currentSessionId = null;
-        string? currentAgentId   = null;
+    /// <summary>Every captured prompt, reply, tool call and result, per session: each closed turn's
+    /// trace, the same one <c>--get-turn</c> prints. The turn list is fetched for the concrete ids
+    /// <c>/recap</c> resolved, never a slug, which <c>/turns</c> does not resolve.</summary>
+    async Task<int> PrintFull(List<RecapEntry> entries, bool chain, string sessionId) {
+        var sessionIds  = OutlineSessionIds(entries, sessionId);
+        var showHeaders = chain || sessionIds.Count > 1;
 
-        foreach (var entry in entries) {
-            // Session header in chain mode
-            if (chain && entry.SessionId != currentSessionId) {
-                currentSessionId = entry.SessionId;
-                currentAgentId   = null;
-                Console.Out.WriteLine($"# Session {currentSessionId}");
-                Console.Out.WriteLine();
+        foreach (var sid in sessionIds) {
+            if (showHeaders) {
+                await Console.Out.WriteLineAsync($"# Session {sid}");
+                await Console.Out.WriteLineAsync();
             }
 
-            // Agent header when agent changes
-            if (entry.AgentId is not null && entry.AgentId != currentAgentId) {
-                currentAgentId = entry.AgentId;
-                var agentLabel = entry.AgentType is not null ? $"Agent ({entry.AgentType})" : $"Agent {entry.AgentId}";
-                Console.Out.WriteLine($"### {agentLabel}");
-                Console.Out.WriteLine();
-            } else if (entry.AgentId is null && currentAgentId is not null) {
-                currentAgentId = null;
-            }
+            var own = entries.Where(e => e.SessionId == sid || (e.SessionId is null && sid == sessionIds[0])).ToList();
 
-            switch (entry.Type) {
-                case "plan":
-                    Console.Out.WriteLine("## Plan");
-                    Console.Out.WriteLine(entry.Content);
-                    Console.Out.WriteLine();
+            var (turnsJson, turnsUnreadable) = await FetchTurnList(sid);
 
-                    break;
-
-                case "user_prompt":
-                    Console.Out.WriteLine("## User Prompt");
-                    Console.Out.WriteLine(entry.Content);
-                    Console.Out.WriteLine();
-
-                    break;
-
-                case "assistant_text":
-                    Console.Out.WriteLine("## Assistant");
-                    Console.Out.WriteLine(entry.Content);
-                    Console.Out.WriteLine();
-
-                    break;
-
-                case "write":
-                    var writePath = entry.FilePath ?? "unknown";
-                    var writeLang = GetLanguageHint(writePath);
-                    Console.Out.WriteLine($"## Write {writePath}");
-                    Console.Out.WriteLine($"```{writeLang}");
-                    Console.Out.WriteLine(entry.Content);
-                    Console.Out.WriteLine("```");
-                    Console.Out.WriteLine();
-
-                    break;
-
-                case "edit":
-                    var editPath = entry.FilePath ?? "unknown";
-                    Console.Out.WriteLine($"## Edit {editPath}");
-                    Console.Out.WriteLine("```");
-                    Console.Out.WriteLine(entry.Content);
-                    Console.Out.WriteLine("```");
-                    Console.Out.WriteLine();
-
-                    break;
-            }
+            await Console.Out.WriteAsync(await RecapTranscript.RenderSessionAsync(
+                own, turnsJson, index => sessionsApi.GetTurnAsync(Uri.EscapeDataString(sid), index), turnsUnreadable));
         }
 
         return 0;
     }
 
-    static string GetLanguageHint(string filePath) {
-        var ext = Path.GetExtension(filePath).ToLowerInvariant();
-
-        return ext switch {
-            ".cs"         => "csharp",
-            ".js"         => "javascript",
-            ".ts"         => "typescript",
-            ".tsx"        => "tsx",
-            ".jsx"        => "jsx",
-            ".py"         => "python",
-            ".rb"         => "ruby",
-            ".go"         => "go",
-            ".rs"         => "rust",
-            ".java"       => "java",
-            ".kt"         => "kotlin",
-            ".swift"      => "swift",
-            ".md"         => "markdown",
-            ".json"       => "json",
-            ".yaml"       => "yaml",
-            ".yml"        => "yaml",
-            ".xml"        => "xml",
-            ".html"       => "html",
-            ".css"        => "css",
-            ".scss"       => "scss",
-            ".sql"        => "sql",
-            ".sh"         => "bash",
-            ".bash"       => "bash",
-            ".zsh"        => "bash",
-            ".razor"      => "razor",
-            ".toml"       => "toml",
-            ".dockerfile" => "dockerfile",
-            _             => ""
-        };
+    /// <summary>The session's closed turns as the server sent them, null when it has none, or why the fetch
+    /// failed: the transcript then falls back to the <c>/recap</c> rows and names which of the two it was.</summary>
+    async Task<(string? Json, string? Unreadable)> FetchTurnList(string sessionId) {
+        try {
+            return (await sessionsApi.GetTurnsAsync(Uri.EscapeDataString(sessionId)) is TurnsResult.Found(var json) ? json : null, null);
+        } catch (CapacitorApiException ex) {
+            return (null, ex.Message);
+        }
     }
 
     /// <summary>
@@ -339,8 +267,8 @@ class RecapCommand(
             var tokens = turn.TryGetProperty("total_tokens", out var tk) ? tk.GetInt64() : 0;
             var time   = $"{FormatTurnTime(turn, "first_event_at")}–{FormatTurnTime(turn, "last_event_at")}";
 
-            await Console.Out.WriteLineAsync($"Turn {turnIndex,3}: {prompt}");
-            await Console.Out.WriteLineAsync($"         tools={tools}  files={files}  tokens={tokens}  time={time}");
+            await Console.Out.WriteLineAsync(StatusGlyphs.ForConsole($"Turn {turnIndex,3}: {prompt}"));
+            await Console.Out.WriteLineAsync(StatusGlyphs.ForConsole($"         tools={tools}  files={files}  tokens={tokens}  time={time}"));
             await Console.Out.WriteLineAsync();
         }
 
@@ -381,87 +309,9 @@ class RecapCommand(
             return 0;
         }
 
-        await Console.Out.WriteLineAsync($"# Turn {turnIndex} — session {sessionId}");
+        await Console.Out.WriteLineAsync(StatusGlyphs.ForConsole($"# Turn {turnIndex} — session {sessionId}"));
         await Console.Out.WriteLineAsync();
-
-        // Trace entries from subagent streams carry agent_id (and agent_type); root entries don't.
-        // The builder interleaves them by timestamp, so emit an attribution header whenever the
-        // active agent changes — preserving the subagent grouping that `--full` recap shows.
-        string? currentAgentId = null;
-        var     sawAgentHeader = false;
-
-        foreach (var entry in trace.EnumerateArray()) {
-            var entryAgentId = entry.TryGetProperty("agent_id", out var aidEl) && aidEl.ValueKind == JsonValueKind.String
-                ? aidEl.GetString()
-                : null;
-
-            if (entryAgentId != currentAgentId) {
-                currentAgentId = entryAgentId;
-
-                if (entryAgentId is { Length: > 0 }) {
-                    var agentType = entry.TryGetProperty("agent_type", out var atEl) && atEl.ValueKind == JsonValueKind.String
-                        ? atEl.GetString()
-                        : null;
-                    await Console.Out.WriteLineAsync(agentType is { Length: > 0 }
-                        ? $"### Subagent: {agentType} ({entryAgentId})"
-                        : $"### Subagent: {entryAgentId}");
-                    await Console.Out.WriteLineAsync();
-                    sawAgentHeader = true;
-                } else if (sawAgentHeader) {
-                    // Only note the return to the main session if we previously showed a subagent header.
-                    await Console.Out.WriteLineAsync("### (main session)");
-                    await Console.Out.WriteLineAsync();
-                }
-            }
-
-            var kind = entry.TryGetProperty("kind", out var k) ? k.GetString() : null;
-
-            switch (kind) {
-                case "user_message":
-                    await Console.Out.WriteLineAsync("## User");
-                    await Console.Out.WriteLineAsync(GetTraceString(entry, "text"));
-                    await Console.Out.WriteLineAsync();
-
-                    break;
-
-                case "assistant_message":
-                    await Console.Out.WriteLineAsync("## Assistant");
-                    await Console.Out.WriteLineAsync(GetTraceString(entry, "text"));
-                    await Console.Out.WriteLineAsync();
-
-                    break;
-
-                case "tool_invocation":
-                    await Console.Out.WriteLineAsync($"## Tool: {GetTraceString(entry, "tool")}");
-
-                    if (entry.TryGetProperty("arguments", out var args) && args.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined) {
-                        await Console.Out.WriteLineAsync(args.ToString());
-                    }
-
-                    await Console.Out.WriteLineAsync();
-
-                    break;
-
-                case "tool_result":
-                    var isErr = entry.TryGetProperty("is_error", out var e) && e.ValueKind == JsonValueKind.True;
-                    await Console.Out.WriteLineAsync(isErr ? "### Error" : "### Result");
-                    await Console.Out.WriteLineAsync(GetTraceString(entry, "output"));
-                    await Console.Out.WriteLineAsync();
-
-                    break;
-
-                default:
-                    // assistant_thinking, plan, or any future kind that carries text — surface it
-                    // generically rather than silently dropping turn content.
-                    if (!string.IsNullOrEmpty(kind) && GetTraceString(entry, "text") is { Length: > 0 } text) {
-                        await Console.Out.WriteLineAsync($"## {kind}");
-                        await Console.Out.WriteLineAsync(text);
-                        await Console.Out.WriteLineAsync();
-                    }
-
-                    break;
-            }
-        }
+        await Console.Out.WriteAsync(RecapTranscript.RenderTrace(trace));
 
         return 0;
     }
@@ -472,9 +322,6 @@ class RecapCommand(
         && DateTimeOffset.TryParse(el.GetString(), out var dto)
             ? dto.ToLocalTime().ToString("HH:mm")
             : "?";
-
-    static string GetTraceString(JsonElement el, string prop) =>
-        el.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
 
     /// <summary>Distinct tool names for a turn JSON object, in first-seen order.</summary>
     internal static List<string> ExtractToolNames(JsonElement turn) {

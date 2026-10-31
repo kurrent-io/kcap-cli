@@ -97,10 +97,11 @@ Unlocked checks, in order, stopping at the first refusal (checks 4–6 are rerun
    musl: "the musl builds of kcap do not support a local installation" (`musl_unsupported`), checked before the
    generic Linux refusal so it is the message a musl user sees. Linux otherwise, and Windows: "the local edition runs
    on macOS for now" (`unsupported_platform`). Facts come through a seam so tests cover the matrix.
-2. **Socket paths.** The UTF-8 byte length of `<root>/run/.s.PGSQL.5432` and of `<root>/run/kurrentdb.sock`, with the
-   root's existing ancestors resolved through symlinks, must be at most 103 on macOS (107 on Linux). A refusal names
-   both paths and lengths (`socket_path_too_long`). The second socket is checked although the embedded node does not
-   use it yet: the design names both, and a root that fits one byte less costs nothing.
+2. **Socket paths.** The UTF-8 byte length of `<root>/run/.s.PGSQL.5432` and of the embedded KurrentDB's
+   `<root>/data/kurrentdb/kurrent.sock`, under the root as configured and under the root with its existing ancestors
+   resolved through symlinks, must be at most 103 on macOS (107 on Linux). A refusal names each path that does not fit
+   with its length, and how many bytes shorter the root must be (`socket_path_too_long`). `LocalSockets` is the one
+   place the CLI derives these paths.
 3. **Ancestors.** No existing ancestor of the root may be world-writable without the sticky bit, which the server
    refuses at start (`unsafe_root`). Refusing here avoids a ten-minute readiness wait on a server that cannot boot.
 4. **Journal and registry.** A `setup` journal present: the hint is **recover**. Recovery runs under the lease before

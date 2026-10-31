@@ -24,6 +24,8 @@
                     <TextBlock Classes="settingsGroupTitle" Text="Who can read new sessions" />
                     <TextBlock Classes="kcapHint" TextWrapping="Wrap"
                                Text="Sessions already on the server keep their visibility." />
+                    <TextBlock Classes="kcapHint" TextWrapping="Wrap" Text="{Binding VisibilityNote}"
+                               IsVisible="{Binding VisibilityNote, Converter={x:Static ObjectConverters.IsNotNull}}" />
                 </StackPanel>
                 <Border Classes="settingsError warning" IsVisible="{Binding !VisibilityEditable}">
                     <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">

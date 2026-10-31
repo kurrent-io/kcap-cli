@@ -11,8 +11,8 @@ using ReactiveUI.Reactive;
 namespace Capacitor.App.ViewModels;
 
 /// <summary>
-/// The local stack beside the daemon in the main window: its version and state in the rail, and a
-/// launcher banner for an upgrade in flight or one that did not finish. A failure after the switch
+/// The local stack beside the daemon: its version and state for Settings › About, a failed update
+/// for the rail's alert, and a launcher banner for an upgrade in flight or one that did not finish. A failure after the switch
 /// carries its own Start, offered until a start succeeds: the server can be up with the upgrade still
 /// journaled, so connectivity proves nothing.
 /// </summary>
@@ -20,8 +20,6 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
     internal const string BusyDetail    = "Another local operation is running. The update retries when the server is available.";
     internal const string StartGuidance = "Saved data is kept. Start the server to finish the update.";
     const int StartMessageTailLines     = 12;
-    public const string NameTip         = "The local kcap server on this machine";
-    public const string VersionTip      = "Version of kcap local on this machine";
 
     static readonly string[] Derived = [
         nameof(Version), nameof(StateText), nameof(Attention), nameof(Upgrading), nameof(BannerVisible), nameof(Headline),
@@ -145,7 +143,7 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
             _                          => null,
         };
 
-    /// A failed upgrade uses the rail's failure treatment.
+    /// A failed upgrade, which the rail reports as an alert.
     public bool Attention => Failed;
 
     public bool BannerVisible => Upgrading || _shown is not null;

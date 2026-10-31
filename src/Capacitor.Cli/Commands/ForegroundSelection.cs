@@ -59,4 +59,21 @@ internal static class ForegroundSelection {
             [.. selectedUnits.SelectMany(u => u.Members)],
             new ImportRunSelection(candidates, selectedIds, remainder));
     }
+
+    /// <summary>The sessions with content to import that none of the selected chains or routed units
+    /// runs: what a capped run leaves for the background import.</summary>
+    public static IReadOnlySet<string> Deferred(
+            IReadOnlyList<ImportCommand.SessionClassification>       all,
+            IEnumerable<List<ImportCommand.SessionClassification>>   chains,
+            IEnumerable<ImportCommand.SessionClassification>         routed) {
+        var running = chains.SelectMany(c => c).Concat(routed)
+            .Select(c => c.SessionId)
+            .ToHashSet(StringComparer.Ordinal);
+
+        return all
+            .Where(c => c.Status is ImportCommand.ClassificationStatus.New or ImportCommand.ClassificationStatus.Partial
+                     && !running.Contains(c.SessionId))
+            .Select(c => c.SessionId)
+            .ToHashSet(StringComparer.Ordinal);
+    }
 }

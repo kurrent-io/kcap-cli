@@ -115,7 +115,7 @@ public class ServerChatInputTests {
             await Assert.That(h.Input.Availability).IsEqualTo(SendAvailability.Connecting);
             h.Session.OnNext(Harness.Info("Completed", ended: true));
             await Assert.That(h.Input.Availability).IsEqualTo(SendAvailability.Ended);
-            await Assert.That(h.Input.Hint).IsEqualTo("This session has ended");
+            await Assert.That(h.Input.Hint).IsEqualTo(ServerChatInput.EndedHint);
             h.Input.Dispose();
         });
     }
@@ -233,7 +233,7 @@ public class ServerChatInputTests {
             string expected;
             if (sessionEnds) {
                 h.Session.OnNext(Harness.Info("Completed", ended: true));
-                expected = "This session has ended";
+                expected = ServerChatInput.EndedHint;
             } else {
                 h.Lane.UserInputHandler = _ => Task.FromResult(HubCallOutcome.NotConnected);
                 await Assert.That(await h.Input.SendAsync("continue", [], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Unconfirmed);

@@ -311,7 +311,7 @@ public class AccountsPublisherTests {
     }
 
     static void Record(AccountStore store, string id, double used) {
-        var written = store.Readings.TryRecord(id, 0, null, f => f with {
+        var written = store.Readings.TryRecord(id, (f, _) => f with {
             Reading = f.Reading with { Windows = [new UsageWindowDto("five_hour", 300, used, null, null)] },
         });
         if (!written) throw new InvalidOperationException("reading not recorded");

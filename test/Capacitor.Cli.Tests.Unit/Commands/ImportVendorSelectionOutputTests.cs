@@ -65,4 +65,26 @@ public class ImportVendorSelectionOutputTests : IDisposable {
         await Assert.That(_terminal.Error.ToString())
                     .Contains("--cursor, --antigravity specified but no matching installation detected on this machine.");
     }
+
+    /// A harness that has never run has no history folder. Discovery answers that with an empty report
+    /// and exit 0, which a caller reads as no history; a non-zero exit would read as a failed scan.
+    [Test]
+    public async Task discovering_a_named_harness_this_machine_lacks_reports_no_history() {
+        ImportCommand.ImportDiscoveryResult? found = null;
+
+        var exit = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: _terminal.Console)
+            .HandleImport(
+            filterCwd:               null,
+            sources:                 [new Source(HarnessId.Claude, IsAvailable: false)],
+            explicitVendorSelection: true,
+            discoverOnly:            true,
+            discoverJson:            true,
+            onDiscovered:            r => found = r);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(found).IsNotNull();
+        await Assert.That(found!.Summary.Repos).IsEmpty();
+        await Assert.That(found.Summary.UnmatchedCount).IsEqualTo(0);
+        await Assert.That(_terminal.Error.ToString()).DoesNotContain("no matching installation");
+    }
 }

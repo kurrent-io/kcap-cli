@@ -234,6 +234,8 @@ public class AgentStopTests {
                         await stopsArrived.Task.WaitAsync(ct);
                         await FrameCodec.WriteAsync(stream,
                             stopReply?.Invoke(id) ?? LocalFrame.StopAck($"{id}\tstopped"), ct);
+                    } else if (frame?.Type == FrameType.Hello) {
+                        // No status rows: the table falls back to its own columns, which is what these tests read.
                     } else {
                         throw new InvalidDataException($"Unexpected request: {frame?.Type}");
                     }

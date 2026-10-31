@@ -69,6 +69,25 @@ public class AntigravityImportTests : IDisposable {
     }
 
     [Test]
+    public async Task A_session_the_server_deleted_is_counted_deleted_and_sent_nothing() {
+        WriteTranscript(Root, "build it");
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(410).WithBody("""{"error":"session_deleted"}"""));
+
+        using var client = new HttpClient();
+        var source = new AntigravityImportSource(new(new(_home), ""), TimeProvider.System);
+
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(
+            discovered,
+            new ClassifyContext(client, _server.Url!, MinLines: 0, Home: Home),
+            CancellationToken.None);
+
+        await Assert.That(classified.Single().Status).IsEqualTo(ImportCommand.ClassificationStatus.Deleted);
+        await Assert.That(_server.LogEntries.Count(e => e.RequestMessage.Method == "POST")).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task ImportSession_imports_root_with_nested_subagent() {
         WriteTranscript(Root, "build it");
         WriteTranscript(Child, "sub task");

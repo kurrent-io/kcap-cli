@@ -91,12 +91,6 @@ public static class HttpClientExtensions {
     /// </summary>
     internal static readonly TimeSpan PerAttemptTimeout = TimeSpan.FromSeconds(60);
 
-    const string UnreachableHint =
-        "kcap API cannot be reached, is it running? "                    +
-        "Make sure the URL is correctly configured and the service is running. "      +
-        "Check https://github.com/kurrent-io/kcap-cli#getting-started for instructions." +
-        "\rError connecting to: ";
-
     internal const string SchemeMissingHint =
         "server_url is missing a scheme. Run: kcap config set server_url https://<host>";
 
@@ -175,20 +169,26 @@ public static class HttpClientExtensions {
     /// <summary>
     /// Renders the one stderr line written when the API is unreachable after every retry.
     ///
-    /// <para>The URL goes through <see cref="UnusableUrlDiagnostic.Sanitize"/> — the same helper, in the
-    /// same assembly, that the unusable-URL guard has always used. A <c>server_url</c> may carry userinfo
-    /// credentials, and this line is reachable from the HOOK path (<c>AgentHookPoster</c> calls it on any
-    /// transport fault), so echoing it raw printed them on every lifecycle POST for every vendor. The host
-    /// survives sanitization, which is the part that makes the line actionable.</para>
+    /// <para>The URL goes through <see cref="UnusableUrlDiagnostic.Sanitize"/>: a <c>server_url</c> may
+    /// carry userinfo credentials, and this line is reachable from the hook path on any transport fault.
+    /// The host survives sanitization, which is the part that makes the line actionable.</para>
     ///
-    /// <para>Control characters are stripped from EVERY variable component, not just the URL: this line
-    /// goes to a stream harnesses parse — Gemini reads hook stderr as the hook's own result when stdout
-    /// is empty — so either half of the interpolation could otherwise fabricate a line. The fixed hint's
-    /// own <c>\r</c> is left alone; it is not attacker-reachable, and changing it would alter output
-    /// every existing call site produces.</para>
+    /// <para>One line, with control characters stripped from every variable part: harnesses parse this
+    /// stream, and Gemini reads hook stderr as the hook's own result when stdout is empty.</para>
     /// </summary>
-    public static string RenderUnreachableError(string? baseUrl, string? exceptionMessage) =>
-        $"{UnreachableHint} {UnusableUrlDiagnostic.Sanitize(baseUrl)} {StripControlCharacters(exceptionMessage)}";
+    public static string RenderUnreachableError(
+            string? baseUrl, string? exceptionMessage, ConnectionFailure failure = ConnectionFailure.Other) {
+        var detail = StripControlCharacters(exceptionMessage).Trim();
+
+        return $"kcap API cannot be reached at {UnusableUrlDiagnostic.Sanitize(baseUrl)} ({failure.Reason}). {failure.Remedy}"
+             + (detail.Length > 0 ? $" Detail: {detail}" : "");
+    }
+
+    // The retry loop wraps the last fault, whose message is the one that names the cause.
+    static string FaultDetail(Exception ex) =>
+        ex.InnerException is { Message: { Length: > 0 } inner } && !ex.Message.Contains(inner, StringComparison.Ordinal)
+            ? $"{ex.Message} Last error: {inner}"
+            : ex.Message;
 
     internal static string StripControlCharacters(string? value) =>
         string.IsNullOrEmpty(value) ? "" : new string(value.Where(c => !char.IsControl(c)).ToArray());
@@ -198,12 +198,12 @@ public static class HttpClientExtensions {
     /// nothing here may be interpolated raw.
     /// </summary>
     public static void WriteUnreachableError(string baseUrl, HttpRequestException ex) {
-        Console.Error.WriteLine(RenderUnreachableError(baseUrl, ex.Message));
+        Console.Error.WriteLine(UnreachableErrorText(baseUrl, ex));
     }
 
     /// <summary>String-returning twin of <see cref="WriteUnreachableError"/>, for callers that route output through a progress sink instead of Console.</summary>
     public static string UnreachableErrorText(string baseUrl, HttpRequestException ex) =>
-        RenderUnreachableError(baseUrl, ex.Message);
+        RenderUnreachableError(baseUrl, FaultDetail(ex), ConnectionFailures.Of(ex));
 
     /// <summary>
     /// Checks if the response is a 401 and prints the server's error message.
@@ -320,7 +320,7 @@ public static class HttpClientExtensions {
                     // would surface as an unhandled TaskCanceledException at every call site
                     // that only catches HttpRequestException (import probes, transcript POSTs,
                     // session-start hooks, ...).
-                    lastError = ex;
+                    lastError = Cause(ex, attemptCap);
                 } catch (HttpRequestException ex) {
                     // A refusal already in hand outranks a late transport fault: the server did answer,
                     // and that answer is what the caller counts on.
@@ -328,14 +328,11 @@ public static class HttpClientExtensions {
 
                     // Budget exhausted on transport error — surface as HttpRequestException so
                     // existing `catch (HttpRequestException)` handlers degrade gracefully.
-                    throw new HttpRequestException(
-                        $"Request failed after exhausting the {totalTimeout.TotalSeconds:F0}s retry budget.",
-                        ex
-                    );
+                    throw BudgetExhausted(totalTimeout, perAttemptTimeout, ex);
                 } catch (OperationCanceledException ex) {
                     if (Answered() is { } answer) return answer;
 
-                    throw BudgetExhausted(totalTimeout, perAttemptTimeout, ex);
+                    throw BudgetExhausted(totalTimeout, perAttemptTimeout, Cause(ex, attemptCap));
                 }
 
                 // Cap the backoff sleep to the remaining budget so a retry delay can never push
@@ -370,11 +367,24 @@ public static class HttpClientExtensions {
             return answer;
         }
 
+        // An attempt the budget cut short says nothing about the server; the transport fault before it,
+        // a refused connection say, is what the caller has to act on.
+        Exception Cause(OperationCanceledException cancelled, TimeSpan attemptCap) =>
+            attemptCap < perAttemptTimeout && lastError is HttpRequestException transport ? transport : cancelled;
+
         static HttpRequestException BudgetExhausted(TimeSpan totalTimeout, TimeSpan perAttemptTimeout, Exception? inner) =>
-            new(
-                $"Request did not complete within the {totalTimeout.TotalSeconds:F0}s retry budget "      +
-                $"(per-attempt timeout {perAttemptTimeout.TotalSeconds:F0}s).",
-                inner
-            );
+            new(RetryBudgetMessage(totalTimeout, perAttemptTimeout, inner is HttpRequestException), inner);
+    }
+
+    /// <summary>The retry outcome in one sentence. The per-attempt limit is named only when it is the
+    /// shorter of the two, since an attempt never runs past what is left of the budget.</summary>
+    internal static string RetryBudgetMessage(TimeSpan totalTimeout, TimeSpan perAttemptTimeout, bool transportFault) {
+        var outcome = transportFault
+            ? $"Request failed, and the {totalTimeout.TotalSeconds:F0}s retry budget ran out."
+            : $"Request got no answer within the {totalTimeout.TotalSeconds:F0}s retry budget.";
+
+        return perAttemptTimeout < totalTimeout
+            ? $"{outcome} Each attempt is limited to {perAttemptTimeout.TotalSeconds:F0}s."
+            : outcome;
     }
 }

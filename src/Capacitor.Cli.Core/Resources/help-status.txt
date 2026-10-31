@@ -11,12 +11,18 @@ Options:
              is a network fact, not a setup one.
 
 Reports:
-  Server     Configured base URL and reachability check
-  Auth       Stored credentials and token expiry
+  Server     Configured base URL and reachability check. A server that
+             gives no answer is named as such (connection refused, host name
+             not found, or no answer in time), with what to do next: start or
+             restart the server, check the URL and network, or retry
+  Auth       Stored credentials and token expiry. While the server gives no
+             answer, a missing or expired token is not reported as a login
+             to run: a sign-in cannot reach it either
   Hooks      Per-agent integration state: Claude plugin, Codex / Cursor /
              Copilot / Gemini / Kiro hooks, the Pi / OpenCode live-ingest
              extensions, and the Antigravity hooks block (✓ installed,
-             ✗ not installed). Under it, whether each wired agent's hooks
+             ✗ not installed; "ok" and "x" when stdout is not UTF-8, which
+             cannot carry the marks). Under it, whether each wired agent's hooks
              run: when it last ran a kcap hook on this machine, or that it
              has not yet (start a new session; Codex also needs its kcap
              hooks trusted). --json carries it as last_hook_event.

@@ -90,14 +90,9 @@ public static class ClaudeStatusLineEntry {
         var payload = document.RootElement;
         var now     = TimeProvider.System.GetUtcNow();
 
-        if (ClaudeStatusLineReading.Apply(ReadingFile.Empty(account.Generation), payload, now) is null) return;
+        if (ClaudeStatusLineReading.Apply(ReadingFile.Empty(account.Generation), payload, false, now) is null) return;
 
-        accounts.Readings.TryRecord(
-            account.Id,
-            account.Generation,
-            payload.Str("session_id"),
-            held => ClaudeStatusLineReading.Apply(held, payload, now) ?? held
-        );
+        accounts.Readings.TryRecord(account.Id, (held, current) => ClaudeStatusLineReading.Apply(held, payload, current.HasSwitched, now));
     }
 
     // No WorkingDirectory and no environment edits: the child inherits both from this process.

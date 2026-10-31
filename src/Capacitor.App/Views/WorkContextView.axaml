@@ -270,8 +270,10 @@
         </DataTemplate>
         <DataTemplate x:Key="RunItem" x:DataType="vm:RunRow">
             <!-- Only a subagent whose id is known opens. Any other row is disabled, so it is neither a tab stop nor
-                 announced as actionable, but it reads the same. -->
+                 announced as actionable, but it reads the same; a subagent row says why it does not open. -->
             <Button x:Name="RunRowButton" Classes="toggle" Classes.openable="{Binding CanOpen}" IsEnabled="{Binding CanOpen}"
+                    ToolTip.Tip="{Binding UnopenableReason}" ToolTip.ShowOnDisabled="True"
+                    AutomationProperties.HelpText="{Binding UnopenableReason}"
                     Command="{Binding $parent[views:WorkContextView].((vm:WorkContextViewModel)DataContext).OpenRunCommand}"
                     CommandParameter="{Binding}">
                 <AutomationProperties.Name>
@@ -294,7 +296,8 @@
                         <TextBlock Text="{Binding Description}" FontSize="12" LineHeight="16" Foreground="{StaticResource KcapMutedBrush}"
                                    TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Description}" ToolTip.ShowOnDisabled="True"
                                    IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                        <TextBlock Text="{Binding StateText}" Classes="subagentState" Classes.failed="{Binding IsFailed}" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding StateText}" Classes="subagentState" Classes.failed="{Binding IsFailed}" TextWrapping="Wrap"
+                                   ToolTip.Tip="{Binding UnopenableReason}" ToolTip.ShowOnDisabled="True" />
                     </StackPanel>
                 </Grid>
             </Button>
@@ -547,6 +550,49 @@
                     </Border>
                 </StackPanel>
 
+                <!-- The agent's own worktree: its edits never reach the checkout the user picked. -->
+                <StackPanel x:Name="WorktreeSection" Margin="0,18,0,0" IsVisible="{Binding ShowsOwnWorktree}">
+                    <Button x:Name="WorktreeHeader" Classes="sectionHeader" AutomationProperties.Name="Worktree">
+                        <TextBlock Text="WORKTREE" Classes="eyebrow" />
+                    </Button>
+                    <Border Classes="sectionBody">
+                        <StackPanel Spacing="8">
+                            <TextBlock x:Name="WorktreeNoteText" Text="{Binding OwnWorktreeNote}" FontSize="12.5" LineHeight="17"
+                                       TextWrapping="Wrap" Foreground="{StaticResource KcapMutedBrush}" />
+                            <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="6">
+                                <views:AppIcon Kind="Folder" Size="14" VerticalAlignment="Top" Margin="0,2,0,0"
+                                               Foreground="{StaticResource KcapMutedBrush}" />
+                                <SelectableTextBlock x:Name="WorktreePathText" Grid.Column="1" Text="{Binding WorktreePath}"
+                                                     FontSize="12.5" LineHeight="17" TextWrapping="Wrap"
+                                                     Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                                <Button x:Name="OpenWorktreeButton" Grid.Column="2" Classes="kcapGhost kcapIcon" VerticalAlignment="Top"
+                                        Click="OnOpenWorktreeClick" IsVisible="{Binding CanOpenWorktree}"
+                                        ToolTip.Tip="Open folder" AutomationProperties.Name="Open worktree folder">
+                                    <views:AppIcon Kind="FolderOpen" Size="14" Foreground="{StaticResource KcapMutedBrush}" />
+                                </Button>
+                                <Button x:Name="CopyWorktreeButton" Grid.Column="3" Classes="kcapGhost kcapIcon" VerticalAlignment="Top"
+                                        Click="OnCopyTextClick" Tag="{Binding WorktreePath}"
+                                        ToolTip.Tip="Copy path" AutomationProperties.Name="Copy worktree path">
+                                    <views:AppIcon Kind="Copy" Size="14" Foreground="{StaticResource KcapMutedBrush}" />
+                                </Button>
+                            </Grid>
+                            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="6"
+                                  IsVisible="{Binding OwnWorktreeBranch, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                <views:AppIcon Kind="GitBranch" Size="14" VerticalAlignment="Top" Margin="0,2,0,0"
+                                               Foreground="{StaticResource KcapMutedBrush}" />
+                                <SelectableTextBlock x:Name="WorktreeBranchText" Grid.Column="1" Text="{Binding OwnWorktreeBranch}"
+                                                     FontSize="12.5" LineHeight="17" TextWrapping="Wrap"
+                                                     Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                                <Button x:Name="CopyWorktreeBranchButton" Grid.Column="2" Classes="kcapGhost kcapIcon" VerticalAlignment="Top"
+                                        Click="OnCopyTextClick" Tag="{Binding OwnWorktreeBranch}"
+                                        ToolTip.Tip="Copy branch name" AutomationProperties.Name="Copy branch name">
+                                    <views:AppIcon Kind="Copy" Size="14" Foreground="{StaticResource KcapMutedBrush}" />
+                                </Button>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
                 <!-- Pull request: the card with its picker and live status, or link cards where the
                      server has no reader, or the empty note once both reads have settled. -->
                 <StackPanel x:Name="PullRequestSection" Margin="0,18,0,0" IsVisible="{Binding ShowsPullRequestSection}">
@@ -641,6 +687,9 @@
                 <StackPanel x:Name="PlanSection" IsVisible="{Binding Plan.ShowsPlan}" Margin="0,18,0,0">
                     <TextBlock Text="Loading plan…" FontSize="13" Foreground="{StaticResource KcapMutedBrush}"
                                Margin="0,4,0,0" IsVisible="{Binding Plan.IsLoading}" />
+                    <TextBlock x:Name="PlanUnavailableText" Text="Couldn't load the plan. It loads again once the server is reachable."
+                               FontSize="13" Foreground="{StaticResource KcapMutedBrush}" TextWrapping="Wrap"
+                               Margin="0,4,0,0" IsVisible="{Binding Plan.IsUnavailable}" />
                     <Button x:Name="PlanToggle" Command="{Binding Plan.ToggleCommand}" Classes="sectionHeader expandable"
                             IsVisible="{Binding Plan.HasPlan}" AutomationProperties.Name="Plan">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">

@@ -22,9 +22,14 @@ static class LocalServerReadiness {
         while (true) {
             if (await ReadyAsync(http, url, time, ct)) return;
 
-            if (time.GetUtcNow() >= deadline)
+            if (time.GetUtcNow() >= deadline) {
+                // The server logs through its own rolling log once it starts, so the output log is often empty.
+                var logs = LocalLogFiles.Current(unit.Root);
+                var see  = logs.Count > 0 ? string.Join(" and ", logs) : $"{unit.OutputLog} and the logs beside it";
+
                 throw new LocalLifecycleException(
-                    $"The local server did not report ready on {unit.BaseUrl} within {budget.TotalMinutes:0} minutes. See {unit.OutputLog} and the logs beside it.");
+                    $"The local server did not report ready on {unit.BaseUrl} within {budget.TotalMinutes:0} minutes. See {see}.");
+            }
 
             await Task.Delay(PollGap, time, ct);
         }

@@ -94,7 +94,7 @@ public class AccountsCommandTests {
         using var capture = ConsoleOutput.StartCapture();
         await Sut().HandleAsync(["accounts", "add", "claude", dir]);
         var id = Store.Load().Accounts.Single().Id;
-        await Assert.That(Store.Readings.TryRecord(id, 0, null, f => f)).IsTrue();
+        await Assert.That(Store.Readings.TryRecord(id, (f, _) => f)).IsTrue();
 
         var exit = await Sut().HandleAsync(["accounts", "remove", dir]);
 

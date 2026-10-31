@@ -42,11 +42,11 @@ public sealed class ReadingStore {
 
     internal IDisposable Lock() => ConfigFileLock.Acquire(_lockPath);
 
-    /// <summary>Writes nothing, and returns false, when the account is not registered at
-    /// <paramref name="producerGeneration"/> or <paramref name="sessionId"/> was retired from it. Never
-    /// throws for IO, lock or parse failures. Not re-entrant: never call it while holding
-    /// <c>readings.lock</c>.</summary>
-    public bool TryRecord(string accountId, long producerGeneration, string? sessionId, Func<ReadingFile, ReadingFile> update) {
+    /// <summary>Hands <paramref name="update"/> the account's current-generation file and its registry entry,
+    /// both read under the lock, and writes what it returns. Writes nothing, and returns false, when the
+    /// account is not registered or <paramref name="update"/> returns null. Never throws for IO, lock or
+    /// parse failures. Not re-entrant: never call it while holding <c>readings.lock</c>.</summary>
+    public bool TryRecord(string accountId, Func<ReadingFile, VendorAccount, ReadingFile?> update) {
         if (!SafeId(accountId)) return false;
 
         try {
@@ -54,12 +54,13 @@ public sealed class ReadingStore {
             if (lease is null) return false;
 
             var account = _registry()?.Accounts.FirstOrDefault(a => a.Id == accountId);
-            if (account is null || account.Generation != producerGeneration) return false;
-            if (sessionId is not null && account.RetiredSessions?.Contains(sessionId) == true) return false;
+            if (account is null) return false;
 
             AfterMembershipCheck?.Invoke();
 
-            WriteFile(accountId, update(ReadNormalized(accountId, account.Generation)));
+            if (update(ReadNormalized(accountId, account.Generation), account) is not { } next) return false;
+
+            WriteFile(accountId, next);
             return true;
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException || IsLockFailure(ex)) {
             return false;

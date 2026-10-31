@@ -590,4 +590,18 @@ public class MuseImportSourceTests : IDisposable {
         await Assert.That(classified.Status).IsEqualTo(ImportCommand.ClassificationStatus.ProbeError);
         await Assert.That(classified.ProbeErrorReason).IsEqualTo("watermark probe failed");
     }
+
+    /// <summary>A 410 is the server telling the owner they deleted the session: counted, never retried as
+    /// a failure and never loaded again as new.</summary>
+    [Test]
+    public async Task A_session_deleted_on_the_server_is_deleted_not_a_probe_error() {
+        LayOutProbe();
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(410).WithBody("""{"error":"session_deleted"}"""));
+
+        var classified = await ClassifyOnlyAsync();
+
+        await Assert.That(classified.Status).IsEqualTo(ImportCommand.ClassificationStatus.Deleted);
+        await Assert.That(classified.ProbeErrorReason).IsNull();
+    }
 }

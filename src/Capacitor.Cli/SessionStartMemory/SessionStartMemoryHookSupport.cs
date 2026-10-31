@@ -35,7 +35,7 @@ internal static class SessionStartMemoryHookSupport {
         var resolver = scopeResolver ?? new SessionStartMemoryScopeResolver(router, config, workdir, time);
 
         var memory     = new SessionStartMemoryContextProvider(resolver, client, time);
-        var guidelines = new SessionStartGuidelinesLane(client, time);
+        var guidelines = new SessionStartGuidelinesLane(client, time, diagnostic);
         var flows      = new SessionStartFlowsLane(client, time, SessionStartFlowsCatalogCache.Default(config));
         return new SessionStartCompositeContextProvider(resolver, memory, guidelines, flows, time, diagnostic);
     }

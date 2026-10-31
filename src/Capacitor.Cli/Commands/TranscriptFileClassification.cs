@@ -7,11 +7,9 @@ using Capacitor.Cli.PrDetection;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// HEAD-probes the server for each transcript to decide New / Partial /
-/// AlreadyLoaded / TooShort / Excluded / ProbeError. Used by both
-/// ClaudeImportSource and CodexImportSource — the only difference between
-/// them is the metadata extractor, which is selected internally from
-/// <c>vendor</c>.
+/// Probes the server for each transcript to decide New / Partial / AlreadyLoaded / TooShort /
+/// Deleted / ProbeError. Used by both ClaudeImportSource and CodexImportSource, which differ only in
+/// the metadata extractor, selected from <c>vendor</c>.
 /// </summary>
 internal static class TranscriptFileClassification {
     public static async Task<List<ImportCommand.SessionClassification>> ClassifyAsync(
@@ -131,6 +129,10 @@ internal static class TranscriptFileClassification {
                     break;
                 case HttpStatusCode.NoContent:
                     status = ImportCommand.ClassificationStatus.AlreadyLoaded;
+
+                    break;
+                case HttpStatusCode.Gone:
+                    status = ImportCommand.ClassificationStatus.Deleted;
 
                     break;
                 default:

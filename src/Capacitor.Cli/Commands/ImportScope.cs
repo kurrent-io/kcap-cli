@@ -13,32 +13,48 @@ public abstract record ImportScope {
     public sealed record All : ImportScope;
     public sealed record Org (string OrgLogin) : ImportScope;
 
-    /// <summary>One or more repositories, matched as a set.</summary>
+    /// <summary>One or more repositories, and folders outside any repository, matched as a set: a session
+    /// is in scope when its repository or its folder is.</summary>
     public sealed record Repo : ImportScope {
-        public Repo(IReadOnlyList<(string Owner, string Name)> repos) {
+        public Repo(IReadOnlyList<(string Owner, string Name)> repos, IReadOnlyList<string>? folders = null) {
             // Empty would have to mean either "everything" or "nothing", and a scope that silently
             // means one when the caller meant the other is worth refusing outright.
-            if (repos.Count == 0) throw new ArgumentException("A repo scope needs at least one repository.", nameof(repos));
+            if (repos.Count == 0 && (folders is null || folders.Count == 0))
+                throw new ArgumentException("A repo scope needs at least one repository or folder.", nameof(repos));
 
             // Stored deduped, so this really is a set: naming a repo twice is one selection, and
             // equality and hashing below can agree without reasoning about multiplicity.
-            Repos = [.. repos.Distinct(RepoComparer)];
+            Repos   = [.. repos.Distinct(RepoComparer)];
+            Folders = [.. (folders ?? []).Select(FolderKey).Distinct(StringComparer.Ordinal)];
         }
 
         public Repo(string owner, string name) : this([(owner, name)]) { }
 
         public IReadOnlyList<(string Owner, string Name)> Repos { get; }
 
-        // A record over a list compares by reference, which would quietly drop the value equality the
-        // single-repo shape had before it held a collection. Sound because Repos is deduped: set
-        // equality and an order-insensitive XOR agree only when neither side repeats an entry.
+        /// <summary>Folders as <c>kcap import --discover</c> names them, each a <see cref="FolderKey"/>.</summary>
+        public IReadOnlyList<string> Folders { get; }
+
+        // A record over a list compares by reference, so equality is spelled out. Sound because both
+        // lists are deduped: set equality and an order-insensitive XOR agree only without repeats.
         public bool Equals(Repo? other) =>
             other is not null
          && Repos.Count == other.Repos.Count
-         && !Repos.Except(other.Repos, RepoComparer).Any();
+         && !Repos.Except(other.Repos, RepoComparer).Any()
+         && Folders.Count == other.Folders.Count
+         && !Folders.Except(other.Folders, StringComparer.Ordinal).Any();
 
         public override int GetHashCode() =>
-            Repos.Aggregate(0, (acc, r) => acc ^ RepoComparer.GetHashCode(r));
+            Folders.Aggregate(
+                Repos.Aggregate(0, (acc, r) => acc ^ RepoComparer.GetHashCode(r)),
+                (acc, f) => acc ^ StringComparer.Ordinal.GetHashCode(f));
+    }
+
+    /// <summary>A folder the way discovery groups sessions by it: ordinal, without a trailing separator.</summary>
+    public static string FolderKey(string folder) {
+        var trimmed = folder.TrimEnd('/', '\\');
+
+        return trimmed.Length == 0 ? folder : trimmed;
     }
 
     private ImportScope() { }

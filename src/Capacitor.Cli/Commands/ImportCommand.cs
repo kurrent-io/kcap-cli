@@ -124,37 +124,38 @@ class ImportCommand(
                 if (bySource is { Count: > 1 }) {
                     Heading("By source", "yellow");
 
-                    var sub = new Grid()
-                        .AddColumn()
-                        .AddColumn()
-                        .AddColumn()
-                        .AddColumn()
-                        .AddColumn()
-                        .AddColumn()
-                        .AddColumn();
+                    var withDeleted = c.Deleted > 0;
+                    var sub         = new Grid();
 
-                    sub.AddRow(
+                    List<string> header = [
                         "[dim]Source[/]",
                         "[dim]New[/]",
                         "[dim]Resumable[/]",
                         "[dim]Already loaded[/]",
                         "[dim]Too short[/]",
                         "[dim]Excluded[/]",
-                        "[dim]Probe errors[/]"
-                    );
+                        "[dim]Probe errors[/]",
+                    ];
+                    if (withDeleted) header.Add("[dim]Deleted[/]");
+
+                    for (var i = 0; i < header.Count; i++) sub.AddColumn();
+                    sub.AddRow([.. header]);
 
                     foreach (var kv in bySource.OrderBy(x => x.Key, StringComparer.Ordinal)) {
                         var sc = kv.Value;
 
-                        sub.AddRow(
+                        List<string> row = [
                             $"[bold]{Markup.Escape(kv.Key)}[/]",
                             sc.New.ToString(),
                             sc.Partial.ToString(),
                             sc.AlreadyLoaded.ToString(),
                             sc.TooShort.ToString(),
                             sc.Excluded.ToString(),
-                            sc.ProbeError > 0 ? $"[red]{sc.ProbeError}[/]" : "0"
-                        );
+                            sc.ProbeError > 0 ? $"[red]{sc.ProbeError}[/]" : "0",
+                        ];
+                        if (withDeleted) row.Add(sc.Deleted.ToString());
+
+                        sub.AddRow([.. row]);
                     }
 
                     Terminal.Ansi.Write(new Padder(sub).Padding(Detail, 0, 0, 0));
@@ -166,6 +167,7 @@ class ImportCommand(
                 grid.AddRow("[bold]Already loaded[/]", c.AlreadyLoaded.ToString());
                 grid.AddRow("[bold]Too short[/]", c.TooShort.ToString());
                 grid.AddRow("[bold]Excluded[/]", c.Excluded.ToString());
+                if (c.Deleted    > 0) grid.AddRow("[bold]Deleted[/]", c.Deleted.ToString());
                 if (c.ProbeError > 0) grid.AddRow("[bold]Probe errors[/]", $"[red]{c.ProbeError}[/]");
                 Terminal.Ansi.Write(new Padder(grid).Padding(Detail, 0, 0, 0));
             } else {
@@ -180,6 +182,7 @@ class ImportCommand(
                         Terminal.Out.WriteLine($"{Indented}  Already loaded    {sc.AlreadyLoaded}");
                         Terminal.Out.WriteLine($"{Indented}  Too short         {sc.TooShort}");
                         Terminal.Out.WriteLine($"{Indented}  Excluded          {sc.Excluded}");
+                        if (sc.Deleted    > 0) Terminal.Out.WriteLine($"{Indented}  Deleted           {sc.Deleted}");
                         if (sc.ProbeError > 0) Terminal.Out.WriteLine($"{Indented}  Probe errors      {sc.ProbeError}");
                     }
 
@@ -191,6 +194,7 @@ class ImportCommand(
                 Terminal.Out.WriteLine($"{Indented}Already loaded    {c.AlreadyLoaded}");
                 Terminal.Out.WriteLine($"{Indented}Too short         {c.TooShort}");
                 Terminal.Out.WriteLine($"{Indented}Excluded          {c.Excluded}");
+                if (c.Deleted    > 0) Terminal.Out.WriteLine($"{Indented}Deleted           {c.Deleted}");
                 if (c.ProbeError > 0) Terminal.Out.WriteLine($"{Indented}Probe errors      {c.ProbeError}");
             }
         }
@@ -212,20 +216,17 @@ class ImportCommand(
                   + $"[green]{f.Imported}[/] imported · {f.Skipped} skipped · "
                   + (f.Failed > 0 ? $"[red]{f.Failed}[/] failed" : "0 failed"));
 
+                // Its own line: the desktop app reads the line above as this run's whole total.
+                if (f.Deferred > 0) Terminal.Ansi.MarkupLine($"{Indented}{Markup.Escape(DeferredNote(f.Deferred))}");
+
                 if (bySource is { Count: > 1 }) {
                     Heading("By source", "green");
 
-                    var sub = new Grid()
-                        .AddColumn()
-                        .AddColumn()
-                        .AddColumn()
-                        .AddColumn()
-                        .AddColumn()
-                        .AddColumn()
-                        .AddColumn()
-                        .AddColumn();
+                    var withDeleted  = f.Deleted  > 0;
+                    var withDeferred = f.Deferred > 0;
+                    var sub          = new Grid();
 
-                    sub.AddRow(
+                    List<string> header = [
                         "[dim]Source[/]",
                         "[dim]Loaded[/]",
                         "[dim]Resumed[/]",
@@ -233,13 +234,18 @@ class ImportCommand(
                         "[dim]Too short[/]",
                         "[dim]Excluded[/]",
                         "[dim]Probe errors[/]",
-                        "[dim]Errored[/]"
-                    );
+                        "[dim]Errored[/]",
+                    ];
+                    if (withDeleted) header.Add("[dim]Deleted[/]");
+                    if (withDeferred) header.Add("[dim]Queued[/]");
+
+                    for (var i = 0; i < header.Count; i++) sub.AddColumn();
+                    sub.AddRow([.. header]);
 
                     foreach (var kv in bySource.OrderBy(x => x.Key, StringComparer.Ordinal)) {
                         var sf = kv.Value;
 
-                        sub.AddRow(
+                        List<string> row = [
                             $"[bold]{Markup.Escape(kv.Key)}[/]",
                             sf.Loaded.ToString(),
                             sf.Resumed.ToString(),
@@ -247,8 +253,12 @@ class ImportCommand(
                             sf.TooShort.ToString(),
                             sf.Excluded.ToString(),
                             sf.ProbeError > 0 ? $"[red]{sf.ProbeError}[/]" : "0",
-                            sf.Errored    > 0 ? $"[red]{sf.Errored}[/]" : "0"
-                        );
+                            sf.Errored    > 0 ? $"[red]{sf.Errored}[/]" : "0",
+                        ];
+                        if (withDeleted) row.Add(sf.Deleted.ToString());
+                        if (withDeferred) row.Add(sf.Deferred.ToString());
+
+                        sub.AddRow([.. row]);
                     }
 
                     Terminal.Ansi.Write(new Padder(sub).Padding(Detail, 0, 0, 0));
@@ -260,8 +270,10 @@ class ImportCommand(
                 grid.AddRow("[bold]Already loaded[/]", f.AlreadyLoaded.ToString());
                 if (f.TooShort   > 0) grid.AddRow("[bold]Too short[/]", f.TooShort.ToString());
                 if (f.Excluded   > 0) grid.AddRow("[bold]Excluded[/]", f.Excluded.ToString());
+                if (f.Deleted    > 0) grid.AddRow("[bold]Deleted[/]", f.Deleted.ToString());
                 if (f.ProbeError > 0) grid.AddRow("[bold]Probe errors[/]", $"[red]{f.ProbeError}[/]");
                 if (f.Errored    > 0) grid.AddRow("[bold]Errored[/]", $"[red]{f.Errored}[/]");
+                if (f.Deferred   > 0) grid.AddRow("[bold]Queued[/]", f.Deferred.ToString());
 
                 if (f.RanBackground) {
                     // Gated on the count, not on RanBackground: with --skip-title --generate-summaries
@@ -280,6 +292,7 @@ class ImportCommand(
             } else {
                 Heading("Done", "green");
                 Terminal.Out.WriteLine($"{Indented}{f.Imported} imported · {f.Skipped} skipped · {f.Failed} failed");
+                if (f.Deferred > 0) Terminal.Out.WriteLine($"{Indented}{DeferredNote(f.Deferred)}");
 
                 if (bySource is { Count: > 1 }) {
                     Heading("By source", "green");
@@ -292,8 +305,10 @@ class ImportCommand(
                         Terminal.Out.WriteLine($"{Indented}  Already loaded      {sf.AlreadyLoaded}");
                         if (sf.TooShort   > 0) Terminal.Out.WriteLine($"{Indented}  Too short           {sf.TooShort}");
                         if (sf.Excluded   > 0) Terminal.Out.WriteLine($"{Indented}  Excluded            {sf.Excluded}");
+                        if (sf.Deleted    > 0) Terminal.Out.WriteLine($"{Indented}  Deleted             {sf.Deleted}");
                         if (sf.ProbeError > 0) Terminal.Out.WriteLine($"{Indented}  Probe errors        {sf.ProbeError}");
                         if (sf.Errored    > 0) Terminal.Out.WriteLine($"{Indented}  Errored             {sf.Errored}");
+                        if (sf.Deferred   > 0) Terminal.Out.WriteLine($"{Indented}  Queued              {sf.Deferred}");
                     }
 
                     Terminal.Out.WriteLine();
@@ -304,8 +319,10 @@ class ImportCommand(
                 Terminal.Out.WriteLine($"{Indented}Already loaded      {f.AlreadyLoaded}");
                 if (f.TooShort   > 0) Terminal.Out.WriteLine($"{Indented}Too short           {f.TooShort}");
                 if (f.Excluded   > 0) Terminal.Out.WriteLine($"{Indented}Excluded            {f.Excluded}");
+                if (f.Deleted    > 0) Terminal.Out.WriteLine($"{Indented}Deleted             {f.Deleted}");
                 if (f.ProbeError > 0) Terminal.Out.WriteLine($"{Indented}Probe errors        {f.ProbeError}");
                 if (f.Errored    > 0) Terminal.Out.WriteLine($"{Indented}Errored             {f.Errored}");
+                if (f.Deferred   > 0) Terminal.Out.WriteLine($"{Indented}Queued              {f.Deferred}");
 
                 if (f.RanBackground) {
                     if (f.RequestedTitles)
@@ -344,6 +361,9 @@ class ImportCommand(
 
         /// <summary>Capacitor-spawned sub-session (title generation, what's-done summary) — never imported.</summary>
         InternalSubSession,
+
+        /// <summary>The server answered 410: its owner deleted it there. Never sent again, and not a failure.</summary>
+        Deleted,
     }
 
     internal sealed record SessionClassification {
@@ -562,8 +582,29 @@ class ImportCommand(
             int AlreadyLoaded,
             int TooShort,
             int Excluded,
-            int ProbeError
-        );
+            int ProbeError,
+            int Deleted = 0
+        ) {
+        internal int Found => New + Partial + AlreadyLoaded + TooShort + Excluded + ProbeError + Deleted;
+
+        /// <summary>Has content the server does not: what an import run is for.</summary>
+        internal int Eligible => New + Partial;
+    }
+
+    /// <summary>
+    /// The line that makes a capped run's split visible before it starts, so the batch it imports is not
+    /// read as all the work there was.
+    /// </summary>
+    internal static string ForegroundSplitNotice(ClassificationCounts plan, int deferred) {
+        var eligible = plan.Eligible;
+
+        return $"Of {plan.Found} session{(plan.Found == 1 ? "" : "s")} found, {eligible} need{(eligible == 1 ? "s" : "")} importing: "
+             + $"the newest {eligible - deferred} now, and {deferred} queued for the background import.";
+    }
+
+    /// <summary>The Done grid's account of what a capped run left for the background import.</summary>
+    internal static string DeferredNote(int deferred) =>
+        $"{deferred} more queued for the background import — this run took the newest sessions first.";
 
     /// <summary>
     /// Aggregate a per-source slice of classifications into a Plan-grid row.
@@ -575,7 +616,8 @@ class ImportCommand(
             AlreadyLoaded: classifications.Count(c => c.Status == ClassificationStatus.AlreadyLoaded),
             TooShort: classifications.Count(c => c.Status      == ClassificationStatus.TooShort),
             Excluded: classifications.Count(c => c.Status      == ClassificationStatus.Excluded),
-            ProbeError: classifications.Count(c => c.Status    == ClassificationStatus.ProbeError)
+            ProbeError: classifications.Count(c => c.Status    == ClassificationStatus.ProbeError),
+            Deleted: classifications.Count(c => c.Status       == ClassificationStatus.Deleted)
         );
 
     /// <summary>
@@ -591,22 +633,25 @@ class ImportCommand(
     /// <param name="classifications">All classifications for this vendor (already filtered).</param>
     /// <param name="imported">Count of sessions in <paramref name="classifications"/> whose SessionId appears in importedSessionIds (i.e. chain-phase imports).</param>
     /// <param name="routedOutcomes">Per-vendor routed-phase outcomes, or null if this vendor ran through the chain phase only.</param>
+    /// <param name="deferredIds">Sessions a cap left for the background import.</param>
     /// <remarks>
     /// Routed-phase vendors (Cursor today) get exact attribution: <c>routedOutcomes.Skipped</c>
     /// folds into Excluded (server said "already current"), <c>routedOutcomes.Failed</c> into Errored.
     /// Chain-phase vendors (Claude/Codex) split their imported sessions into Loaded and
-    /// <paramref name="resumed"/> the way the totals do, and count (New+Partial)−imported as Errored.
+    /// <paramref name="resumed"/> the way the totals do, and count (New+Partial)−imported as Errored,
+    /// less the sessions a cap deferred: those never ran, and the totals count them as Deferred.
     /// </remarks>
     internal static FinalCounts ComputePerSourceFinalCounts(
             IReadOnlyList<SessionClassification>   classifications,
             int                                    imported,
             (int Loaded, int Skipped, int Failed)? routedOutcomes,
-            int                                    resumed = 0
+            int                                    resumed     = 0,
+            IReadOnlySet<string>?                  deferredIds = null
         ) {
-        var counts = ComputeCounts(classifications);
+        var counts   = ComputeCounts(classifications);
+        var deferred = CountDeferred(classifications, deferredIds);
 
         if (routedOutcomes is { } r) {
-            // Routed-phase vendor: take exact counts from the per-vendor tracker.
             return new FinalCounts(
                 Loaded: r.Loaded,
                 Resumed: 0,
@@ -621,7 +666,9 @@ class ImportCommand(
                 SummariesGenerated: 0,
                 SummariesFailed: 0,
                 RanBackground: false,
-                RequestedSummaries: false
+                RequestedSummaries: false,
+                Deleted: counts.Deleted,
+                Deferred: deferred
             );
         }
 
@@ -632,15 +679,26 @@ class ImportCommand(
             TooShort: counts.TooShort,
             Excluded: counts.Excluded,
             ProbeError: counts.ProbeError,
-            Errored: classifications.Count(c => c.Status is ClassificationStatus.New or ClassificationStatus.Partial) - imported,
+            Errored: counts.Eligible - imported - deferred,
             TitlesGenerated: 0,
             TitlesSkipped: 0,
             TitlesFailed: 0,
             SummariesGenerated: 0,
             SummariesFailed: 0,
             RanBackground: false,
-            RequestedSummaries: false
+            RequestedSummaries: false,
+            Deleted: counts.Deleted,
+            Deferred: deferred
         );
+    }
+
+    /// <summary>Counted per classification, as the Plan grid counts, so its rows and the Done grid's
+    /// reconcile.</summary>
+    internal static int CountDeferred(IEnumerable<SessionClassification> classifications, IReadOnlySet<string>? deferredIds) {
+        if (deferredIds is not { Count: > 0 } ids) return 0;
+
+        return classifications.Count(c => c.Status is ClassificationStatus.New or ClassificationStatus.Partial
+                                       && ids.Contains(c.SessionId));
     }
 
     internal sealed record FinalCounts(
@@ -658,13 +716,20 @@ class ImportCommand(
             int  SummariesFailed,
             bool RanBackground,
             bool RequestedSummaries,
-            bool RequestedTitles = false
+            bool RequestedTitles = false,
+            int  Deleted = 0,
+            int  Deferred = 0
         ) {
         /// <summary>Reached the server this run. A resume is an import that finished, not a third thing.</summary>
         internal int Imported => Loaded + Resumed;
 
-        /// <summary>Deliberately not sent — already there, too short, or an excluded repo. Not failures.</summary>
-        internal int Skipped => AlreadyLoaded + TooShort + Excluded;
+        /// <summary>Every session the run accounted for, which is what its Plan grid found. <see cref="Deferred"/>
+        /// is work a cap left for the background import: neither done nor failed.</summary>
+        internal int Total => Imported + Skipped + Failed + Deferred;
+
+        /// <summary>Deliberately not sent — already there, too short, an excluded repo, or deleted on the
+        /// server. Not failures.</summary>
+        internal int Skipped => AlreadyLoaded + TooShort + Excluded + Deleted;
 
         /// <summary>Should have landed and did not. Re-running retries exactly these.</summary>
         internal int Failed => ProbeError + Errored;
@@ -795,7 +860,8 @@ class ImportCommand(
             Action<ImportDiscoveryResult>? onDiscovered           = null,
             int?                          maxSessions             = null,
             Action<ImportRunSelection>?   onSelected              = null,
-            bool                          nested                  = false
+            bool                          nested                  = false,
+            ImportSkip?                   skip                    = null
         ) {
         // A caller that wants the figures rather than the rendering says so by handing one over; the
         // console is the default consumer, not the only one.
@@ -819,7 +885,7 @@ class ImportCommand(
         var missing   = sources.Where(s => !s.IsAvailable).Select(s => s.Vendor).ToList();
 
         if (available.Count == 0) {
-            if (explicitVendorSelection) {
+            if (explicitVendorSelection && !discoverOnly) {
                 var flagList = string.Join(", ", missing.Select(v => v.Flag));
 
                 await console.Error.WriteLineAsync(
@@ -829,7 +895,15 @@ class ImportCommand(
                 return 1;
             }
 
-            if (discoverOnly) return WriteEmptyDiscoveryReport(discoverySink, [], windowsAsOf, time);
+            // A harness that has never run has no history folder yet: discovery reports that as no
+            // history, so a caller can tell it from a scan that failed.
+            if (discoverOnly) {
+                if (explicitVendorSelection) {
+                    foreach (var v in missing) await console.Error.WriteLineAsync($"Skipping {v.VendorId} (not detected on this machine).");
+                }
+
+                return WriteEmptyDiscoveryReport(discoverySink, [], windowsAsOf, time);
+            }
 
             display.Line("No coding-agent sessions found. Install Claude, Codex, or Cursor and try again.");
 
@@ -1007,7 +1081,11 @@ class ImportCommand(
                     sources.SelectMany((src, i) =>
                         discoveriesPerSource[i].Select(d => (d.SessionId, src.DiscoveryAge(d)))),
                     resolved,
-                    DiscoveryWindows(windowsAsOf ?? time.GetUtcNow())),
+                    DiscoveryWindows(windowsAsOf ?? time.GetUtcNow()),
+                    sources.SelectMany((src, i) => discoveriesPerSource[i].Select(d => (d.SessionId, src.Vendor)))
+                        .DistinctBy(s => s.SessionId)
+                        .ToDictionary(s => s.SessionId, s => s.Vendor),
+                    sessionCwds),
                 ScannedVendors(sources)));
 
             return 0;
@@ -1064,12 +1142,19 @@ class ImportCommand(
                     scope,
                     (t, _) => new ValueTask<(string?, string?)>(
                         resolved.TryGetValue(t.SessionId, out var v) && v is { } x ? (x.Owner, x.Name) : (null, null)
-                    )
+                    ),
+                    folderOf: sid => sessionCwds.GetValueOrDefault(sid),
+                    skip: skip
                 ))
                 .Select(t => t.SessionId)
                 .ToHashSet(StringComparer.Ordinal);
 
             filteredPerSource[i] = [.. disc.Where(s => keptIds.Contains(s.SessionId))];
+        }
+
+        // A nested run's caller has already said it.
+        if (skip is { IsEmpty: false } && !nested) {
+            display.Line($"Leaving out of this import only: {string.Join(", ", skip.Labels)}.");
         }
 
         var totalAfterScope = filteredPerSource.Sum(d => d.Count);
@@ -1234,7 +1319,7 @@ class ImportCommand(
 
         if (captureScope.Configured) classifications = await captureScope.ApplyAsync(classifications, sessionCwds);
 
-        // --- Resolve excluded-repo / excluded-path prompts (TTY only; non-TTY auto-skips) ---
+        // --- Resolve excluded-repo / excluded-path prompts (interactive without --yes only) ---
         // Repo and path exclusions are independent gates: a session is included only when
         // EVERY applicable exclusion key has been opted-in. Without that, opting into a
         // repo would silently bypass a path the user had explicitly ignored.
@@ -1264,12 +1349,7 @@ class ImportCommand(
         var includeOutsideAllowlist = false;
 
         if (excludedByRepo.Count > 0 || excludedByPath.Count > 0 || outsideAllowlist.Count > 0) {
-            // Only prompt when both stdin and stdout are interactive. Writing prompts to stderr
-            // keeps them visible even when stdout is redirected, but we still can't ReadLine
-            // meaningfully without a TTY on stdin. autoSkipExclusions forces the non-interactive
-            // path regardless of TTY state (e.g. the embedded `kcap setup` import call, which must
-            // never block on stdin).
-            var canPrompt = display.Tty && !console.InputRedirected && !autoSkipExclusions;
+            var canPrompt = CanPromptForExclusions(display.Tty, console.InputRedirected, autoSkipExclusions, skipConfirmation);
 
             if (canPrompt) {
                 foreach (var (key, sessions) in excludedByRepo) {
@@ -1298,7 +1378,13 @@ class ImportCommand(
                     .Count();
                 var totalGroups = excludedByRepo.Count + excludedByPath.Count + (outsideAllowlist.Count > 0 ? 1 : 0);
                 await console.Error.WriteLineAsync(
-                    $"{display.Indented}Auto-skipping {distinctSessions} session(s) from {totalGroups} excluded source(s) (non-interactive).");
+                    $"{display.Indented}{AutoSkipNotice(distinctSessions, totalGroups, skipConfirmation, autoSkipExclusions)}");
+
+                foreach (var line in ExcludedSourceLines(
+                             excludedByRepo.Select(kv => (kv.Key, kv.Value.Count)),
+                             excludedByPath.Select(kv => (kv.Key, kv.Value.Count)),
+                             outsideAllowlist.Count))
+                    await console.Error.WriteLineAsync($"{display.Indented}  {line}");
             }
         }
 
@@ -1381,14 +1467,20 @@ class ImportCommand(
         // The cap narrows the plan before the reconcile, so the reconcile sees exactly the units
         // that will run; a child never reaches it without its parent.
         HashSet<string>? selectedIds = null;
+        IReadOnlySet<string> deferredIds = FrozenSet<string>.Empty;
 
         if (maxSessions is { } cap) {
             var plan = ForegroundSelection.Select(chains, routed, classifications, cap);
             chains      = plan.Chains;
             routed      = plan.Routed;
             selectedIds = plan.Selection.SelectedIds.ToHashSet(StringComparer.Ordinal);
+            deferredIds = ForegroundSelection.Deferred(classifications, chains, routed);
             onSelected?.Invoke(plan.Selection);
         }
+
+        var deferredCount = CountDeferred(classifications, deferredIds);
+
+        if (deferredCount > 0) display.Line(ForegroundSplitNotice(planCounts, deferredCount));
 
         routed = ReconcileOrphanedCursorSubagentChildren(routed);
 
@@ -2114,7 +2206,9 @@ class ImportCommand(
             SummariesFailed: summariesFailed,
             RanBackground: hasBackgroundWork,
             RequestedTitles: titleTaskCount > 0,
-            RequestedSummaries: summaryTaskCount > 0
+            RequestedSummaries: summaryTaskCount > 0,
+            Deleted: planCounts.Deleted,
+            Deferred: deferredCount
         );
 
         // Per-source FinalCounts. With a single source there's no sub-grid;
@@ -2140,7 +2234,8 @@ class ImportCommand(
                             slice,
                             imported,
                             hasRouted ? routed : null,
-                            slice.Count(c => resumedSet.Contains(c.SessionId))
+                            slice.Count(c => resumedSet.Contains(c.SessionId)),
+                            deferredIds
                         );
                     },
                     StringComparer.Ordinal
@@ -2238,6 +2333,14 @@ class ImportCommand(
         return map;
     }
 
+    /// <summary>
+    /// The branch an imported session ran on. Claude and Codex transcripts record it, and that record
+    /// is the only evidence: the checkout's branch at import time says nothing about a session that ran
+    /// weeks earlier, so when the transcript recorded none the branch stays unknown.
+    /// </summary>
+    internal static string? HistoricalBranch(HarnessId vendor, string? recorded, string? checkout) =>
+        vendor is HarnessId.Claude or HarnessId.Codex ? recorded : checkout;
+
     internal static SessionMetadata ExtractSessionMetadata(string filePath) {
         var meta = new SessionMetadata();
 
@@ -2275,6 +2378,10 @@ class ImportCommand(
                     // Extract sessionId
                     meta.SessionId ??= root.Str("sessionId");
 
+                    // Detached HEAD is recorded as "HEAD", which names no branch.
+                    if (meta.GitBranch is null && root.Str("gitBranch") is { Length: > 0 } branch && branch != "HEAD")
+                        meta.GitBranch = branch;
+
                     // Extract first timestamp for continuation ordering
                     if (meta.FirstTimestamp is null
                      && root.Str("timestamp") is { } tsStr
@@ -2283,7 +2390,7 @@ class ImportCommand(
                     }
 
                     // Stop early once we have all metadata
-                    if (meta.Cwd is not null && meta.Model is not null && meta.Slug is not null) {
+                    if (meta.Cwd is not null && meta.Model is not null && meta.Slug is not null && meta.GitBranch is not null) {
                         break;
                     }
                 } catch (JsonException) { }
@@ -2391,13 +2498,12 @@ class ImportCommand(
     /// again for <see cref="ExtractCwdFromTranscript"/>.
     ///
     /// <para>
-    /// The sub-session marker is the opening <c>queue-operation</c>/<c>enqueue</c>
-    /// entry carrying a known helper prompt — the same signal (and first-5-line
-    /// window) <see cref="TitleGenerator.IsCapacitorSubSession"/> uses, so the
-    /// two stay in agreement. The marker wins over any cwd seen in that window,
-    /// matching the original two-pass behaviour. Detection is Claude-only;
-    /// Codex rollouts have no analogous transcript, so <paramref name="codex"/>
-    /// short-circuits the marker check.
+    /// The sub-session marks are the ones <see cref="TitleGenerator.IsCapacitorSubSession"/>
+    /// reads, in the same windows, so the two stay in agreement: the opening
+    /// <c>queue-operation</c>/<c>enqueue</c> entry carrying a known helper prompt,
+    /// and a <see cref="ClaudeHelperRun"/> session id or working directory. A
+    /// detected helper run wins over its cwd. Detection is Claude-only; a headless
+    /// Codex run persists no rollout, so <paramref name="codex"/> skips it.
     /// </para>
     /// </summary>
     internal static (bool IsSubSession, string? Cwd) ExtractCwdAndDetectSubSession(string filePath, bool codex) {
@@ -2447,7 +2553,7 @@ class ImportCommand(
             // Best effort — same posture as ExtractCwdFromTranscript.
         }
 
-        return (false, cwd);
+        return !codex && ClaudeHelperRun.IsHelperRun(Path.GetFileNameWithoutExtension(filePath), cwd) ? (true, null) : (false, cwd);
     }
 
     /// <summary>
@@ -2994,7 +3100,7 @@ class ImportCommand(
                 await console.Ansi.Status()
                     .Spinner(Spinner.Known.Dots)
                     .StartAsync(
-                        $"Scanning repositories (0/{total})…",
+                        $"Matching folders to repositories (0/{total})…",
                         async ctx => {
                             await Parallel.ForEachAsync(
                                 uniqueCwds,
@@ -3007,14 +3113,14 @@ class ImportCommand(
                                     // the per-completion update so parallel workers can't race on the
                                     // status renderer.
                                     lock (statusLock) {
-                                        ctx.Status($"Scanning repositories ({d}/{total})…");
+                                        ctx.Status($"Matching folders to repositories ({d}/{total})…");
                                     }
                                 }
                             );
                         }
                     );
             } else {
-                display.Line($"Scanning {total} repositor{(total == 1 ? "y" : "ies")}...");
+                display.Line(MatchingFoldersLine(total));
                 await Parallel.ForEachAsync(uniqueCwds, options, async (cwd, _) => await DetectOne(cwd));
             }
         }
@@ -3432,8 +3538,8 @@ class ImportCommand(
 
         // Codex sessions carry a `git` block on session_meta — prefer it over a fresh
         // RepositoryDetection probe (which reads the live git config and might disagree
-        // with what was true when the rollout was recorded). Detection still runs as a
-        // fallback for fields the rollout omits (user_name / user_email).
+        // with what was true when the rollout was recorded). Detection still fills the fields
+        // the rollout omits (user_name / user_email), but never the branch: see HistoricalBranch.
         var codexRepo = session.Vendor is HarnessId.Codex ? ExtractCodexGitInfo(session.FilePath) : null;
 
         if (cwd is not null) {
@@ -3453,9 +3559,9 @@ class ImportCommand(
                     repoNode["remote_url"] = remoteUrl;
 
                 var (codexOwner, codexRepoName) = GitUrlParser.ParseRemoteUrl(codexRepo?.RemoteUrl);
-                var owner    = codexOwner        ?? repo?.Owner;
-                var repoName = codexRepoName     ?? repo?.RepoName;
-                var branch   = codexRepo?.Branch ?? repo?.Branch;
+                var owner    = codexOwner    ?? repo?.Owner;
+                var repoName = codexRepoName ?? repo?.RepoName;
+                var branch   = HistoricalBranch(session.Vendor, session.Vendor is HarnessId.Codex ? codexRepo?.Branch : meta.GitBranch, repo?.Branch);
 
                 if (owner is not null) repoNode["owner"]        = owner;
                 if (repoName is not null) repoNode["repo_name"] = repoName;
@@ -3478,7 +3584,12 @@ class ImportCommand(
                 GitRepository.FindRoot,
                 root => RepositoryDetection.DetectRepositoryAsync(router, config, root, time, detectPullRequest: false));
 
-            if (evidenceNode is not null) startHook["repository"] = evidenceNode;
+            if (evidenceNode is not null) {
+                if (HistoricalBranch(session.Vendor, meta.GitBranch, null) is { } recorded) evidenceNode["branch"] = recorded;
+                else evidenceNode.Remove("branch");
+
+                startHook["repository"] = evidenceNode;
+            }
         }
 
         // The /hooks/session-start route binds vendor from the URL path
@@ -3662,6 +3773,42 @@ class ImportCommand(
         if (c.OutsideAllowlist && !includeOutsideAllowlist) return true;
 
         return false;
+    }
+
+    /// <summary>
+    /// Whether this run may ask to include a session its capture scope excludes. <c>--yes</c> answers the
+    /// import's confirmation, never this question, and stdin cannot answer it without a terminal: anything
+    /// else keeps every exclusion.
+    /// </summary>
+    internal static bool CanPromptForExclusions(bool tty, bool inputRedirected, bool autoSkipExclusions, bool skipConfirmation) =>
+        tty && !inputRedirected && !autoSkipExclusions && !skipConfirmation;
+
+    /// <summary>The count is of working directories: several can share a repository, and one can have none.</summary>
+    internal static string MatchingFoldersLine(int folders) =>
+        $"Matching {folders} folder{(folders == 1 ? "" : "s")} to repositories...";
+
+    /// <summary>Each source an auto-skip held back and the setting that excludes it, so the user can tell
+    /// which list to change.</summary>
+    internal static IEnumerable<string> ExcludedSourceLines(
+            IEnumerable<(string Key, int Sessions)> repos, IEnumerable<(string Key, int Sessions)> paths, int outsideAllowlist) {
+        static string Count(int n) => $"{n} session{(n == 1 ? "" : "s")}";
+
+        foreach (var (key, sessions) in repos)
+            yield return $"repository {key}: {Count(sessions)}, excluded by the profile's excluded_repos";
+
+        foreach (var (key, sessions) in paths)
+            yield return $"path {key}: {Count(sessions)}, excluded by `kcap ignore`";
+
+        if (outsideAllowlist > 0)
+            yield return $"{Count(outsideAllowlist)} outside the allow list (`kcap allow --list`)";
+    }
+
+    /// <summary>What a run that cannot ask prints in place of the exclusion prompts.</summary>
+    internal static string AutoSkipNotice(int sessions, int groups, bool skipConfirmation, bool autoSkipExclusions) {
+        var notice = $"Auto-skipping {sessions} session(s) from {groups} excluded source(s) "
+                   + (skipConfirmation && !autoSkipExclusions ? "(--yes keeps exclusions)." : "(non-interactive).");
+
+        return autoSkipExclusions ? notice : notice + " To include them, run without --yes at a terminal and answer its prompt.";
     }
 
     /// <summary>
