@@ -65,7 +65,7 @@ internal partial class AgentOrchestrator {
             if (resolution.Start is not { } start)
                 return FetchFailed(resolution.FetchError ?? "origin could not be read");
 
-            var work = await _worktreeManager.CheckHandoffWorkAsync(root, start.Sha, request.SessionCommits, mayHaveUnpushedWork: true);
+            var work = await _worktreeManager.CheckHandoffWorkAsync(root, start.Sha, request.SessionCommits, mayHaveUnpushedWork: true, ct: ct);
             var launch = new HandoffLaunchStart(
                 "", start.Sha, start.Checkout.ToString(), start.Branch, start.LocalBranchSha, start.Source.ToString(),
                 start.DetachReason.ToString(), request.PullRequestNumber, request.HeadIsFork, request.HeadOwner, request.HeadRepo);
@@ -132,11 +132,9 @@ internal partial class AgentOrchestrator {
         if (!OriginIs(repoPath, owner, name))
             return (null, null, $"{HandoffRefusals.RepoMismatch}: {repoPath} is not a checkout of {owner}/{name}");
 
-        var start = handoff.Start.ToStart()!;
-        ct.ThrowIfCancellationRequested();
-
-        var work     = await _worktreeManager.CheckHandoffWorkAsync(repoPath, start.Sha, handoff.SessionCommits, mayHaveUnpushedWork: true);
-        var worktree = await _worktreeManager.CreateHandoffAsync(repoPath, start);
+        var start    = handoff.Start.ToStart()!;
+        var work     = await _worktreeManager.CheckHandoffWorkAsync(repoPath, start.Sha, handoff.SessionCommits, mayHaveUnpushedWork: true, ct: ct);
+        var worktree = await _worktreeManager.CreateHandoffAsync(repoPath, start, ct: ct);
 
         return (worktree, HandoffPrompt.Build(handoff.Source, handoff.Start, start, work, cmd.Prompt), null);
     }
@@ -170,10 +168,12 @@ internal partial class AgentOrchestrator {
 
     /// <summary>Starts the takeover of a hand-off's source off the caller's path, once, as soon as the agent's own
     /// session exists; a terminal agent's pinned id names no session until its transcript is found. The agent runs
-    /// on whatever the outcome.</summary>
+    /// on whatever the outcome. A resumed successor runs it again unless its stored outcome settled: the server
+    /// admits a repeated begin for the same successor.</summary>
     void StartHandoffTakeover(AgentInstance agent) {
         if (agent.HandoffSource is not { } source || SessionIds.Canonical(agent.SessionId) is not { } successor) return;
         if (agent.Runtime is not IAcpTranscriptSource && agent.TranscriptPath is null) return;
+        if (_handoffOutcomes.Get(successor) is { State: not ("running" or "interrupted") }) return;
         if (Interlocked.CompareExchange(ref agent.HandoffTakeoverStarted, 1, 0) != 0) return;
 
         PutHandoffOutcome(successor, HandoffOutcomeDto.Running(source.SessionId, source.Title));

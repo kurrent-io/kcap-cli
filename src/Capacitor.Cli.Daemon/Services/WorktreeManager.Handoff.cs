@@ -113,7 +113,9 @@ public partial class WorktreeManager {
     /// <summary>Materialises a start from <see cref="ResolveHandoffStartAsync"/>. The local branch is
     /// re-read first and creation refuses with <c>handoff_start_changed</c> if it moved or was checked out
     /// since; a pre-existing branch is never owned, so no rollback or removal deletes it.</summary>
-    public async Task<WorktreeInfo> CreateHandoffAsync(string repoPath, HandoffStart start, string? name = null) {
+    public async Task<WorktreeInfo> CreateHandoffAsync(
+            string repoPath, HandoffStart start, string? name = null, CancellationToken ct = default) {
+        ct.ThrowIfCancellationRequested();
         name ??= $"agent-{Guid.NewGuid():N}"[..20];
 
         var worktreeRoot = Path.Combine(repoPath, ".capacitor", "worktrees");
@@ -138,6 +140,7 @@ public partial class WorktreeManager {
 
         try {
             await WithWorktreeMetadataGate(repoPath, time, async () => {
+                ct.ThrowIfCancellationRequested();
                 if (!detached) {
                     var (tip, checkedOut) = await ReadLocalBranchUngatedAsync(repoPath, branch);
                     if (tip != start.LocalBranchSha) throw StartChanged($"{branch} is at {tip ?? "nothing"}, not {start.LocalBranchSha ?? "nothing"}");
@@ -204,13 +207,14 @@ public partial class WorktreeManager {
     /// work that no commit list can show. A missing commit outranks any uncertainty.</summary>
     public async Task<HandoffWork> CheckHandoffWorkAsync(
             string repoPath, string startSha, IReadOnlyList<string>? sessionCommits, bool mayHaveUnpushedWork,
-            int checkCap = HandoffCommitCheckCap) {
+            int checkCap = HandoffCommitCheckCap, CancellationToken ct = default) {
         var missing = new List<string>();
 
         var reverted = false;
 
         // Each commit costs up to two git processes on the launch lane; the rest are left unconfirmed.
         foreach (var commit in (sessionCommits ?? []).Take(checkCap)) {
+            ct.ThrowIfCancellationRequested();
             if (!IsFullSha(commit) || !await IsReachableAsync(commit)) missing.Add(commit);
             else if (await IsNamedByRevertAsync(commit)) reverted = true;
         }

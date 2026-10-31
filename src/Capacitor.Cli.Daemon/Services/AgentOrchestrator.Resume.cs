@@ -388,7 +388,8 @@ internal partial class AgentOrchestrator {
             AccountId:              agent.Account?.AccountId,
             ScratchWorkspace:       cmd is { ScratchWorkspace: true } ? true : prior?.Launch.ScratchWorkspace,
             WorktreeOwnsBranch:     agent.Worktree.OwnsBranch,
-            AccountLabel:           agent.Account?.Label);
+            AccountLabel:           agent.Account?.Label,
+            HandoffSource:          agent.HandoffSource);
 
         return NewRunningEntry(agent.Id, agent.Vendor, agent.RuntimeTransport, agent.SessionId, agent.VendorSession, launch, prior) with {
             HasTerminal = agent.Runtime.EmitsTerminalOutput, TranscriptFormat = TranscriptFormatOf(agent),
@@ -460,7 +461,8 @@ internal partial class AgentOrchestrator {
             AccountId:              account?.AccountId,
             ScratchWorkspace:       cmd.ScratchWorkspace ? true : null,
             WorktreeOwnsBranch:     worktree.OwnsBranch,
-            AccountLabel:           account?.Label);
+            AccountLabel:           account?.Label,
+            HandoffSource:          cmd.Handoff?.Source);
 
         return NewRunningEntry(cmd.AgentId, cmd.Vendor, PreStartTransport, null, pinnedSessionId ?? cmd.ResumeSessionId, launch, prior: null);
     }
