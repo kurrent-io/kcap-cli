@@ -12,7 +12,7 @@ namespace Capacitor.Cli.Tests.Unit.LocalEdition;
 /// <summary>
 /// The local server's Scheduled Task running the real server: it installs, reports ready, comes back after the server
 /// is killed, stops through Ctrl+Break with the stack verified down, and uninstalls. Opt-in with
-/// <c>KCAP_LOCAL_SERVICE_CHECK=1</c> and <c>KCAP_LOCAL_SERVICE_BUNDLE</c> naming an extracted win-x64 bundle, because it
+/// <c>KCAP_LOCAL_SERVICE_CHECK=1</c> and <c>KCAP_LOCAL_SERVICE_BUNDLE</c> naming a win-x64 bundle archive, because it
 /// registers a logon task for the user running it, and a Windows server cannot be stood in for by a script. The task
 /// has a name of its own, so an installation on that machine is untouched. It lives here because the integration
 /// assembly does not run on Windows.
@@ -35,11 +35,14 @@ public class LocalServerTaskLiveTests {
         Skip.When(Environment.GetEnvironmentVariable(CheckEnvVar) != "1",
             $"Set {CheckEnvVar}=1 to register a test task with this machine's Task Scheduler.");
         var bundle = Environment.GetEnvironmentVariable(BundleEnvVar);
-        Skip.When(string.IsNullOrEmpty(bundle), $"Set {BundleEnvVar} to an extracted win-x64 local bundle.");
+        Skip.When(string.IsNullOrEmpty(bundle), $"Set {BundleEnvVar} to a win-x64 local bundle archive.");
 
-        var root    = new LocalRoot(Tmp.PathTo("local"));
-        var current = Path.Combine(Tmp.CreateDir("local/bin"), "current");
-        Junction(current, bundle!);
+        // Laid out as an install lays it out: unpacked into bin\<version>, with bin\current a junction to it.
+        var root = new LocalRoot(Tmp.PathTo("local"));
+        root.EnsureCreated();
+        await LocalBundleUnpacker.UnpackAsync(bundle!, Path.Combine(LocalBin.Directory(root), "0.0.0-test"), CancellationToken.None);
+        LocalBin.Switch(root, "0.0.0-test");
+        await Assert.That(LocalBin.Current(root)).IsEqualTo("0.0.0-test");
 
         var unit    = LocalServerUnit.ForInstallation(root, FreePort()) with { TaskName = $"kcap-local-test-{Guid.NewGuid().ToString("N")[..8]}" };
         var service = new LocalServerTaskService(new UserHome(Tmp.CreateDir("home")), TimeProvider.System, breakConsole: Break);
@@ -68,9 +71,6 @@ public class LocalServerTaskLiveTests {
             await Assert.That(LocalStackProbe.FindLive(root)).IsNull();
         } finally {
             try { await service.UninstallAsync(unit, CancellationToken.None); } catch (LocalLifecycleException) { /* reported above */ }
-
-            // The link alone, so the temp directory's cleanup never walks into the bundle.
-            Directory.Delete(current);
         }
     }
 
@@ -84,16 +84,6 @@ public class LocalServerTaskLiveTests {
         sender.WaitForExit();
 
         return sender.ExitCode == 0 ? null : $"exit {sender.ExitCode}: {error.Trim()}";
-    }
-
-    static void Junction(string link, string target) {
-        var info = new ProcessStartInfo("cmd.exe") { UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true };
-        foreach (var a in new[] { "/d", "/c", "mklink", "/J", link, target }) info.ArgumentList.Add(a);
-
-        using var mklink = Process.Start(info)!;
-        mklink.StandardOutput.ReadToEnd();
-        mklink.WaitForExit();
-        if (mklink.ExitCode != 0) throw new IOException($"mklink /J {link} exited {mklink.ExitCode}");
     }
 
     static int FreePort() {
