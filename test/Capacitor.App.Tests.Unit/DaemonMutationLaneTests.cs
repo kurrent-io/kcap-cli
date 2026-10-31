@@ -211,7 +211,7 @@ public class DaemonMutationLaneTests {
     public async Task A_cancelled_version_probe_still_throws() {
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
-        var cli = new FakeKcapCli { VersionBehavior = ct => Task.FromCanceled<string?>(ct) };
+        var cli = new FakeKcapCli { VersionBehavior = Task.FromCanceled<string?> };
         await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli });
 
         await Assert.That(async () => await lane.CliVersionAsync(Req(MutationVerb.Replace), cts.Token)).Throws<OperationCanceledException>();
