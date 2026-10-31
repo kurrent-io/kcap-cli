@@ -1024,4 +1024,78 @@ public class ArtefactsTabViewModelTests {
             await Assert.That(second.IsClosed).IsTrue();
         });
     }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(PageViewerState.Unreachable)]
+    [Arguments(PageViewerState.SignedOut)]
+    public async Task Reopening_a_page_that_failed_to_load_reads_it_again(PageViewerState failed) {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(webView: true);
+            var page = Page("a");
+            h.Pages.Enqueue(PagesReady(page));
+            h.Pages.EnqueueContent(failed == PageViewerState.SignedOut ? new PageContentRead.SignedOut() : new PageContentRead.Unreachable(), Content(page));
+            await h.SwitchAsync(SessionA);
+            await h.Vm.OpenPageCommand.Execute(h.Vm.Pages[0]);
+            await h.PageLoadedAsync();
+            var viewer = h.Vm.PageViewer!;
+            await Assert.That(viewer.State).IsEqualTo(failed);
+
+            await h.Vm.OpenPageCommand.Execute(h.Vm.Pages[0]);
+            await h.PageLoadedAsync();
+
+            await Assert.That(h.Vm.PageViewer).IsSameReferenceAs(viewer);
+            await Assert.That(viewer.State).IsEqualTo(PageViewerState.Ready);
+            await Assert.That(h.Pages.ContentRequested.Count).IsEqualTo(2);
+
+            h.Vm.OpenLink("https://a.kcap.ai/pages/pg-a");
+            await h.PageLoadedAsync();
+            await Assert.That(h.Pages.ContentRequested.Count).IsEqualTo(2);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Reopening_a_page_that_is_not_found_does_not_read_it_again() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(webView: true);
+            await h.SwitchAsync(SessionA);
+            h.Vm.OpenPage("x", "https://a.kcap.ai/pages/x");
+            await h.PageLoadedAsync();
+            await Assert.That(h.Vm.PageViewer!.State).IsEqualTo(PageViewerState.NotFound);
+
+            h.Vm.OpenPage("x", "https://a.kcap.ai/pages/x");
+            await h.PageLoadedAsync();
+
+            await Assert.That(h.Pages.ContentRequested.Count).IsEqualTo(1);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_signed_out_pages_read_takes_the_open_page_down() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(webView: true);
+            var page = Page("a");
+            h.Pages.Enqueue(PagesReady(page), SessionPagesRead.Of(SessionPlansReadKind.SignedOut));
+            h.Pages.EnqueueContent(Content(page));
+            await h.SwitchAsync(SessionA);
+            await h.Vm.OpenPageCommand.Execute(h.Vm.Pages[0]);
+            await h.PageLoadedAsync();
+            var viewer = h.Vm.PageViewer!;
+            await Assert.That(viewer.State).IsEqualTo(PageViewerState.Ready);
+
+            h.Vm.RefreshPages();
+            await h.SettledAsync();
+
+            await Assert.That(viewer.State).IsEqualTo(PageViewerState.SignedOut);
+            await Assert.That(viewer.Html).IsNull();
+            await Assert.That(viewer.Nonce).IsNull();
+            await Assert.That(viewer.CreateBridge(_ => Task.CompletedTask)).IsNull();
+            await Assert.That(viewer.CanRetry).IsTrue();
+            await h.Vm.TeardownAsync();
+        });
+    }
 }

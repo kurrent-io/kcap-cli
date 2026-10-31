@@ -235,6 +235,8 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
             _viewerListedVersion = row?.LatestVersion ?? 0;
             PageViewer = new PageViewerViewModel(_pageSource, artefactId, row?.Url ?? browserUrl, _opener, _time, webViewAvailable: true);
             LoadPage();
+        } else if (PageViewer.State is PageViewerState.Unreachable or PageViewerState.SignedOut) {
+            LoadPage();
         }
         foreach (var page in _pages) page.IsSelected = page.ArtefactId == artefactId;
         return true;
@@ -352,6 +354,10 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
                 ShowPages(read.Pages);
                 break;
             case SessionPlansReadKind.Unreachable:
+                break;
+            case SessionPlansReadKind.SignedOut:
+                ClearPages();
+                PageViewer?.SignedOut();
                 break;
             default:
                 ClearPages();

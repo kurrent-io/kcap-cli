@@ -48,11 +48,13 @@ public sealed class PageViewerViewModel : ReactiveObject {
             if (_state == value) return;
             this.RaiseAndSetIfChanged(ref _state, value);
             this.RaisePropertyChanged(nameof(IsReady));
+            this.RaisePropertyChanged(nameof(CanRetry));
             this.RaisePropertyChanged(nameof(Notice));
         }
     }
 
     public bool IsReady => State == PageViewerState.Ready;
+    public bool CanRetry => State is PageViewerState.Unreachable or PageViewerState.SignedOut;
 
     public string? Notice => State switch {
         PageViewerState.Loading     => "Loading page…",
@@ -179,6 +181,18 @@ public sealed class PageViewerViewModel : ReactiveObject {
         Page = null;
         Nonce = null;
         Html = null;
+    }
+
+    /// The credential lapsed: the page and its bridge go, so nothing keeps answering for a viewer
+    /// who is no longer signed in. Reload reads it again.
+    public void SignedOut() {
+        if (IsClosed || State == PageViewerState.NoWebView) return;
+        _generation++;
+        PendingExternalUrl = null;
+        Page = null;
+        Nonce = null;
+        Html = null;
+        State = PageViewerState.SignedOut;
     }
 
     /// The WebView cannot be made safe for a page here, so the page is offered in the browser.
