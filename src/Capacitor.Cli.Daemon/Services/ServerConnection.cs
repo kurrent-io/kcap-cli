@@ -1243,7 +1243,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             return await InvokeBeginHandoffTakeoverRawAsync(source, successor, ct) is { } admission
                 ? new HandoffBeginResult.Answered(admission)
                 : new HandoffBeginResult.Unreachable();
-        } catch (Exception ex) when (ex is not OperationCanceledException) {
+        } catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested) {
             LogHandoffTakeoverFailed(ex, "begin");
 
             return IsUnknownHubMethod(ex, BeginHandoffTakeoverMethod)

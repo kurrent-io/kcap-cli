@@ -17,8 +17,8 @@ public class SessionTakeoverTests {
     static string Active(TimeSpan ago) =>
         $$"""{"session_id":"{{Previous}}","status":"active","started_at":"{{DateTimeOffset.UtcNow.AddHours(-5):O}}","last_event_at":"{{DateTimeOffset.UtcNow - ago:O}}"}""";
 
-    static string Plan(string id, bool current, string tasksJson, bool finished = false, string sessions = "[]") =>
-        $$"""{"plan_id":"{{id}}","is_current":{{(current ? "true" : "false")}},"is_complete":true,"progress":{"completed":0,"total":2,"total_known":true,"finished":{{(finished ? "true" : "false")}}},"sessions":{{sessions}},"tasks":{{tasksJson}}}""";
+    static string Plan(string id, bool current, string tasksJson, bool finished = false, string sessions = "[]", int declaredDay = 1) =>
+        $$"""{"plan_id":"{{id}}","declared_at":"2026-10-{{declaredDay:D2}}T00:00:00Z","is_current":{{(current ? "true" : "false")}},"is_complete":true,"progress":{"completed":0,"total":2,"total_known":true,"finished":{{(finished ? "true" : "false")}}},"sessions":{{sessions}},"tasks":{{tasksJson}}}""";
 
     static string Task(string id, int ordinal, string status, string source = "mcp", string? note = null, bool partial = false) =>
         $$"""{"task_id":"{{id}}","ordinal":{{ordinal}},"title":"T{{ordinal}}","status":"{{status}}","source":"{{source}}","note":{{(note is null ? "null" : $"\"{note}\"")}}{{(partial ? ",\"status_partial\":true" : "")}}}""";
@@ -227,6 +227,22 @@ public class SessionTakeoverTests {
         await Assert.That(Outcome(r)["plans"]!.AsArray().Select(e => (Str(e!["plan_id"]), e!["attached"]!.GetValue<bool>())))
             .IsEquivalentTo(new (string?, bool)[] { ("p1", false), ("p2", true) });
         await Assert.That(((TakeoverResult.Completed)r).Unsuccessful).IsTrue();
+    }
+
+    /// <summary>The endpoint lists the most recently touched plan first and an adoption touches its plan, so the
+    /// write order cannot come from the listing.</summary>
+    [Test]
+    public async Task Plans_are_adopted_in_the_order_they_were_declared() {
+        var plans  = $"[{Plan("p2", false, $"[{Task("t2", 1, "pending")}]", declaredDay: 2)},{Plan("p1", false, $"[{Task("t1", 1, "pending")}]", declaredDay: 1)}]";
+        var routes = Server(Ended(), plans: plans);
+        routes.Post("/api/plans/p1/tasks/t1", 200, "{}");
+        routes.Post("/api/plans/p2/tasks/t2", 200, "{}");
+
+        var o = Outcome(await Run(routes));
+
+        await Assert.That(routes.Posts.Select(p => p.Path).Where(p => p.StartsWith("/api/plans/", StringComparison.Ordinal)).ToList())
+            .IsEquivalentTo(new[] { "/api/plans/p1/tasks/t1", "/api/plans/p2/tasks/t2" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+        await Assert.That(o["current_plan_id"]!.GetValue<string>()).IsEqualTo("p2");
     }
 
     /// <summary>A plan without work items holds none, so plans are still carried.</summary>

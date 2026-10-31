@@ -216,11 +216,14 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
 
         if (list.Count >= PlansReadCap) outcome["plans_truncated"] = true;
 
-        // The previous session's current plan goes last, so it ends up current on this one too.
+        // The previous session's current plan goes last, so it ends up current on this one too. The listing puts the
+        // most recently touched first and an adoption touches its plan, so a rerun orders by declaration instead.
         var plans = list
             .OfType<JsonObject>()
             .Where(p => Str(p["plan_id"]) is not null)
             .OrderBy(p => IsTrue(p["is_current"]))
+            .ThenBy(p => Time(p["declared_at"]) ?? DateTimeOffset.MaxValue)
+            .ThenBy(p => Str(p["plan_id"]), StringComparer.Ordinal)
             .ToList();
 
         foreach (var plan in plans) {
