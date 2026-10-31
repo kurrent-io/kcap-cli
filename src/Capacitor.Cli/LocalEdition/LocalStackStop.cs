@@ -21,7 +21,7 @@ static class LocalStackStop {
                         else await service.StopAsync(unit, CancellationToken.None);
                     } catch (Exception ex) when (ex is not LocalLifecycleException) {
                         throw new LocalLifecycleException(
-                            $"The {service.Describe} {unit.Label} could not be unloaded ({ex.Message}). Nothing was removed.", ex);
+                            $"The {service.Describe} {service.Name(unit)} could not be unloaded ({ex.Message}). Nothing was removed.", ex);
                     }
 
                     if (removeUnit && Path.GetDirectoryName(service.UnitFile(unit)) is { } unitDir && Directory.Exists(unitDir))
@@ -35,7 +35,7 @@ static class LocalStackStop {
 
                 default:
                     throw new LocalLifecycleException(
-                        $"It cannot be told which installation the {service.Describe} {unit.Label} ({service.UnitFile(unit)}) belongs to, so it was left alone. Nothing was removed.");
+                        $"It cannot be told which installation the {service.Describe} {service.Name(unit)} ({service.UnitFile(unit)}) belongs to, so it was left alone. Nothing was removed.");
             }
         }
 

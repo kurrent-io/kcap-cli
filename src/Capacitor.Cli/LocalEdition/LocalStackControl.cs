@@ -175,7 +175,7 @@ sealed class LocalStackControl(LocalStack stack, Func<int, PortHolder?> findHold
 
         var serves = roots.Count > 0 ? $"; it names {string.Join(" and ", roots)}" : "";
 
-        return Failed($"The {stack.Service.Describe} {unit.Label} ({stack.Service.UnitFile(unit)}) is not provably this installation's{serves}. Nothing was changed.");
+        return Failed($"The {stack.Service.Describe} {stack.Service.Name(unit)} ({stack.Service.UnitFile(unit)}) is not provably this installation's{serves}. Nothing was changed.");
     }
 
     static int? Pid(UnitActivity activity) => activity is UnitActivity.Running(var pid) ? pid : null;

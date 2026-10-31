@@ -42,6 +42,8 @@ sealed class LocalServerTaskService(
 
     public string Describe => "Windows Scheduled Task";
 
+    public string Name(LocalServerUnit unit) => unit.TaskName;
+
     public string UnitFile(LocalServerUnit unit) => LocalServerTaskUnit.WrapperPath(home, unit);
 
     public bool IsInstalled(LocalServerUnit unit) => File.Exists(UnitFile(unit)) && _schtasks(LocalServerTaskUnit.QueryArgs(unit)).ExitCode == 0;

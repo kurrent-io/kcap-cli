@@ -12,6 +12,9 @@ namespace Capacitor.Cli.LocalEdition;
 interface ILocalServerService {
     string Describe { get; }
 
+    /// <summary>The unit's name in this service manager, as messages name it.</summary>
+    string Name(LocalServerUnit unit) => unit.Label;
+
     /// <summary>Writes the unit, replacing an older one, and starts it. Does not wait for readiness.</summary>
     void Install(LocalServerUnit unit);
 

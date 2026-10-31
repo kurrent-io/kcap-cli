@@ -60,7 +60,7 @@ static class LocalSetupRollback {
                 try {
                     await service.UninstallAsync(unit, CancellationToken.None);
                 } catch (Exception ex) {
-                    throw Stopped($"Setup could not be undone: the {service.Describe} {unit.Label} could not be unloaded ({ex.Message}). Nothing was removed.");
+                    throw Stopped($"Setup could not be undone: the {service.Describe} {service.Name(unit)} could not be unloaded ({ex.Message}). Nothing was removed.");
                 }
 
                 break;
@@ -70,7 +70,7 @@ static class LocalSetupRollback {
                 break;
 
             default:
-                throw Stopped($"Setup could not be undone: it cannot tell which installation the {service.Describe} {unit.Label} ({service.UnitFile(unit)}) belongs to. Nothing was removed.");
+                throw Stopped($"Setup could not be undone: it cannot tell which installation the {service.Describe} {service.Name(unit)} ({service.UnitFile(unit)}) belongs to. Nothing was removed.");
         }
     }
 
