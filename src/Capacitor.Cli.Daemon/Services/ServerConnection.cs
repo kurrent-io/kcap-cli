@@ -93,6 +93,11 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     public Func<FinalizeEvalCommand, Task<FinalizeResult>>? FinalizeEvalHandler { get; set; }
     public Func<CancelEvalCommand,   Task>?                 CancelEvalHandler   { get; set; }
 
+    // Headless prompts for a local-edition server. HeadlessVendors is advertised only while the run handler is wired.
+    public Func<RunHeadlessPromptArgs, Task<HeadlessPromptResponse>>? RunHeadlessPromptHandler    { get; set; }
+    public Func<CancelHeadlessPromptArgs, Task>?                      CancelHeadlessPromptHandler { get; set; }
+    public Func<string[]>?                                            GetHeadlessVendors          { get; set; }
+
     // Eval protocol 2 (outcomes + coded failures) client-result invocations, registered beside
     // the protocol-1 ones above. Null (early startup / an unwired test) fails closed with a
     // server-authored chat_error rather than silently answering as protocol 1.
@@ -375,6 +380,13 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
         _hub.On<CancelEvalCommand>("CancelEval",
             cmd => CancelEvalHandler?.Invoke(cmd) ?? Task.CompletedTask);
+
+        _hub.On<RunHeadlessPromptArgs, HeadlessPromptResponse>("RunHeadlessPrompt",
+            args => RunHeadlessPromptHandler?.Invoke(args)
+                ?? Task.FromResult(new HeadlessPromptResponse(false, null, null, null, null, null, Error: "no handler")));
+
+        _hub.On<CancelHeadlessPromptArgs>("CancelHeadlessPrompt",
+            args => CancelHeadlessPromptHandler?.Invoke(args) ?? Task.CompletedTask);
 
         // Eval protocol 2.
         _hub.On<RunQuestionCommand, QuestionResultV2>("RunQuestionV2",
@@ -788,6 +800,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             ActiveCountVersion: activeCount?.Version,
             SupportsAccountLaunches: true,
             Accounts: GetAccountsSnapshot?.Invoke(),
+            HeadlessVendors: RunHeadlessPromptHandler is null ? [] : GetHeadlessVendors?.Invoke() ?? [],
             SupportsScratchWorkspace: true);
     }
 
