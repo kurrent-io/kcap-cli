@@ -249,7 +249,7 @@ internal partial class AgentOrchestrator {
 
         using var run      = CancellationTokenSource.CreateLinkedTokenSource(ct);
         using var renewing = new CancellationTokenSource();
-        var renewals = RenewHandoffLeaseAsync(agentId, token, run, renewing.Token);
+        var renewals = RenewHandoffLeaseAsync(agentId, token, TimeSpan.FromSeconds(admission.LeaseSeconds), run, renewing.Token);
 
         try {
             using var client = await _http.ForBackgroundAsync(run.Token);
@@ -291,12 +291,16 @@ internal partial class AgentOrchestrator {
         }
     }
 
-    /// <summary>Never throws. False, an exception or no answer within <see cref="HandoffRenewTimeout"/> is a lost lease.</summary>
-    async Task RenewHandoffLeaseAsync(string agentId, string token, CancellationTokenSource run, CancellationToken stop) {
+    /// <summary>Never throws. False, an exception or no answer within the renewal timeout is a lost lease. A renewal
+    /// and its timeout together take at most half of a positive <paramref name="lease"/>.</summary>
+    async Task RenewHandoffLeaseAsync(string agentId, string token, TimeSpan lease, CancellationTokenSource run, CancellationToken stop) {
+        var interval = lease > TimeSpan.Zero && lease / 3 < HandoffLeaseRenewal ? lease / 3 : HandoffLeaseRenewal;
+        var timeout  = interval / 2 < HandoffRenewTimeout ? interval / 2 : HandoffRenewTimeout;
+
         try {
             while (true) {
-                await Task.Delay(HandoffLeaseRenewal, _time, stop);
-                if (await RenewHandoffLeaseOnceAsync(token, stop)) continue;
+                await Task.Delay(interval, _time, stop);
+                if (await RenewHandoffLeaseOnceAsync(token, timeout, stop)) continue;
                 if (stop.IsCancellationRequested) return;
 
                 LogHandoffLeaseLost(agentId);
@@ -311,8 +315,8 @@ internal partial class AgentOrchestrator {
         }
     }
 
-    async Task<bool> RenewHandoffLeaseOnceAsync(string token, CancellationToken stop) {
-        using var expiry = new CancellationTokenSource(HandoffRenewTimeout, _time);
+    async Task<bool> RenewHandoffLeaseOnceAsync(string token, TimeSpan timeout, CancellationToken stop) {
+        using var expiry = new CancellationTokenSource(timeout, _time);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(stop, expiry.Token);
 
         try {
