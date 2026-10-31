@@ -46,7 +46,8 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
     public bool IsLoading => _reads.IsLoading || _pageReads.IsLoading;
     /// Right-pane prompt when nothing is open: loading, settled empty, or pick a row.
     public string EmptyReaderNote => _reads.IsLoading ? "Loading documents…"
-        : HasAnyArtefacts ? "Select a document to read it."
+        : HasPages ? "Select a document or page."
+        : HasAny ? "Select a document to read it."
         : "No documents yet.";
     /// Beside the page list when it has no rows to show; null when it does.
     public string? PagesNote => HasPages ? null
@@ -172,6 +173,12 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
     /// The pages read alone: it carries no bodies, so the pane polls it whether or not the tab is shown.
     public void RefreshPages() {
         if (!_tornDown) _pageReads.Refresh();
+    }
+
+    /// The pane's per-tick pages read. A server without the list route answers the same on every
+    /// tick, so it is asked again only by a publish, a sign-in or a session switch.
+    internal void PollPages() {
+        if (_pagesKind != SessionPlansReadKind.Unavailable) RefreshPages();
     }
 
     public void RequestOpen() => OpenRequested?.Invoke();

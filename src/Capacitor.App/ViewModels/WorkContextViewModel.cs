@@ -409,7 +409,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         if (_tornDown) return;
         if (_dto is not null) ResolveBranch(refresh: true);
         Plan.Refresh();
-        Artefacts?.RefreshPages();
+        Artefacts?.PollPages();
         if (Artefacts is { IsShown: true } or { LastReadFailed: true }) Artefacts.RefreshDocuments();
         _reader.StartIfIdle();
     }
