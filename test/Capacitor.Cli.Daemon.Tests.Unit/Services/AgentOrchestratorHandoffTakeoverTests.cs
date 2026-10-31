@@ -102,9 +102,9 @@ public class AgentOrchestratorHandoffTakeoverTests : IDisposable {
                 SourceContext, SessionCommits: [])
         };
 
-    /// <summary>The ended source with one work item per label; a declare is answered by <paramref name="declare"/>
-    /// when given, else 200.</summary>
-    void ServeSource(int workItems = 1, Func<int, JsonObject, WireMock.ResponseMessage?>? declare = null) {
+    /// <summary>The ended source with one work item per label and a successor holding <paramref name="held"/>; a
+    /// declare is answered by <paramref name="declare"/> when given, else 200.</summary>
+    void ServeSource(int workItems = 1, Func<int, JsonObject, WireMock.ResponseMessage?>? declare = null, string held = "[]") {
         _server.Given(Request.Create().WithPath($"/api/sessions/{SourceWire}/summary").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200)
                 .WithBody($$"""{"session_id":"{{SourceWire}}","status":"ended","title":"Wire the widget"}"""));
@@ -114,6 +114,8 @@ public class AgentOrchestratorHandoffTakeoverTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody(items.ToJsonString()));
         _server.Given(Request.Create().WithPath($"/api/sessions/{SourceWire}/plans").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("[]"));
+        _server.Given(Request.Create().WithPath($"/api/work-items/session/{SuccessorWire}").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(held));
 
         _server.Given(Request.Create().WithPath(Declare).UsingPost())
             .RespondWith(Response.Create().WithCallback(request => {
@@ -362,6 +364,32 @@ public class AgentOrchestratorHandoffTakeoverTests : IDisposable {
         await Assert.That(f.Server.HandoffEnds).IsEquivalentTo([Token]);
     }
 
+    /// <summary>The advertised lease, not the default interval, bounds when the first renewal goes out.</summary>
+    [Test]
+    public async Task A_short_lease_is_renewed_before_it_expires() {
+        using var release = new ManualResetEventSlim();
+        var arrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ServeSource(declare: (_, _) => {
+            arrived.TrySetResult();
+            release.Wait(TimeSpan.FromSeconds(30));
+
+            return null;
+        });
+        await using var f = Build(admission: new HandoffTakeoverAdmission(Token, null, 6));
+
+        try {
+            await f.Orch.HandleLaunchAgentForTest(Launch(f.Repo));
+            await WaitHarness.WaitBoundedAsync(arrived.Task, "the first write");
+            f.Time.Advance(TimeSpan.FromSeconds(3));
+
+            await WaitHarness.PollUntilAsync(() => !f.Server.HandoffRenews.IsEmpty);
+        } finally {
+            release.Set();
+        }
+
+        await Assert.That((await SettledAsync(f)).State).IsEqualTo("done");
+    }
+
     /// <summary>A renewal that says no, throws or never answers within its timeout all mean the lease may be gone,
     /// which is a lost reservation, not a cancellation.</summary>
     [Test]
@@ -542,9 +570,7 @@ public class AgentOrchestratorHandoffTakeoverTests : IDisposable {
     /// successor chose since.</summary>
     [Test]
     public async Task A_recovered_successor_does_not_redeclare_what_it_already_holds() {
-        ServeSource(workItems: 2);
-        _server.Given(Request.Create().WithPath($"/api/work-items/session/{SuccessorWire}").UsingGet())
-            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""[{"work_item_id":"w1","label":"#1 — Item 1"}]"""));
+        ServeSource(workItems: 2, held: """[{"work_item_id":"w1","label":"#1 — Item 1"}]""");
         await using var f = Build(beforeStart: c => PutOutcome(c, HandoffOutcomeDto.Running(Source, "Wire the widget")));
         WriteResumableEntry(f, SourceContext);
 
