@@ -524,6 +524,29 @@ public class ServerSessionsServiceTests {
         await Eventually(() => latest is { } s && !s.Ended.Any(r => r.SessionId == "s1"), "dropped on deselection");
     }
 
+    /// The server takes a stopped session out of the live listing before the ended one carries it.
+    /// The open session stays on the rail through that gap, and reads as ended rather than Running.
+    [Test]
+    public async Task A_kept_live_session_the_live_listing_drops_rides_along_as_ended() {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        Connect(lane);
+        await Eventually(() => service.Live.Lookup("live-me").HasValue && service.Ended.Count == 20, "first read");
+        ServerSessionsSnapshot? latest = null;
+        using var sub = service.Snapshots.Subscribe(s => latest = s);
+
+        service.Keep("live-me");
+        listing.Answer("active", "me", 0, 0);
+        listing.Answer("active", null, 0, 1, Row("live-other", "active", "other"));
+        lane.SessionPushesSubject.OnNext(new SessionPush(SessionPushKind.ActiveRemoved, "live-me"));
+
+        await Eventually(() => latest is { } s && s.Live.All(r => r.SessionId != "live-me"), "the live listing dropped it");
+        var kept = latest!.Ended.Single(r => r.SessionId == "live-me");
+        await Assert.That(kept.Status).IsEqualTo("ended");
+        await Assert.That(kept.EndedAt).IsNotNull();
+    }
+
     /// A read admitted before the deletion still lists the session; its publication must not bring it back.
     [Test]
     public async Task A_deleted_session_does_not_return_from_a_read_already_in_flight() {

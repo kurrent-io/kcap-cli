@@ -25,7 +25,7 @@ sealed record LocalServerUnit(string ServerBinary, LocalRoot Root, int Port) {
     public LocalEmbeddingSetting? Embedding { get; init; }
 
     public static LocalServerUnit ForInstallation(LocalRoot root, int port) =>
-        new(Path.Combine(root.Directory, "bin", "current", "kcap-server"), root, port) { Embedding = LocalEmbeddingFile.Read(root) };
+        new(LocalServerConditions.ServerBinary(root), root, port) { Embedding = LocalEmbeddingFile.Read(root) };
 
     /// <summary>Whether the unit already runs the server as <paramref name="setting"/> asks, its pending flag aside.</summary>
     public bool Serves(LocalEmbeddingSetting? setting) => Served(Embedding) == Served(setting);

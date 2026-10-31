@@ -227,6 +227,133 @@ public class RemoteSessionViewModelTests {
         });
     }
 
+    /// An imported or ended session has no daemon to say how it ran: the pane shows the listed
+    /// branch, or the summary's when the listing has none, and leaves the transport unknown.
+    [Test]
+    [Arguments("claude")]
+    [Arguments("codex")]
+    public async Task A_server_only_session_shows_its_stored_branch_and_no_transport(string vendor) {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            h.WorkSource.Default = WorkContextRead.Of(WorkContextReadKind.Ready) with {
+                Summary = new SessionSummaryDto {
+                    SessionId = "s1",
+                    Repositories = [new SessionRepositoryDto { RepoHash = "h", Owner = "kurrent-io", RepoName = "kcap-cli", Branch = "main", IsPrimary = true }],
+                },
+            };
+            var vm = h.Build(Harness.ServerRow() with { Vendor = vendor });
+            try {
+                await WaitUntilAsync(() => vm.WorkContext.Branch == "main", what: "stored branch");
+                await Assert.That(vm.WorkContext.Transport).IsEqualTo("—");
+            } finally { await vm.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    public async Task A_server_only_session_below_full_access_keeps_its_branch_unknown() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            h.WorkSource.Default = WorkContextRead.Of(WorkContextReadKind.Ready) with { Summary = new SessionSummaryDto { SessionId = "s1" } };
+            var vm = h.Build(Harness.ServerRow() with { AccessLevel = "overview", Branch = null });
+            try {
+                await WaitUntilAsync(() => vm.WorkContext.Phase == WorkContextPhase.NoWorkItem, what: "summary read");
+                await Assert.That(vm.WorkContext.Branch).IsEqualTo("—");
+                await Assert.That(vm.WorkContext.Transport).IsEqualTo("—");
+            } finally { await vm.TeardownAsync(); }
+        });
+    }
+
+    /// The live workspace's lease can open the session before the server has it, which the server
+    /// answers as it answers a hidden session. Stop hands the session to its recorded workspace while
+    /// that lease is still held: the recorded workspace must ask again, not inherit the refusal.
+    [Test]
+    public async Task The_recorded_session_asks_for_access_again_instead_of_inheriting_the_live_lease_denial() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
+            using var live = h.Access.Acquire("s1");
+            var liveState = SessionAccessState.Establishing;
+            using var watch = live.State.Subscribe(s => liveState = s);
+            await WaitUntilAsync(() => liveState == SessionAccessState.Denied, what: "the live lease refused");
+            h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Ok);
+
+            var recorded = h.Build(Harness.ServerRow("s1"));
+            try {
+                await WaitUntilAsync(() => recorded.Access == RemoteSessionAccess.Ready, what: "the recorded session readable");
+                await Assert.That(recorded.ShowsPanes).IsTrue();
+                await Assert.That(recorded.AccessNote).IsEqualTo("");
+                await WaitUntilAsync(() => recorded.WorkContext.HasSession, what: "the work context kept its session");
+            } finally { await recorded.TeardownAsync(); }
+        });
+    }
+
+    /// Re-asking is no amnesty: a session the server refuses stays refused and its content cleared,
+    /// and reopening it from the rail asks once more.
+    [Test]
+    public async Task A_genuine_refusal_still_clears_the_recorded_session_and_reopening_asks_again() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
+            using var live = h.Access.Acquire("s1");
+            var liveState = SessionAccessState.Establishing;
+            using var watch = live.State.Subscribe(s => liveState = s);
+            await WaitUntilAsync(() => liveState == SessionAccessState.Denied, what: "the live lease refused");
+
+            var recorded = h.Build(Harness.ServerRow("s1"));
+            try {
+                await WaitUntilAsync(() => recorded.Access == RemoteSessionAccess.Denied, what: "still refused");
+                await Assert.That(h.Lane.AccessWatches.Count).IsEqualTo(2);
+                await Assert.That(recorded.ShowsPanes).IsFalse();
+                await WaitUntilAsync(() => !recorded.WorkContext.HasSession, what: "the work context cleared");
+
+                h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Ok);
+                recorded.RecheckAccess();
+                await WaitUntilAsync(() => recorded.Access == RemoteSessionAccess.Ready, what: "readable once the server agrees");
+            } finally { await recorded.TeardownAsync(); }
+        });
+    }
+
+    /// The listing names the repository but no checkout; the recorded session's row carries what
+    /// its daemon reported, and the About facts show it rather than the no-repository note.
+    [Test]
+    public async Task The_recorded_session_shows_the_checkout_its_daemon_reported() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            h.WorkSource.Default = WorkContextRead.Of(WorkContextReadKind.Ready) with { Summary = new SessionSummaryDto { SessionId = "s1" } };
+            var vm = h.Build(Harness.ServerRow("s1") with {
+                RepoPath = "/dev/shop-api", WorktreePath = "/dev/shop-api/wt/agent-1", WorkLocation = "owned", Branch = "kcap/agent-1" });
+            try {
+                await WaitUntilAsync(() => vm.WorkContext.Phase == WorkContextPhase.NoWorkItem, what: "summary read");
+                await Assert.That(vm.WorkContext.Repository).IsEqualTo("shop-api");
+                await Assert.That(vm.WorkContext.WorktreePath).IsEqualTo("/dev/shop-api/wt/agent-1");
+                await Assert.That(vm.WorkContext.Worktree).IsNotEqualTo("—");
+                await Assert.That(vm.WorkContext.Branch).IsEqualTo("kcap/agent-1");
+                await Assert.That(vm.WorkContext.PhaseNote).IsEqualTo(WorkContextViewModel.NoWorkItemNote);
+            } finally { await vm.TeardownAsync(); }
+        });
+    }
+
+    /// Reopened after the app has forgotten the daemon row, the listing may carry no cwd at all;
+    /// the summary still names the repository the header shows.
+    [Test]
+    public async Task A_recorded_session_without_a_cwd_takes_its_repository_from_the_summary() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            h.WorkSource.Default = WorkContextRead.Of(WorkContextReadKind.Ready) with {
+                Summary = new SessionSummaryDto {
+                    SessionId = "s1",
+                    Repositories = [new SessionRepositoryDto { RepoHash = "h", Owner = "acme-testbench", RepoName = "shop-api", IsPrimary = true }],
+                },
+            };
+            var vm = h.Build(Harness.ServerRow("s1") with { RepoPath = null });
+            try {
+                await WaitUntilAsync(() => vm.WorkContext.Phase == WorkContextPhase.NoWorkItem, what: "summary read");
+                await Assert.That(vm.WorkContext.Repository).IsEqualTo("shop-api");
+                await Assert.That(vm.WorkContext.PhaseNote).IsEqualTo(WorkContextViewModel.NoWorkItemNote);
+            } finally { await vm.TeardownAsync(); }
+        });
+    }
+
     [Test]
     public async Task Remote_work_context_waits_for_the_session_and_refreshes_the_linked_item() {
         await RunOnUiAsync(async () => {
@@ -302,6 +429,84 @@ public class RemoteSessionViewModelTests {
             await Assert.That(vm.Subagent).IsNotNull();
             h.Directory.Rows.AddOrUpdate(agentRow with { SessionId = "s2" });
             await h.UntilAsync(vm, () => vm.Subagent is null, "pane closed on the session change");
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// An imported session is ended and server-only. Its call's own result names the agent, so the row opens that
+    /// subagent's transcript read-only, and Back returns to the parent's chat.
+    [Test]
+    public async Task An_ended_imported_session_opens_a_subagent_its_call_result_names() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            h.Detail = new(RemoteFixtures.Detail(
+                Event(0, CanonicalEventTypes.AssistantToolCallsGenerated, AgentCall),
+                Event(1, CanonicalEventTypes.ToolResultReceived, ForegroundAgentResult)));
+            var requested = new List<string>();
+            SubagentEventsReader read = (_, agent, _, _) => {
+                requested.Add(agent);
+                return Task.FromResult(new SubagentEventsFetch(new SubagentEventsDto { Events = [] }));
+            };
+            var vm = h.Build(Harness.ServerRow(), readSubagent: read);
+            await h.UntilAsync(vm, () => vm.WorkContext.Runs.Any(r => r.CanOpen), "imported subagent row named");
+            var row = vm.WorkContext.Runs.Single();
+            await Assert.That(row.StateWord).IsEqualTo("done");
+            await Assert.That(row.UnopenableReason).IsNull();
+
+            vm.WorkContext.OpenRunCommand.Execute(row).Subscribe();
+
+            await Assert.That(vm.ShowsSubagentPane).IsTrue();
+            await Assert.That(vm.Subagent!.Chat.IsReadOnlyParticipant).IsTrue();
+            var pane = vm.Subagent!;
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (requested.Count == 0 && DateTime.UtcNow < deadline) {
+                h.Time.Advance(ChatTabViewModel.PollInterval);
+                await (pane.Chat.PendingReadForTesting ?? Task.CompletedTask);
+            }
+            await Assert.That(requested[0]).IsEqualTo("a9f262478e032f427");
+
+            pane.BackCommand.Execute().Subscribe();
+            await Assert.That(vm.ShowsChatPane).IsTrue();
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// With no record tying the call to an agent, the row stays shut and says why rather than guessing one.
+    [Test]
+    public async Task An_ended_imported_session_explains_a_subagent_row_with_no_recorded_agent() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            h.Detail = new(RemoteFixtures.Detail(
+                Event(0, CanonicalEventTypes.AssistantToolCallsGenerated, AgentCall),
+                Event(1, CanonicalEventTypes.ToolResultReceived, UnlinkedAgentResult)));
+            SubagentEventsReader read = (_, _, _, _) => Task.FromResult(new SubagentEventsFetch(null, NotFound: true));
+            var vm = h.Build(Harness.ServerRow(), readSubagent: read);
+            await h.UntilAsync(vm, () => vm.WorkContext.HasRuns, "imported subagent row listed");
+            var row = vm.WorkContext.Runs.Single();
+
+            await Assert.That(row.CanOpen).IsFalse();
+            await Assert.That(row.UnopenableReason).Contains("no record of which subagent transcript this call started");
+
+            vm.WorkContext.OpenRunCommand.Execute(row).Subscribe();
+            await Assert.That(vm.Subagent).IsNull();
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// A lane built without a subagent reader cannot open one, so its rows do not offer to.
+    [Test]
+    public async Task A_remote_session_without_a_subagent_reader_offers_no_row_to_open() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            h.Detail = new(RemoteFixtures.Detail(
+                Event(0, CanonicalEventTypes.AssistantToolCallsGenerated, AgentCall),
+                Event(1, CanonicalEventTypes.ToolResultReceived, AgentLaunch)));
+            var vm = h.Build(Harness.Row(vendor: "claude"));
+            await h.UntilAsync(vm, () => vm.WorkContext.Runs.Any(r => r.AgentId is not null), "subagent row named");
+            var row = vm.WorkContext.Runs.Single();
+
+            await Assert.That(row.CanOpen).IsFalse();
+            await Assert.That(row.UnopenableReason).IsEqualTo("Subagent transcripts can't be opened for this session.");
             await vm.TeardownAsync();
         });
     }
@@ -1070,6 +1275,8 @@ public class RemoteSessionViewModelTests {
 
     const string AgentCall = """{"tool_calls":[{"call_id":"toolu_A","tool_name":"Agent","arguments":{"description":"Map desktop chat UI surfaces","prompt":"go","subagent_type":"Explore"}}]}""";
     const string AgentLaunch = """{"call_id":"toolu_A","result":"Async agent launched successfully.","extensions":{"claude_code":{"tool_use_result":{"isAsync":true,"status":"async_launched","agentId":"a9f262478e032f427","description":"Map desktop chat UI surfaces","prompt":"go"}}}}""";
+    const string ForegroundAgentResult = """{"call_id":"toolu_A","result":"Found the chat surfaces","extensions":{"claude_code":{"tool_use_result":{"status":"completed","agentId":"a9f262478e032f427","prompt":"go"}}}}""";
+    const string UnlinkedAgentResult = """{"call_id":"toolu_A","result":"Found the chat surfaces","extensions":{"claude_code":{"tool_use_result":{"totalDurationMs":1000}}}}""";
     const string AgentNotification = """{"content":"<task-notification>\n<task-id>a9f262478e032f427</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<output-file>/tmp/x.output</output-file>\n<status>completed</status>\n<summary>Agent \"Map desktop chat UI surfaces\" finished</summary>\n</task-notification>"}""";
     const string MetaNotification = """{"content":"<task-notification>\n<task-id>a9f262478e032f427</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>","extensions":{"claude_code":{"is_meta":true}}}""";
 

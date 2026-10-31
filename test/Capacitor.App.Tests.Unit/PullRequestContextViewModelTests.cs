@@ -343,6 +343,28 @@ public class PullRequestContextViewModelTests {
         await h.Dispose();
     });
 
+    /// A discovery that failed during an outage backs off for minutes; the server coming back clears that backoff,
+    /// so the panel discovers again at once instead of keeping the failure.
+    [Test]
+    public Task A_reconnect_rediscovers_past_the_outage_backoff() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        h.Source.Capability = PullRequestCapabilityKind.Unavailable;
+        h.Source.CapabilityRetryAt = h.Time.GetUtcNow().UtcDateTime.AddMinutes(5);
+        h.Push();
+        h.Vm.SetForeground(true);
+        await WaitUntilAsync(() => h.Source.Discoveries >= 1 && !h.Vm.IsReading, what: "failed discovery");
+        await Assert.That(h.Vm.CanReveal).IsFalse();
+
+        h.Source.Capability = PullRequestCapabilityKind.Supported;
+        h.Source.CapabilityRetryAt = null;
+        var discoveries = h.Source.Discoveries;
+        h.Vm.Reconnected();
+
+        await WaitUntilAsync(() => h.Vm.CanReveal && !h.Vm.IsReading, what: "rediscovered on reconnect");
+        await Assert.That(h.Source.Discoveries).IsGreaterThan(discoveries);
+        await h.Dispose();
+    });
+
     [Test]
     [Arguments(false)]
     [Arguments(true)]

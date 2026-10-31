@@ -3,7 +3,10 @@ kcap local — Run the local installation that `kcap setup --local` made
 Usage: kcap local <subcommand> [options]
 
 Subcommands:
-  status                    Explain the installation's state: version, port, service, search, each store, what to do
+  status                    Explain the installation's state: version, port, service, search, each store, what to do.
+                            Names a stopped, changing, uninstalled, purged or port-blocked server apart
+                            (a port another program answers on is blocked, even when the OS cannot name it)
+                            and suggests start only when a start can bring it up
   start                     Start the server and wait until it is ready
   stop                      Stop the server and wait until nothing of it is left; it stays stopped until start
   restart                   Stop, then start

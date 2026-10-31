@@ -1,3 +1,4 @@
+using Avalonia.Automation.Peers;
 using Avalonia.Layout;
 using Lucide.Avalonia;
 
@@ -14,4 +15,6 @@ public sealed class AppIcon : LucideIcon {
         VerticalAlignment = VerticalAlignment.Center;
         IsHitTestVisible = false;
     }
+
+    protected override AutomationPeer OnCreateAutomationPeer() => new AppIconAutomationPeer(this);
 }

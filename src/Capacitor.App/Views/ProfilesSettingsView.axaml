@@ -9,7 +9,7 @@
             <StackPanel Classes="settingsHeader">
                 <TextBlock x:Name="ProfilesTitleText" Classes="kcapTitle" Text="Profiles" />
                 <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
-                           Text="Each profile connects to a server with its own sign-in. Relaunch kcap to use a different profile." />
+                           Text="Each profile names a server and how this computer signs in to it, if that server needs a sign-in at all. Relaunch kcap to use a different profile." />
             </StackPanel>
 
             <StackPanel Classes="settingsGroup">
@@ -37,6 +37,9 @@
                                             </WrapPanel>
                                             <TextBlock Classes="kcapHint profileStatus" Classes.attention="{Binding StatusNeedsAttention}"
                                                        Text="{Binding StatusLabel}" IsVisible="{Binding ShowsStatus}" />
+                                            <TextBlock Classes="kcapHint profileConnection" Classes.attention="{Binding ConnectionNeedsAttention}"
+                                                       Text="{Binding Connection}" TextWrapping="Wrap"
+                                                       IsVisible="{Binding Connection, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                                         </StackPanel>
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Top" Margin="0,-5,0,0">
                                             <Button Classes="kcapChip settingsCompact profileSignIn" Content="{Binding SignInLabel}"

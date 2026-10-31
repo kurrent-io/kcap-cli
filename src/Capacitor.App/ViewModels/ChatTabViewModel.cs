@@ -1718,6 +1718,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                             if (!e.ToolIsError && call.CardKind != ToolCardKind.None
                                 && ToolCards.Build(call.CardKind, call.InputJson, e.ToolResult) is { } card)
                                 call.SetCard(card, CardOpener(card));
+                            call.Result = e.ToolResult;
                             call.Outcome = e.ToolIsError ? ToolOutcome.Error : ToolOutcome.Done;
                             if (!e.ToolIsError && _origin == AgentOrigin.Local && call.Category == ToolCategory.Read)
                                 call.PreviewPath = ToolDetail.ResolvePreviewPath(ToolDetail.ImageFile(call.InputJson), _root);

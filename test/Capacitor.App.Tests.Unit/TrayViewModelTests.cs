@@ -1287,4 +1287,17 @@ public class TrayViewModelTests {
             await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Running);
         });
     }
+
+    /// The tooltip is the tray icon's accessible name on Windows, so it names the app and what it
+    /// is doing, within the length the notification area keeps.
+    [Test]
+    public async Task The_tray_tooltip_names_kcap_and_its_state_within_the_shell_limit() {
+        var model = new TrayMenuModel(TrayState.Idle, 0, "work-pc: connected — no agents", [], new TrayPauseItem(false, false), 0);
+        var crowded = model with { Header = new string('x', 300) };
+
+        await Assert.That(model.ToolTip).IsEqualTo("kcap — work-pc: connected — no agents");
+        await Assert.That(crowded.ToolTip.Length).IsEqualTo(127);
+        await Assert.That(crowded.ToolTip).StartsWith("kcap — ");
+        await Assert.That(crowded.ToolTip).EndsWith("…");
+    }
 }

@@ -1,33 +1,20 @@
 using System.Collections.Frozen;
 using System.Net;
 using System.Text.Json;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.Cli.LocalEdition;
 
 static class LocalServerHealth {
-    static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(3);
-
-    /// <summary>One request, never a wait. Throws only <see cref="OperationCanceledException"/> from
-    /// <paramref name="ct"/>.</summary>
-    public static async Task<ServerHealth> ReadAsync(HttpClient http, LocalServerUnit unit, TimeProvider time, CancellationToken ct) {
-        using var attempt = new CancellationTokenSource(RequestTimeout, time);
-        using var linked  = CancellationTokenSource.CreateLinkedTokenSource(ct, attempt.Token);
-
-        string body;
-        HttpStatusCode status;
-
-        try {
-            using var response = await http.GetAsync(new Uri($"{unit.BaseUrl}/healthz/ready"), linked.Token);
-            status = response.StatusCode;
-            body   = await response.Content.ReadAsStringAsync(linked.Token);
-        } catch (HttpRequestException ex) {
-            return new ServerHealth.Unreachable(ex.Message);
-        } catch (OperationCanceledException) when (!ct.IsCancellationRequested) {
-            return new ServerHealth.Unreachable($"no answer within {RequestTimeout.TotalSeconds:0} seconds");
-        }
-
-        return Parse(status, body);
-    }
+    /// <summary>One request, never a wait, asked and classified as the desktop app asks it. Throws only
+    /// <see cref="OperationCanceledException"/> from <paramref name="ct"/>.</summary>
+    public static async Task<ServerHealth> ReadAsync(HttpClient http, LocalServerUnit unit, TimeProvider time, CancellationToken ct) =>
+        await LocalPortProbe.ReadAsync(http, unit.Port, time, ct) switch {
+            LocalPortAnswer.Answered(var status, var body) => Parse(status, body),
+            LocalPortAnswer.Foreign(var what)              => new ServerHealth.Foreign(what),
+            LocalPortAnswer.Silent(var reason)             => new ServerHealth.Unreachable(reason),
+            _                                              => new ServerHealth.Unreachable("connection refused"),
+        };
 
     static ServerHealth.Answered Parse(HttpStatusCode status, string body) {
         var ready = status == HttpStatusCode.OK;

@@ -493,6 +493,26 @@ public class SignInStepViewModelTests {
         await Assert.That(runs).IsEqualTo(0); // nothing is discovered until the user says the browser is done
     }
 
+    /// The sign-up page is served from the sign-up host, not a workspace's, and the browser may not
+    /// have appeared yet when the page is read: the copy names the page, not a host, and not a past event.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_sign_up_copy_names_the_page_rather_than_a_host() {
+        var lede = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness { SigningUp = true };
+
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+
+            return h.Vm.Lede;
+        });
+
+        string[] lines = [lede!, SignInStepViewModel.WorkspaceNotCreated, SignInStepViewModel.WorkspaceNotCreatedDetail("Acme"),
+            SignInStepViewModel.WorkspaceStillSettingUpDetail, SignInStepViewModel.WorkspaceSettingUpDetail("Acme")];
+        foreach (var line in lines) await Assert.That(line).DoesNotContain("kcap.ai");
+        await Assert.That(lede).Contains("sign-up page");
+        await Assert.That(lede).DoesNotContain("just opened");
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_existing_workspace_path_takes_a_single_workspace_without_confirming() {

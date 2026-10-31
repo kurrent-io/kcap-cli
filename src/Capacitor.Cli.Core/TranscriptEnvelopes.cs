@@ -49,6 +49,11 @@ public static class TranscriptEnvelopes {
         return string.Concat(text.AsSpan(0, cut), CapMarker);
     }
 
+    /// True when the text has the shape Cap leaves behind. An uncut result that ends in the marker
+    /// at exactly that length reads as cut too; nothing else records the difference.
+    public static bool IsCapped(string? text) =>
+        text is { Length: ToolResultCap or ToolResultCap - 1 } && text.EndsWith(CapMarker, StringComparison.Ordinal);
+
     /// Compact JSON for a Struct, written by hand: the protobuf formatter pads its output and
     /// the chat pins exact strings.
     public static string CompactJson(Struct s) {
