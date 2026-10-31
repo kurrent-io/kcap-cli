@@ -203,13 +203,14 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
     /// <summary>Only the pages lane, keyed the way every other tool here names a page. A server that
     /// predates page search answers with no pages lane, which is an error rather than "nothing matched".</summary>
     async Task<string> SearchPagesAsync(JsonNode id, HttpClient client, string baseUrl, JsonObject? arguments, CancellationToken ct) {
-        if (arguments?["query"]?.GetValue<string>() is not { } query || string.IsNullOrWhiteSpace(query))
+        if (McpToolArguments.OptionalString(arguments, "query") is not { } query)
             return BuildToolResult(id, "Error: search_pages needs a query.", isError: true);
 
-        var limit = Math.Clamp(arguments["limit"]?.GetValue<int>() ?? DefaultSearchLimit, 1, MaxSearchLimit);
+        var limit = Math.Clamp(McpToolArguments.TryReadInt(arguments, "limit", out var asked) ? asked : DefaultSearchLimit,
+                               1, MaxSearchLimit);
 
         using var response = await client.GetAsync(
-            $"{baseUrl}/api/search?q={Uri.EscapeDataString(query.Trim())}&mode=pages&limit={limit}", ct);
+            $"{baseUrl}/api/search?q={Uri.EscapeDataString(query)}&mode=pages&limit={limit}", ct);
         var body = await response.Content.ReadAsStringAsync(ct);
 
         if (await RefusalAsync(id, response, body, baseUrl) is { } refusal) return refusal;

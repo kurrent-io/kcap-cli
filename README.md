@@ -1014,7 +1014,7 @@ kcap mcp pages
 
 Stdio MCP server that lets a coding agent publish a **self-contained HTML page** to the kcap server and hand back a link — a plan for review, a comparison table, a report someone would rather read as a page than as terminal output. The page is served under a sandbox that cannot reach the network, so every style, script and image must be inlined as a data URI; an external URL renders as nothing. A page is private to its owner until `visibility` says otherwise, and re-publishing with `update_id` revises it without changing the URL, so a link you already shared stays good.
 
-It provides seven tools, kept deliberately narrow — an agent's context pays for every schema it carries whether or not it ever publishes, and version history and takedown live in the web UI:
+It provides eight tools, kept deliberately narrow — an agent's context pays for every schema it carries whether or not it ever publishes, and version history and takedown live in the web UI:
 
 - **`publish_page`** — publish a page. `title` plus either `html` or a local `path`; optional `description`, `visibility` (`none` / `org` / `scoped`), `grants`, `session_ids`, `response_schema`, and `update_id` to revise an existing page.
 - **`await_page_responses`** — block until people have answered. Returns on a respondent count, on a close, or on a timeout — a timeout is a result, not an error.

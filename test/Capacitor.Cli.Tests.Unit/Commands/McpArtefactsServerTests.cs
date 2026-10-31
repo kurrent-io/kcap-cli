@@ -557,6 +557,20 @@ public class McpArtefactsServerTests {
     }
 
     [Test]
+    [Arguments("""{"query":5}""", "'query'")]
+    [Arguments("""{"query":"ferry","limit":"many"}""", "'limit'")]
+    [Arguments("""{"query":"ferry","limit":5.5}""", "'limit'")]
+    public async Task Search_pages_with_a_mistyped_argument_names_it_without_a_request(string arguments, string named) {
+        using var stub = SearchStub("""{"pages":[]}""");
+
+        var (isError, text) = await CallAsync(Server(), stub.Url!, Args(arguments), "search_pages");
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).Contains(named);
+        await Assert.That(stub.LogEntries).IsEmpty();
+    }
+
+    [Test]
     [Arguments("{}")]
     [Arguments("""{"query":"   "}""")]
     public async Task Search_pages_without_a_query_errors_without_a_request(string arguments) {
