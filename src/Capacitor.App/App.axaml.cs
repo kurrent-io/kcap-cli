@@ -936,7 +936,7 @@ public partial class App : Application {
                 lock (lifecycleStatus) if (ReferenceEquals(lifecycleStatus.Value, message)) lifecycleStatus.OnNext(null);
                 lock (lifecycleAttention) if (ReferenceEquals(lifecycleAttention.Value, message)) lifecycleAttention.OnNext(null);
             },
-            lane.RunAsync, profiles?.Resolution, () => lane.IsRetired(service.DaemonName));
+            lane.RunAsync, profiles?.Resolution, () => lane.IsRetired(service.DaemonName), lane.CliVersionAsync);
         lifecycle.RestartExpected = () => expectedRestart.Expected;
         lifecycle.Start();
         _lifecycle = lifecycle;
@@ -967,7 +967,7 @@ public partial class App : Application {
         // Composition-root outcome consumer: shares lifecycle's own surface/probe/CliVersion and the lane itself, so a Takeover accept re-mutates through the same gate.
         _ = ConsumeMutationOutcomesAsync(
             channel, lifecycleSurface, lane.RunAsync, lifecycleProbe.TerminalPathAsync, () => lifecycle.CliVersion, _shutdown.Token,
-            daemonVersion: () => lifecycle.AttachedDaemonVersion);
+            daemonVersion: () => lifecycle.AttachedDaemonVersion, replacementCliVersion: lane.CliVersionAsync);
 
         service.Start();
         _service = service;
@@ -2207,7 +2207,8 @@ public partial class App : Application {
             DaemonClientService service, ILocalControlOps ops, bool autoActionsPermanentlyClosed,
             Action<string> setLifecycleStatus, Action<string> setLifecycleAttention, Action<string> withdrawLifecycleAttention,
             Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation,
-            ResolvedProfile? profile, Func<bool> requiresAppRestart) {
+            ResolvedProfile? profile, Func<bool> requiresAppRestart,
+            Func<MutationRequest, CancellationToken, Task<string?>> replacementCliVersion) {
         var cliPath = CliResolver.ResolvePath(Environment.GetEnvironmentVariable, File.Exists, Program.Host.CliDirectory);
         var runner  = new ProcessRunner(_time);
         var probe   = TerminalPathProbe.Create(runner, Environment.GetEnvironmentVariable);
@@ -2222,7 +2223,8 @@ public partial class App : Application {
             service, cli, probe, surface, () => Task.FromResult(ValidProfileName(profile)), _time,
             canonicalServer, runMutation, autoActionsPermanentlyClosed, requiresAppRestart,
             windowsServiceDeclined: async () => (await _appState.LoadAsync().ConfigureAwait(false)).WindowsServiceDeclined,
-            rememberWindowsServiceDeclined: () => _appState.UpdateAsync(s => s with { WindowsServiceDeclined = true }));
+            rememberWindowsServiceDeclined: () => _appState.UpdateAsync(s => s with { WindowsServiceDeclined = true }),
+            replacementCliVersion: replacementCliVersion);
 
         // The shim links to the RESOLVED ABSOLUTE path only — CliResolver's bare "kcap" PATH
         // fallback means there is nothing to link, so the offer and the menu item both stay off
@@ -2447,7 +2449,8 @@ public partial class App : Application {
             OutcomeChannel channel, ILifecycleSurface surface,
             Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation,
             Func<CancellationToken, Task<string?>> terminalPathAsync, Func<string?> cliVersion, CancellationToken ct,
-            Func<string, string?>? attentionCopy = null, Func<string?>? daemonVersion = null) {
+            Func<string, string?>? attentionCopy = null, Func<string?>? daemonVersion = null,
+            Func<MutationRequest, CancellationToken, Task<string?>>? replacementCliVersion = null) {
         var declinedTakeoverPairs = new HashSet<(MutationRequest Request, string Token)>();
         try {
             await foreach (var lease in channel.ConsumeAsync(ct)) {
@@ -2455,7 +2458,7 @@ public partial class App : Application {
                 try {
                     await PresentOutcomeAsync(
                             surface, lease.Envelope, runMutation, terminalPathAsync, cliVersion, ct, declinedTakeoverPairs,
-                            () => presented = true, attentionCopy, daemonVersion)
+                            () => presented = true, attentionCopy, daemonVersion, replacementCliVersion)
                         .ConfigureAwait(false);
                     lease.Ack(); // ran to completion — whether or not anything needed showing
                 } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
@@ -2477,7 +2480,8 @@ public partial class App : Application {
             Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation,
             Func<CancellationToken, Task<string?>> terminalPathAsync, Func<string?> cliVersion, CancellationToken ct,
             HashSet<(MutationRequest Request, string Token)>? declinedTakeoverPairs = null, Action? markPresented = null,
-            Func<string, string?>? attentionCopy = null, Func<string?>? daemonVersion = null) {
+            Func<string, string?>? attentionCopy = null, Func<string?>? daemonVersion = null,
+            Func<MutationRequest, CancellationToken, Task<string?>>? replacementCliVersion = null) {
         // The controller that started a reload awaits its outcome and renders it as state in the rail;
         // posting it here too would put a withdrawable condition on a lane nothing can withdraw from.
         if (envelope.Request.Verb == MutationVerb.Reload) {
@@ -2518,15 +2522,18 @@ public partial class App : Application {
                 }
 
                 var pathDegraded = await terminalPathAsync(ct).ConfigureAwait(false) is null;
+                var replace = envelope.Request with { Verb = MutationVerb.Replace };
+                // Probed now, not cached: the replace runs whichever kcap the lane resolves when it runs.
+                var target = replacementCliVersion is null ? cliVersion() : await replacementCliVersion(replace, ct).ConfigureAwait(false);
                 var prompt = DaemonLifecycleController.WithVersionChange(
                     new LifecyclePrompt(LifecyclePrompt.KindTakeover, null, cliVersion(), pathDegraded, DaemonLifecycleController.TakeoverDisclosure),
-                    daemonVersion?.Invoke(), cliVersion());
+                    daemonVersion?.Invoke(), target);
                 var accepted = await surface.TryConfirmAsync(prompt, ct).ConfigureAwait(false);
                 if (accepted is null) { ct.ThrowIfCancellationRequested(); throw new OperationCanceledException(ct); } // cancelled before the dialog ever ran — never presented
                 markPresented?.Invoke(); // the dialog was shown and answered — everything after this is post-presentation
                 if (accepted.Value) {
                     // No app-side evidence revalidation on accept: a stale Accept only fails coded (28/29, under the CLI's transaction lock) and re-arrives as a fresh outcome.
-                    _ = await runMutation(envelope.Request with { Verb = MutationVerb.Replace }, ct).ConfigureAwait(false);
+                    _ = await runMutation(replace, ct).ConfigureAwait(false);
                 } else {
                     declined.Add(pairKey);
                     Console.Error.WriteLine($"kcap: daemon replacement declined ({named})");

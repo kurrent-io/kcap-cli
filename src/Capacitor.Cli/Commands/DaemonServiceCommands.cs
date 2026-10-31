@@ -285,7 +285,7 @@ sealed class DaemonServiceCommands(
     /// the daemon of the one an install replaces.</param>
     static async Task<bool> RefuseHostedCallerAsync(
             Func<string, bool> hostsCaller, string id, string? retireId, string? enrolledId, string[] args) {
-        if (new[] { id, retireId, enrolledId }.FirstOrDefault(target => target is not null && hostsCaller(target)) is not { } host) return false;
+        if (HostedTarget(hostsCaller, id, retireId, enrolledId) is not { } host) return false;
 
         List<string> words = ["kcap", "daemon", "service", "install", .. args];
         if (!args.Contains("--name")) words.AddRange(["--name", id]);
@@ -293,6 +293,13 @@ sealed class DaemonServiceCommands(
 
         return true;
     }
+
+    /// <summary>The first of the targets an install stops whose daemon hosts this process, or null</summary>
+    static string? HostedTarget(Func<string, bool> hostsCaller, string id, string? retireId, string? enrolledId) =>
+        new[] { id, retireId, enrolledId }.FirstOrDefault(target => target is not null && hostsCaller(target));
+
+    /// <summary>This user's <c>kcap-service</c> enrollment, which an install under another name replaces; null off Windows</summary>
+    string? EnrolledServiceId() => manager is WindowsServiceManager && manager.ListInstalled() is [var first, ..] ? first : null;
 
     /// <summary>The sanitized <c>--retire</c> target, or the refusal for a malformed one</summary>
     internal static (string? Id, string? Error) ParseRetire(string[] args) {
@@ -532,8 +539,7 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
-        var enrolled = manager is WindowsServiceManager && manager.ListInstalled() is [var first, ..] ? first : null;
-        if (await RefuseHostedCallerAsync(HostsCaller ?? HostsCallerOf(store), id, retireId, enrolled, args)) return 1;
+        if (await RefuseHostedCallerAsync(HostsCaller ?? HostsCallerOf(store), id, retireId, EnrolledServiceId(), args)) return 1;
 
         var daemonPath = UnitIdentity.ResolveDaemonBinary();
         if (daemonPath is null) { await Console.Error.WriteLineAsync(DaemonCommands.DaemonNotFoundMessage()); return 1; }
@@ -1051,6 +1057,12 @@ sealed class DaemonServiceCommands(
     /// transaction on launchd (or on Windows when retiring a renamed service) or a plain install
     /// elsewhere.</summary>
     async Task<(ServiceEnsureJson, int)> EnsureInstall(string? profileName, string state, string? retireServiceId) {
+        if (HostedTarget(HostsCaller ?? HostsCallerOf(store), id, retireServiceId, EnrolledServiceId()) is { } host) {
+            var profile = profileName is null ? "" : $" --profile {profileName}";
+            await Console.Error.WriteLineAsync(HostedCaller.Refusal(host, $"`kcap daemon service ensure --name {id}{profile}`"));
+            return (new ServiceEnsureJson(id, state, "install", "refused", null, "hosted_caller"), 1);
+        }
+
         var serverUrl = await ResolveServerUrlAsync(profileName);
         if (serverUrl is null)
             return (new ServiceEnsureJson(id, state, "install", "refused", null, "no_server_configured"), 1);

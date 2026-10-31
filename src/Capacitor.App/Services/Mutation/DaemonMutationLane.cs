@@ -80,6 +80,13 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
         lock (_gate) return _retiredServiceIds.Contains(DaemonStore.Sanitize(daemonName));
     }
 
+    /// <summary>The version of the kcap the lane would run <paramref name="request"/> with now, or null when none
+    /// resolves or it does not answer</summary>
+    public async Task<string?> CliVersionAsync(MutationRequest request, CancellationToken ct) {
+        var path = await ResolvePathAsync(_pinnedCli(), ct).ConfigureAwait(false);
+        return path is null ? null : await _executorFactory(request, path).VersionAsync(ct).ConfigureAwait(false);
+    }
+
     public async Task<bool> CanRetireAsync(MutationRequest request, CancellationToken ct) {
         var path = await ResolvePathAsync(_pinnedCli(), ct).ConfigureAwait(false);
         if (path is null) return false;

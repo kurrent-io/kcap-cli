@@ -1715,6 +1715,46 @@ public class DaemonLifecycleControllerTests {
         await Assert.That(h.Surface.Prompts[0].Disclosure).Contains("The daemon runs 1.4.1-beta.1, newer than this kcap's 1.4.0: replacing it now downgrades it to 1.4.0.");
     }
 
+    /// The replace runs whichever kcap the lane resolves when it runs, so the offer names the version probed for
+    /// it then, not the one cached at startup.
+    [Test]
+    public async Task A_replace_offer_names_the_kcap_probed_for_it_not_the_cached_one() {
+        if (!AttachedIdentity.SupportsVerifiedReplace) return;
+        await using var h = new Harness();
+        h.Cli.VersionBehavior = _ => Task.FromResult<string?>("1.4.0+abc");
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: true, state: "running"));
+        h.Start();
+        await WaitUntilAsync(() => h.Controller.CliVersion is not null, what: "the version probe");
+        h.Cli.VersionBehavior = _ => Task.FromResult<string?>("1.5.0");
+
+        h.Client.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(
+            daemon: "daemon-a", version: "1.4.1", serverUrl: "https://norton.kcap.ai:443", profile: "norton"));
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.Prompts.Count == 1, what: "the replace offer");
+        await Assert.That(h.Surface.Prompts[0].Disclosure).Contains("The daemon runs 1.4.1; replacing it installs 1.5.0.");
+    }
+
+    /// A snapshot outlives the attach that delivered it, so once an attach fails the version is that attach's own.
+    [Test]
+    public async Task A_failed_attach_reports_its_own_daemon_version_not_the_last_snapshot() {
+        await using var h = new Harness();
+        h.Start();
+
+        h.Client.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(daemon: "daemon-a", version: "1.4.1", serverUrl: h.CanonicalServer!));
+        h.PushConnected();
+        await Assert.That(h.Controller.AttachedDaemonVersion).IsEqualTo("1.4.1");
+
+        h.PushUnreachable("daemon_incompatible");
+        await Assert.That(h.Controller.AttachedDaemonVersion).IsNull();
+
+        h.PushUnreachable("daemon_incompatible", daemonVersion: "1.3.0");
+        await Assert.That(h.Controller.AttachedDaemonVersion).IsEqualTo("1.3.0");
+
+        h.PushConnecting();
+        await Assert.That(h.Controller.AttachedDaemonVersion).IsNull();
+    }
+
     [Test]
     public async Task A_prompt_is_left_alone_when_the_versions_are_unknown_or_the_same() {
         var prompt = new LifecyclePrompt(LifecyclePrompt.KindRepair, null, "1.4.0", false, "Replace it.");

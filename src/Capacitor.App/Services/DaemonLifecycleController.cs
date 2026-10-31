@@ -106,6 +106,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     readonly Func<bool> _requiresAppRestart;
     readonly Func<Task<bool>> _windowsServiceDeclined;
     readonly Func<Task> _rememberWindowsServiceDeclined;
+    readonly Func<MutationRequest, CancellationToken, Task<string?>> _replacementCliVersion;
 
     readonly SemaphoreSlim _gate = new(1, 1);
     readonly CancellationTokenSource _lifetime = new();
@@ -164,13 +165,15 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     bool _disposed;
     int _generation;
     (AttachState State, string? Reason) _lastObserved = (AttachState.Connecting, null);
+    string? _unreachableVersion; // under _lock: the hello reply's version on the last Unreachable
 
     public DaemonLifecycleController(
             IDaemonClientService client, IKcapCli cli, ILoginShellProbe probe,
             ILifecycleSurface surface, Func<Task<string?>> resolveProfileName, TimeProvider time,
             string? canonicalServer, Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation,
             bool autoActionsPermanentlyClosed = false, Func<bool>? requiresAppRestart = null,
-            Func<Task<bool>>? windowsServiceDeclined = null, Func<Task>? rememberWindowsServiceDeclined = null) {
+            Func<Task<bool>>? windowsServiceDeclined = null, Func<Task>? rememberWindowsServiceDeclined = null,
+            Func<MutationRequest, CancellationToken, Task<string?>>? replacementCliVersion = null) {
         _client                        = client;
         _cli                           = cli;
         _probe                         = probe;
@@ -183,6 +186,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         _requiresAppRestart             = requiresAppRestart ?? (() => false);
         _windowsServiceDeclined         = windowsServiceDeclined ?? (() => Task.FromResult(false));
         _rememberWindowsServiceDeclined = rememberWindowsServiceDeclined ?? (() => Task.CompletedTask);
+        _replacementCliVersion          = replacementCliVersion ?? ((_, ct) => _cli.VersionAsync(ct));
     }
 
     /// Completes permanently on the first terminal attach outcome (Connected /
@@ -193,8 +197,17 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     /// Cached once at Start(); null when the CLI is missing or --version failed.
     public string? CliVersion { get; private set; }
 
-    /// The version the attached daemon last reported, or null before its first snapshot.
-    public string? AttachedDaemonVersion => Volatile.Read(ref _latestDaemon)?.Version;
+    /// The version of the daemon the last attach reached: its snapshot's while connected, the hello reply's after a
+    /// failed attach, else null. The snapshot outlives a dropped attach, so it is never read once one fails.
+    public string? AttachedDaemonVersion {
+        get {
+            lock (_lock) return _lastObserved.State switch {
+                AttachState.Connected   => Volatile.Read(ref _latestDaemon)?.Version,
+                AttachState.Unreachable => _unreachableVersion,
+                _                       => null,
+            };
+        }
+    }
 
     /// True while launchd holds the service in the background band; unchanged by an unknown word or a failed read.
     public IObservable<bool> BackgroundPriority => _backgroundPriority.DistinctUntilChanged();
@@ -262,6 +275,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         lock (_lock) {
             _generation++;
             _lastObserved = (status.State, status.Reason);
+            _unreachableVersion = status.State == AttachState.Unreachable ? status.DaemonVersion : null;
             if (status.State == AttachState.Connected) _latestResumes = status.Capabilities?.Contains(ResumeCapability) == true;
             if (status.State == AttachState.Connected) _recoveriesSinceConnect = 0;
 
@@ -702,7 +716,8 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             LifecyclePrompt prompt, CancellationToken ct, bool requireIdle = false,
             Func<CancellationToken, Task<bool>>? stillEligible = null) {
         if (RequireAppRestart()) return;
-        prompt = WithVersionChange(prompt, AttachedDaemonVersion, CliVersion);
+        var target = await ReplacementCliVersionAsync(ct).ConfigureAwait(false);
+        prompt = WithVersionChange(prompt, AttachedDaemonVersion, target);
         var gen0     = CurrentGeneration(); // captured immediately before ConfirmAsync (stale-consent check below)
         var accepted = await _surface.ConfirmAsync(prompt, ct).ConfigureAwait(false);
         if (!accepted || RequireAppRestart()) return;
@@ -726,6 +741,14 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         }
 
         await RunLaneMutationAsync(MutationVerb.Replace, ct).ConfigureAwait(false);
+    }
+
+    /// The kcap the lane would run the replace with, probed now: the cached <see cref="CliVersion"/> can predate it.
+    async Task<string?> ReplacementCliVersionAsync(CancellationToken ct) {
+        var profileName = await _resolveProfileName().ConfigureAwait(false);
+        return MutationRequestFactory.TryBuild(MutationVerb.Replace, profileName, _canonicalServer, _client.DaemonName, out var request) is null
+            ? await _replacementCliVersion(request!, ct).ConfigureAwait(false)
+            : null;
     }
 
     /// The replace installs the app's own kcap, so the prompt says which version that moves the daemon to.
