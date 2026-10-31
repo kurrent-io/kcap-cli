@@ -182,7 +182,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// the coordinator's close paths route through.
     public ReactiveCommand<Unit, Unit> CloseWorkspaceCommand { get; }
 
-    /// Back to the launcher as the user's own navigation: it also dismisses search and releases the pin.
+    /// Back to the launcher as the user's own navigation: it also dismisses search, releases the pin,
+    /// and points the launcher at the repository of the session selected in the rail.
     /// Pressed over the launcher already showing, it nudges the launcher so the press visibly lands.
     public ReactiveCommand<Unit, Unit> NewSessionCommand { get; }
 
@@ -399,7 +400,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         Rail = rail;
         TenantName = ProfileLabelForRail(tenantName);
         CloseWorkspaceCommand = ReactiveCommand.Create(CloseWorkspace);
-        NewSessionCommand = ReactiveCommand.Create(NewSession);
+        NewSessionCommand = ReactiveCommand.CreateFromTask(NewSessionAsync);
         Search = sessions is null ? null : searchFactory?.Invoke(OpenSearchHitAsync);
         Search?.Closed.Subscribe(_ => IsSearchOpen = false);
         if (Search is { } page) page.WhenAnyValue(x => x.ListState).Subscribe(_ => this.RaisePropertyChanged(nameof(SearchShowsSignIn)));
@@ -720,11 +721,14 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     // Closes even over the launcher: the swap bumps the navigation generation, which keeps an
     // in-flight launch from opening its workspace over the next draft.
-    void NewSession() {
+    async Task NewSessionAsync() {
         var onLauncher = CurrentWorkspace is null && !IsSearchOpen;
+        var selected = !onLauncher && Rail?.SelectedSessionKey is { } key && _directory?.Rows.Lookup(key) is { HasValue: true } row
+            ? row.Value : null;
         CloseSearch();
         CloseWorkspace();
         if (onLauncher) _launcherNudges.OnNext(Unit.Default);
+        if (selected is not null && Home is { } home) await home.SelectRepositoryOfAsync(selected);
     }
 
     void OpenSearch() {

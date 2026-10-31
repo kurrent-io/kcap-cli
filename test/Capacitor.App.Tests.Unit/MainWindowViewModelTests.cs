@@ -2279,6 +2279,31 @@ public class MainWindowViewModelTests {
         });
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task New_session_points_the_launcher_at_the_selected_sessions_repository() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = new TempDir();
+            string repo = tmp.CreateDir("alpha");
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            var row = AgentRow.FromLocal(WorkspaceFixtures.Agent("a1", "claude", false, repo), new RepoIdentity("path:" + repo, "alpha"));
+            host.Directory.Rows.AddOrUpdate(row);
+            using var rail = new SessionRailViewModel(host.Directory, _ => { }, _ => { }, TimeProvider.System);
+            using var home = new HomeViewModel(service, new AppStateStore(tmp.PathTo("app-state.json")), new UnusedLaunchClient(),
+                () => Task.FromResult(Array.Empty<string>()), TimeProvider.System);
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                workspaceFactory: id => NewWorkspace(service, id), rail: rail, directory: host.Directory, home: home);
+            vm.OpenSession("a1");
+            await Assert.That(rail.SelectedSessionKey).IsEqualTo(row.Key);
+
+            await vm.NewSessionCommand.Execute().ToTask();
+
+            await Assert.That(vm.CurrentWorkspace).IsNull();
+            await Assert.That(home.SelectedRepoPath).IsEqualTo(PlatformPaths.Normalize(repo));
+        });
+    }
+
     /// Hide-to-tray releases the workspace, and every trip back reopens the same session, selected
     /// in the rail and on the tab it showed, rather than the launcher.
     [Test]
