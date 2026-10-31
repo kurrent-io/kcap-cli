@@ -1462,7 +1462,9 @@ internal partial class AgentOrchestrator {
         var successor = entry with {
             AgentId = agentId, SessionId = null, VendorSession = null, Attempts = 0, LastError = null, CreatedAt = _time.GetUtcNow(),
             LaunchEpoch = _daemonEpoch,
-            InheritedAgentIds = [.. (entry.InheritedAgentIds ?? []), entry.AgentId]
+            InheritedAgentIds = [.. (entry.InheritedAgentIds ?? []), entry.AgentId],
+            // The server admits a repeated hand-off begin only for the session it continued the source as.
+            Launch = entry.Launch with { HandoffSource = null }
         };
         var launch  = new ResumeLaunch(successor, ResumedWorktree(entry)) { AttemptOf = entry.AgentId, DefersLedger = true, Token = ct };
         var cmd     = BuildResumeCommand(entry, LastAlive(entry, null), _server.CurrentConnectionId) with { AgentId = agentId, Prompt = prompt, ResumeSessionId = null };
