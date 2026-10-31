@@ -53,7 +53,7 @@ Both pass, so the daemon advertises both. The server's `LocalAgentHarnesses.All`
 - Test: `test/Capacitor.Cli.Core.Tests.Unit/` wire round-trip test beside the existing `Models` serialization tests
 
 **Interfaces:**
-- Produces: `public readonly record struct RunHeadlessPromptArgs(...)`, `HeadlessPromptResponse(...)`, `CancelHeadlessPromptArgs(string RequestId)` with the server's exact shapes; `DaemonConnect.HeadlessVendors` (`string[]?`, default null); constants `HeadlessNotStartedReasons.{NoHarness,BinaryMissing,DeadlinePassed}` and `HeadlessFailureKinds.{ProcessFailure,Deadline,UnparseableOutput,SpendBudget,NotSignedIn}` in Core
+- Produces: `public readonly record struct RunHeadlessPromptArgs(...)`, `HeadlessPromptResponse(...)`, `CancelHeadlessPromptArgs(string RequestId)` with the server's exact shapes; `DaemonConnect.HeadlessVendors` (`string[]?`, default null). The reason and kind strings are constants on the daemon's `HeadlessPromptResponses` (Task 3), the only place that writes them
 
 - [ ] Failing test: `HeadlessPromptResponse` serialized through the source-generated context round-trips with null token counts staying null; `DaemonConnect` with `HeadlessVendors: ["claude"]` serializes the field as `HeadlessVendors`
 - [ ] Add the records, constants, `[JsonSerializable]` entries and the parameter; test passes
@@ -69,7 +69,7 @@ Both pass, so the daemon advertises both. The server's `LocalAgentHarnesses.All`
 - Produces: `ClaudeCliOutcome.Usage` means "what the run reported, null when it reported nothing", set on success and failure by both runners. `ClaudeCliRunner.ReportedUsage(string stdout) -> ClaudeCliUsage?` (null when the envelope has no non-empty `modelUsage`). `ClassifyFailure` returns `NotSignedIn` for an `is_error` envelope whose `api_error_status` is 401 or whose `result` mentions `/login`, and `SpendBudget` for `error_max_budget_usd` or a `result` naming a usage limit
 
 - [ ] Failing tests: `Signed_out_envelope_is_not_signed_in` (the verified signed-out envelope above → `NotSignedIn`, `Usage` null); `Usage_limit_envelope_is_spend_budget`; `Reported_usage_sums_model_usage` (two models → summed fields, cost from `total_cost_usd`); `Empty_model_usage_reports_null`
-- [ ] Implement; the Codex success return also carries `events.Usage`
+- [ ] Implement; the Codex success return also carries `events.Usage`, and `ClaudeCliRunner` kills through `ProcessTree.Kill` instead of the runtime's tree kill, which stops each process first and is banned in the daemon
 - [ ] Commit
 
 ### Task 3: Outcome mapping
@@ -113,11 +113,15 @@ Behaviour: unknown harness → `no_harness`; deadline already past on arrival or
 
 - [ ] Failing tests: `DaemonConnect_without_a_headless_handler_advertises_none` (empty, not null); `DaemonConnect_advertises_the_headless_harnesses_once_wired`; `Headless_harness_is_available_only_when_its_binary_resolves` (registry over `TestBinaries.Searching(tmp, "claude")` vs `TestBinaries.None`)
 - [ ] Implement; register the two adapters and the runner in `DaemonRunner`, instantiate it beside `EvalRunner`
+- [ ] `CodexHeadlessHarnessTests`: an empty `Model` (the server's tier default for Codex) passes no `-m`; a null effort runs at `low`
+- [ ] `ServerConnectionHeadlessWireTests`: over a real hub, a `CancelHeadlessPrompt` reaches the daemon while its `RunHeadlessPrompt` is pending, and the answer round-trips
 - [ ] Run the Core and Daemon unit suites, `dotnet publish` for IL warnings; commit
 
 ### Task 6: End-to-end check
 
-- [ ] Run a local-edition kcap-server with `Evals:ServerRunner:LocalAgent:Harness=claude`, a daemon from this branch against it, request a manual eval or title, and confirm the log no longer repeats `EvalQueue: the local agent did not start <runId>: no_daemon`. Record the result, or why it could not be run, in the PR
+Done 2026-10-31: the published v1.4.1-beta.2 local bundle run in the foreground (isolated `KCAP_LOCAL_ROOT`, `Evals__ServerRunner__LocalAgent__Harness=claude`) with a daemon built from this branch; one imported Claude session was titled through three `RunHeadlessPrompt` client results, and the server logged no `did not start`. A root path must stay short: the Postgres socket path is capped at 103 bytes on macOS
+
+- [x] Run a local-edition kcap-server with `Evals:ServerRunner:LocalAgent:Harness=claude`, a daemon from this branch against it, request a manual eval or title, and confirm the log no longer repeats `EvalQueue: the local agent did not start <runId>: no_daemon`. Record the result, or why it could not be run, in the PR
 
 ## PR 2: setup asks who runs background intelligence (planned, not in PR 1)
 
