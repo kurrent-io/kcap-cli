@@ -91,10 +91,31 @@ class ArtefactCommand(IArtefactsApi artefacts) {
             return 0;
         }
 
-        foreach (var a in listed)
-            Console.WriteLine($"{a.ArtefactId}  v{a.LatestVersion,-3} {a.Visibility,-7} {a.UpdatedAt:yyyy-MM-dd}  {a.Title}");
+        foreach (var line in ListLines(listed)) Console.WriteLine(line);
 
         return 0;
+    }
+
+    /// <summary>The listing with a header row, so a visibility of <c>none</c> reads as one rather than
+    /// as a missing value.</summary>
+    internal static IEnumerable<string> ListLines(IReadOnlyList<ArtefactDto> pages) {
+        var idWidth = Math.Max("PAGE".Length, pages.Max(a => a.ArtefactId.Length));
+
+        yield return $"{"PAGE".PadRight(idWidth)}  {"VERSION",-7} {"VISIBILITY",-10} {"UPDATED",-10}  TITLE";
+
+        foreach (var a in pages)
+            yield return $"{a.ArtefactId.PadRight(idWidth)}  {"v" + a.LatestVersion,-7} {a.Visibility,-10} {a.UpdatedAt:yyyy-MM-dd}  {ForTerminal(OneLine(a.Title))}";
+    }
+
+    /// <summary>A title with every line-breaking character and tab as a space, so it cannot spill into rows of its
+    /// own: <see cref="ForTerminal"/> lets <c>\n</c> and <c>\t</c> through, and some terminals also break on the
+    /// Unicode line, paragraph and next-line separators.</summary>
+    static string OneLine(string text) {
+        var line = text.Replace("\r\n", " ");
+        return string.Create(line.Length, line, static (span, source) => {
+            for (var i = 0; i < source.Length; i++)
+                span[i] = source[i] is '\r' or '\n' or '\t' or '\v' or '\f' or '\u0085' or '\u2028' or '\u2029' ? ' ' : source[i];
+        });
     }
 
     /// <summary>The content goes to stdout alone, so it pipes; what the page is and whose words it

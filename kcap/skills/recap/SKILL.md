@@ -162,15 +162,20 @@ To pick a plan up and continue it, follow "Resuming a plan" in the `plans` skill
 
 ## Full Output (`--full`)
 
-The complete transcript with these section types:
+The complete transcript: the session's plans (`## Plan`) first, then every closed turn under `# Turn <N>`, with these sections:
 
-- **`## User Prompt`** — what the user asked
-- **`## Assistant`** — Agent text responses
-- **`## Plan`** — plans that were created
-- **`## Write <path>`** — files that were created (with syntax-highlighted content)
-- **`## Edit <path>`** — files that were edited (with diff content)
+- **`## User`** — what the user asked
+- **`## Assistant`** — the agent's text responses
+- **`## Thinking`** — the agent's reasoning, where it was recorded
+- **`## Tool: <name>`** — a tool call, its arguments one per line
+- **`### Result`** / **`### Error`** — what the call returned, or the error it failed with
+- **`### Subagent: <type> (<id>)`** — the entries below it came from a subagent; **`### (main session)`** marks the return to the main agent
 
-When using `--chain`, sessions are separated by `# Session <id>` headers, and agent activity appears under `### Agent (<type>)` sub-headers.
+A turn that cannot be read is named in place (for example "Turn 3 was not found on the server") rather than skipped, and a truncated field says so.
+
+Activity not yet closed into a turn — everything after the last closed turn under `# After turn <N>`, or the whole session after a "No closed turn is recorded yet" note — shows only prompts, replies and file writes: `## User Prompt`, `## Assistant`, `## Write <path>` (the file's content) and `## Edit <path>` (the diff), with subagent activity under `### Agent (<type>)`. Its tool calls and results appear once the turn closes.
+
+When using `--chain`, sessions are separated by `# Session <id>` headers.
 
 ## When to Use Each Flag
 
@@ -178,7 +183,7 @@ When using `--chain`, sessions are separated by `# Session <id>` headers, and ag
 - **No flags** (`kcap recap`) — summary + per-turn outline for the current session
 - **`--per-turn`** (`kcap recap --per-turn`) — compact metadata index per turn (prompt excerpt, tools, files, tokens, time), no prose
 - **`--get-turn <N>`** (`kcap recap --get-turn <N>`) — one turn's full transcript, drilling down from the outline or the per-turn index
-- **`--full`** (`kcap recap --full`) — whole transcript: exact prompts, responses, and file contents for a specific session
+- **`--full`** (`kcap recap --full`) — whole transcript for a specific session: every turn's prompts, responses, tool calls and results, as `--get-turn` shows them
 - **`--chain`** (`kcap recap --chain`) — understanding the full history of a task that spanned multiple sessions
 - **`--chain --full`** — complete transcript across all continuations
 

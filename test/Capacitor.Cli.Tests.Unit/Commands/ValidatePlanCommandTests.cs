@@ -676,4 +676,90 @@ public class ValidatePlanCommandTests : IDisposable {
         var occurrences = System.Text.RegularExpressions.Regex.Count(stdout, "PRIMARY-CONTENT");
         await Assert.That(occurrences).IsEqualTo(1);
     }
+
+    /// <summary>A harness hands its session id dashed; the server files and reports it in its 32-hex form. The write
+    /// is the session's own, so it must be listed, not dropped as another chain member's.</summary>
+    [Test, NotInParallel]
+    public async Task Dashed_session_id_still_lists_the_writes_the_server_reports_under_its_canonical_form() {
+        const string dashed = "9dc27753-7645-4e46-91ec-c2d69973c152";
+
+        _server.Given(Request.Create().WithPath($"/api/sessions/{dashed}/plan-artifacts").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json")
+                .WithBody($$"""{ "primary": {{ArtifactJson("art-1", "plan", "native_plan", "Step 1")}}, "artifacts": [], "diagnostics": [] }"""));
+        _server.Given(Request.Create().WithPath($"/api/sessions/{dashed}/recap").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json").WithBody($$"""
+                [
+                  {"type":"write","session_id":"{{SessionId}}","agent_id":null,"agent_type":null,"content":"# ADR","file_path":"docs/adr/0007-charts.md","timestamp":"2026-07-01T00:00:00Z"},
+                  {"type":"write","session_id":"0000000000000000000000000000beef","agent_id":null,"agent_type":null,"content":"","file_path":"src/Earlier.cs","timestamp":"2026-06-01T00:00:00Z"}
+                ]
+                """));
+
+        var stdout = await CaptureStdoutAsync(() => ValidatePlanCommand.HandleCore(Api(), dashed));
+
+        await Assert.That(stdout).Contains("- Write: docs/adr/0007-charts.md");
+        await Assert.That(stdout).DoesNotContain("src/Earlier.cs");
+        await Assert.That(stdout).DoesNotContain("No file writes or edits recorded.");
+    }
+
+    [Test, NotInParallel]
+    public async Task A_write_whose_tool_call_failed_is_marked_failed_beside_the_one_that_applied() {
+        StubArtifacts($$"""{ "primary": {{ArtifactJson("art-1", "plan", "native_plan", "Step 1")}}, "artifacts": [], "diagnostics": [] }""");
+        _server.Given(Request.Create().WithPath($"/api/sessions/{SessionId}/recap").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json").WithBody($$"""
+                [
+                  {"type":"write","session_id":"{{SessionId}}","agent_id":null,"agent_type":null,"content":"x","file_path":"/repo/src/Locked.cs","timestamp":"2026-07-01T00:00:00Z"},
+                  {"type":"write","session_id":"{{SessionId}}","agent_id":null,"agent_type":null,"content":"y","file_path":"/repo/src/Foo.cs","timestamp":"2026-07-01T00:01:00Z"}
+                ]
+                """));
+        _server.Given(Request.Create().WithPath($"/api/sessions/{SessionId}/errors").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json").WithBody($$"""
+                [
+                  {"session_id":"{{SessionId}}","session_slug":null,"agent_id":null,"event_number":4,"tool_name":"Write","call_id":"c1",
+                   "tool_input":{"file_path":"/repo/src/Locked.cs","content":"x"},"error":"EACCES","timestamp":"2026-07-01T00:00:01Z"}
+                ]
+                """));
+
+        var stdout = await CaptureStdoutAsync(() => ValidatePlanCommand.HandleCore(Api(), SessionId));
+
+        await Assert.That(stdout).Contains("- Write (failed): /repo/src/Locked.cs");
+        await Assert.That(stdout).Contains("- Write: /repo/src/Foo.cs");
+        await Assert.That(stdout).Contains("did not apply and is not done");
+    }
+
+    [Test, NotInParallel]
+    public async Task Unreadable_tool_failures_keep_the_recorded_writes_and_say_failures_are_unknown() {
+        StubArtifacts($$"""{ "primary": {{ArtifactJson("art-1", "plan", "native_plan", "Step 1")}}, "artifacts": [], "diagnostics": [] }""");
+        StubRecap();
+        _server.Given(Request.Create().WithPath($"/api/sessions/{SessionId}/errors").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(403));
+
+        var exitCode = -1;
+        var stdout = await CaptureStdoutAsync(async () => exitCode = await ValidatePlanCommand.HandleCore(Api(), SessionId));
+
+        await Assert.That(stdout).Contains("- Write: src/Foo.cs");
+        await Assert.That(stdout).Contains("Tool failures could not be read");
+        await Assert.That(exitCode).IsEqualTo(0);
+    }
+
+    /// <summary>The legacy recap-only path lists the same evidence: no summary (no model provider) leaves the recorded
+    /// writes as the only evidence, and they must survive.</summary>
+    [Test, NotInParallel]
+    public async Task Legacy_path_without_a_summary_lists_writes_reported_under_the_canonical_id() {
+        const string dashed = "9dc27753-7645-4e46-91ec-c2d69973c152";
+
+        _server.Given(Request.Create().WithPath($"/api/sessions/{dashed}/plan-artifacts").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(404));
+        _server.Given(Request.Create().WithPath($"/api/sessions/{dashed}/recap").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json").WithBody($$"""
+                [
+                  {"type":"plan","session_id":"{{SessionId}}","agent_id":null,"agent_type":null,"content":"Write the ADR","file_path":null,"timestamp":"2026-06-30T00:00:00Z"},
+                  {"type":"write","session_id":"{{SessionId}}","agent_id":null,"agent_type":null,"content":"# ADR","file_path":"docs/adr/0007-charts.md","timestamp":"2026-07-01T00:00:00Z"}
+                ]
+                """));
+
+        var stdout = await CaptureStdoutAsync(() => ValidatePlanCommand.HandleCore(Api(), dashed));
+
+        await Assert.That(stdout).DoesNotContain("### Summary");
+        await Assert.That(stdout).Contains("- Write: docs/adr/0007-charts.md");
+    }
 }

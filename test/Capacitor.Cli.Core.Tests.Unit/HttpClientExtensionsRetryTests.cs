@@ -331,4 +331,40 @@ public class HttpClientExtensionsRetryTests {
         await Assert.That(resp.StatusCode).IsEqualTo(HttpStatusCode.BadGateway);
         await Assert.That(await resp.Content.ReadAsStringAsync()).IsEqualTo("");
     }
+
+    /// <summary>The final attempt is cut short by what is left of the budget, not by the server; the
+    /// refusal before it is what tells the caller the server is down.</summary>
+    [Test]
+    public async Task A_budget_that_cuts_the_last_attempt_still_reports_the_refusal_before_it() {
+        var attempts = 0;
+        var refused  = new HttpRequestException("Connection refused");
+
+        async Task<HttpResponseMessage> Send(CancellationToken token) {
+            if (Interlocked.Increment(ref attempts) == 1) throw refused;
+
+            await Task.Delay(Timeout.Infinite, token);
+
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        }
+
+        var ex = await Assert.That(async () => await HttpClientExtensions.SendWithRetryAsync(
+                Send, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30), TimeProvider.System, CancellationToken.None))
+            .Throws<HttpRequestException>();
+
+        await Assert.That(attempts).IsGreaterThanOrEqualTo(2);
+        await Assert.That(ex!.InnerException).IsSameReferenceAs(refused);
+        await Assert.That(ex.Message).IsEqualTo("Request failed, and the 1s retry budget ran out.");
+    }
+
+    /// <summary>An attempt never runs past what is left of the budget, so a per-attempt limit longer
+    /// than the budget is not named beside it.</summary>
+    [Test]
+    public async Task The_budget_message_names_a_per_attempt_limit_only_when_it_is_the_shorter() {
+        await Assert.That(HttpClientExtensions.RetryBudgetMessage(TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(60), transportFault: false))
+            .IsEqualTo("Request got no answer within the 30s retry budget.");
+        await Assert.That(HttpClientExtensions.RetryBudgetMessage(TimeSpan.FromSeconds(120), TimeSpan.FromSeconds(60), transportFault: false))
+            .IsEqualTo("Request got no answer within the 120s retry budget. Each attempt is limited to 60s.");
+        await Assert.That(HttpClientExtensions.RetryBudgetMessage(TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(60), transportFault: true))
+            .IsEqualTo("Request failed, and the 30s retry budget ran out.");
+    }
 }

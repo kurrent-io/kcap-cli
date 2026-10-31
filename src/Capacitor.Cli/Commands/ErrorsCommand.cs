@@ -1,3 +1,6 @@
+using System.Text;
+using System.Text.Json;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.Cli.Commands;
@@ -30,15 +33,51 @@ class ErrorsCommand(ISessionsApi sessionsApi) {
 
         await Console.Out.WriteLineAsync($"Found {errors.Count} error(s):\n");
 
-        foreach (var error in errors) {
-            var label    = error.SessionSlug ?? error.SessionId;
-            var agentTag = error.AgentId is not null ? $" (agent {error.AgentId})" : "";
-            var tool     = error.ToolName ?? "unknown";
-            await Console.Out.WriteLineAsync($"  [{label}]{agentTag} #{error.EventNumber} {tool}");
-            await Console.Out.WriteLineAsync($"    {error.Error}");
-            await Console.Out.WriteLineAsync();
-        }
+        foreach (var error in errors) await Console.Out.WriteAsync(Render(error));
 
         return 0;
+    }
+
+    const int InputWidth = 200;
+
+    /// <summary>One error: where it happened, what the call was given, and every line of the message at the
+    /// same indent, so a multi-line error stays inside its entry.</summary>
+    internal static string Render(ErrorEntry error) {
+        var sb       = new StringBuilder();
+        var label    = error.SessionSlug ?? error.SessionId;
+        var agentTag = error.AgentId is not null ? $" (agent {error.AgentId})" : "";
+
+        sb.AppendLine($"  [{label}]{agentTag} #{error.EventNumber} {error.ToolName ?? "unknown"}");
+
+        if (InputSummary(error.ToolInput) is { } input) sb.AppendLine($"    input: {input}");
+
+        foreach (var line in error.Error.ReplaceLineEndings("\n").TrimEnd('\n').Split('\n')) sb.AppendLine($"    {line}");
+
+        sb.AppendLine();
+
+        return sb.ToString();
+    }
+
+    /// <summary>What the failed call acted on: its path, command, pattern or address when it names one,
+    /// else its whole input. One line, cut to <see cref="InputWidth"/>.</summary>
+    internal static string? InputSummary(JsonElement? input) {
+        if (input is not { } el || el.IsNull) return null;
+
+        string? named = null;
+
+        foreach (var key in (string[])["file_path", "filePath", "path", "notebook_path", "command", "cmd", "pattern", "url", "query"]) {
+            if (el.Prop(key) is not { } value) continue;
+
+            named = value.IsString ? value.GetString()
+                  : value.IsArray ? string.Join(' ', value.EnumerateArray().Select(v => v.IsString ? v.GetString() : v.GetRawText()))
+                  : null;
+
+            if (named is { Length: > 0 }) break;
+        }
+
+        var text = named is { Length: > 0 } ? named : el.IsString ? el.GetString() ?? "" : el.GetRawText();
+        text = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+        return text.Length == 0 ? null : HttpClientExtensions.StripControlCharacters(text.Length > InputWidth ? text[..(InputWidth - 3)] + "..." : text);
     }
 }

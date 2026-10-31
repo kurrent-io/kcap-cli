@@ -14,7 +14,9 @@ Output:
   ## Tasks         The declared task list (ordinal, status, title,
                    source) and its progress; omitted when nothing
                    was declared.
-  ## What's Done   AI summary and the session's file writes/edits.
+  ## What's Done   AI summary, when there is one, and the session's
+                   file writes, edits and deletes; a change whose
+                   tool call failed is marked (failed).
   ## Instructions  What to compare against what.
 
 Exit codes: 0 rendered or no plan found; 1 refused/unreachable
