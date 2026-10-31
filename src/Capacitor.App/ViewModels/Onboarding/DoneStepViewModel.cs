@@ -115,7 +115,7 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
 
     public string ActivityLine => Import switch {
         { Processed: 0 } => "Looking through your history…",
-        { } run          => $"{run.ProcessedOfExpected} sessions checked",
+        { } run          => $"{run.ProcessedOfExpected} {run.SessionsNoun} checked",
         null             => "",
     };
 

@@ -30,6 +30,14 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     public static readonly string RepairingText = $"Updating an older kcap on {ThisDevice.Name}";
     public static readonly string OldClientText = $"An older kcap on {ThisDevice.Name} is still in the way. Try again to update it.";
 
+    public const string WindowsServiceLabel  = "Run kcap as a Windows service";
+    public const string WindowsServiceDetail =
+        "Keeps kcap running and restarts it if it stops. Windows asks for administrator approval once.";
+    public const string WindowsServiceDeclinedNote =
+        "kcap isn't running as a Windows service, so it runs while you're signed in to Windows.";
+    public const string WindowsServiceUnavailableNote =
+        "kcap couldn't set up its Windows service, so it runs while you're signed in to Windows.";
+
     readonly LocalInstallController _controller;
     readonly Func<string?>          _appProfile;
     readonly Func<string?>          _configActiveProfile;
@@ -41,7 +49,10 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     readonly bool                   _canRepair;
     readonly TimeProvider           _time;
     readonly Func<IReadOnlyList<string>, FeedbackMailOutcome>? _mailSupport;
+    readonly Func<CancellationToken, Task<WindowsServiceOffer>> _windowsServiceOffer;
     readonly List<string>           _startFailures = [];
+    bool                            _serviceOffered;
+    bool                            _runAsService;
     bool                            _autoRetrying;
     CancellationTokenSource?        _retryGap;
     string?                         _supportNote;
@@ -59,6 +70,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     /// <param name="repairClients">Brings any other kcap the installer would refuse up to date, before anything is asked.</param>
     /// <param name="mailSupport">Opens a support email from what each failed start said; null offers none.</param>
     /// <param name="resuming">True while an earlier setup is unfinished: the page finishes it without asking again.</param>
+    /// <param name="windowsServiceOffer">How the choice offers the Windows service, asked beside the built-in model; null never offers it.</param>
     public InstallStepViewModel(
             LocalInstallController controller, Func<string?> appProfile, Func<string?> configActiveProfile,
             Func<bool> onLocalPath, Func<CancellationToken, Task<LocalEmbeddingModelManifest?>> builtinOffer,
@@ -66,7 +78,9 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
             Func<CancellationToken, Task<ClientRepairOutcome>>? repairClients = null,
             TimeProvider? time = null,
             Func<IReadOnlyList<string>, FeedbackMailOutcome>? mailSupport = null,
-            Func<bool>? resuming = null) {
+            Func<bool>? resuming = null,
+            Func<CancellationToken, Task<WindowsServiceOffer>>? windowsServiceOffer = null,
+            SearchChoiceViewModel? search = null) {
         _controller          = controller;
         _appProfile          = appProfile;
         _configActiveProfile = configActiveProfile;
@@ -78,8 +92,9 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
         _mailSupport         = mailSupport;
         _repairClients       = repairClients ?? (_ => Task.FromResult<ClientRepairOutcome>(new ClientRepairOutcome.Clear()));
         _canRepair           = repairClients is not null;
+        _windowsServiceOffer = windowsServiceOffer ?? (_ => Task.FromResult(WindowsServiceOffer.Hidden));
 
-        Search          = new SearchChoiceViewModel();
+        Search          = search ?? new SearchChoiceViewModel();
         TryAgainCommand = ReactiveCommand.CreateFromTask(TryAgainAsync);
         RepairAgainCommand = ReactiveCommand.CreateFromTask(() =>
             !ClientProblemVisible ? Task.CompletedTask : _installPressed ? StartChosenAsync(_lifetime) : PrepareAsync(_lifetime));
@@ -87,7 +102,8 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
         EmailSupportCommand = ReactiveCommand.Create(EmailSupport);
 
         Search.PropertyChanged += (_, e) => {
-            if (e.PropertyName is nameof(SearchChoiceViewModel.Valid) or nameof(SearchChoiceViewModel.Checking))
+            if (e.PropertyName is nameof(SearchChoiceViewModel.Valid) or nameof(SearchChoiceViewModel.Checking)
+                or nameof(SearchChoiceViewModel.UseKeyword))
                 this.RaisePropertyChanged(nameof(CanContinue));
         };
 
@@ -106,7 +122,8 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     /// While the search choice is up, the footer's primary action starts the install.
     public bool         OwnsPrimaryAction => !ChoiceVisible;
     public string?      NextLabel         => ChoiceVisible ? "Install" : null;
-    public bool         CanContinue       => !ChoiceVisible || (Search.Valid && !Search.Checking);
+    /// Keyword search needs no Ollama, so a check still running holds back only the other answers.
+    public bool         CanContinue       => !ChoiceVisible || (Search.Valid && (!Search.Checking || Search.UseKeyword));
     public bool         PassThrough       => !_onLocalPath() || _controller.Outcome is LocalInstallOutcome.Installed;
 
     public string Lede => $"kcap runs on {ThisDevice.Name} and your sessions stay on it";
@@ -125,8 +142,33 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
             this.RaisePropertyChanged(nameof(OwnsPrimaryAction));
             this.RaisePropertyChanged(nameof(NextLabel));
             this.RaisePropertyChanged(nameof(CanContinue));
+            this.RaisePropertyChanged(nameof(WindowsServiceVisible));
         }
     }
+
+    /// The choice offers the Windows service; the install asks for it only while this is on.
+    public bool WindowsServiceOffered {
+        get => _serviceOffered;
+        private set {
+            this.RaiseAndSetIfChanged(ref _serviceOffered, value);
+            this.RaisePropertyChanged(nameof(WindowsServiceVisible));
+        }
+    }
+
+    public bool WindowsServiceVisible => ChoiceVisible && WindowsServiceOffered;
+
+    public bool RunAsWindowsService {
+        get => _runAsService;
+        set => this.RaiseAndSetIfChanged(ref _runAsService, value);
+    }
+
+    /// Why kcap runs only while the user is signed in, once the run went ahead without the service.
+    public string? WindowsServiceNote =>
+        Progress.WindowsServiceDeclined ? WindowsServiceDeclinedNote
+        : Progress.WindowsServiceUnavailable ? WindowsServiceUnavailableNote
+        : null;
+
+    public bool WindowsServiceNoteVisible => WindowsServiceNote is not null;
 
     public IReadOnlyList<InstallStepRow> Rows {
         get => _rows;
@@ -279,10 +321,11 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
         // Only a known answer resumes unasked: the earlier run's choice may never have reached the record. A run
         // refused for an older kcap keeps the answer it was given.
         if ((_controller.Embeddings ?? (_resuming() ? Known(recorded) : null)) is { } known) {
-            await _controller.StartAsync(known, ct);
+            await _controller.StartAsync(known, ct, _controller.WindowsService);
             return;
         }
 
+        var service = AskWindowsServiceAsync(ct);
         LocalEmbeddingModelManifest? offered;
         try {
             offered = await _builtinOffer(ct);
@@ -293,7 +336,23 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
             offered = null;
         }
         Search.OfferBuiltin(offered);
+        var offer = await service;
+        if (ct.IsCancellationRequested) return;
+        WindowsServiceOffered = offer != WindowsServiceOffer.Hidden;
+        RunAsWindowsService   = offer == WindowsServiceOffer.On;
         ChoiceVisible = true;
+    }
+
+    /// Never throws: an offer that cannot be decided is not shown, and the install goes ahead as before.
+    async Task<WindowsServiceOffer> AskWindowsServiceAsync(CancellationToken ct) {
+        try {
+            return await _windowsServiceOffer(ct);
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            return WindowsServiceOffer.Hidden;
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"kcap app: checking for the Windows service failed: {ex.Message}");
+            return WindowsServiceOffer.Hidden;
+        }
     }
 
     /// False, with the reason shown, when another kcap the installer would refuse is still there.
@@ -383,7 +442,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
 
         _installPressed = false;
         _startFailures.Clear();
-        await _controller.StartAsync(Search.Choice, ct);
+        await _controller.StartAsync(Search.Choice, ct, WindowsServiceOffered && RunAsWindowsService);
     }
 
     Task TryAgainAsync() {
@@ -483,14 +542,16 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
             new("Search by meaning", next.Embeddings.Row),
             new("Starting kcap", next.FirstStart),
         ];
-        RestateDownload();
+        RestateProgress();
     }
 
-    void OnProgressChanged(object? sender, PropertyChangedEventArgs e) => RestateDownload();
+    void OnProgressChanged(object? sender, PropertyChangedEventArgs e) => RestateProgress();
 
-    void RestateDownload() {
+    void RestateProgress() {
         this.RaisePropertyChanged(nameof(DownloadBarVisible));
         this.RaisePropertyChanged(nameof(DownloadIndeterminate));
         this.RaisePropertyChanged(nameof(DownloadPercent));
+        this.RaisePropertyChanged(nameof(WindowsServiceNote));
+        this.RaisePropertyChanged(nameof(WindowsServiceNoteVisible));
     }
 }

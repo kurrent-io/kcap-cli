@@ -10,8 +10,11 @@ namespace Capacitor.App.Services.LocalSetup;
 /// started it. Lines and the settled outcome reach the UI through <c>post</c>, in order, so the
 /// outcome is always decided after every line the child printed has been applied.
 /// </summary>
+/// <param name="prefetch">The app's bundle prefetch; a run waits for one still downloading rather than download beside it.</param>
+/// <param name="rememberWindowsServiceDeclined">Records a declined administrator prompt, so the app does not offer the service again.</param>
 public sealed class LocalInstallController(
-        Func<IKcapCli> cli, LocalRoot root, Func<bool> committedLocal, Action<Action> post, SetupFunnel funnel)
+        Func<IKcapCli> cli, LocalRoot root, Func<bool> committedLocal, Action<Action> post, SetupFunnel funnel,
+        LocalBundlePrefetch? prefetch = null, Func<Task>? rememberWindowsServiceDeclined = null)
     : ReactiveObject {
     LocalSetupProgress    _progress = new();
     bool                  _running;
@@ -45,12 +48,16 @@ public sealed class LocalInstallController(
     /// What the last run was told about search by meaning; a retry tells the next one the same.
     public LocalEmbeddingChoice? Embeddings { get; private set; }
 
+    /// Whether a retry asks for the Windows service; once a run has gone ahead without it, none asks again.
+    public bool WindowsService { get; private set; }
+
     /// Spawns the child and returns; a no-op while a run is in flight.
-    public Task StartAsync(LocalEmbeddingChoice embeddings, CancellationToken ct) {
+    public Task StartAsync(LocalEmbeddingChoice embeddings, CancellationToken ct, bool windowsService = false) {
         if (Running) return Task.CompletedTask;
 
-        Embeddings = embeddings;
-        var progress = new LocalSetupProgress();
+        Embeddings     = embeddings;
+        WindowsService = windowsService;
+        var progress = new LocalSetupProgress(embeddings);
         var interrupt = new CancellationTokenSource();
         _interrupt = interrupt;
         _exited    = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -59,7 +66,7 @@ public sealed class LocalInstallController(
         Running    = true;
 
         funnel.LocalInstallStarted();
-        _ = RunAsync(embeddings, progress, interrupt.Token, _exited, ct);
+        _ = RunAsync(embeddings, windowsService, progress, interrupt.Token, _exited, ct);
 
         return Task.CompletedTask;
     }
@@ -68,7 +75,7 @@ public sealed class LocalInstallController(
         if (Running) return Task.CompletedTask;
 
         funnel.LocalInstallRetried();
-        return StartAsync(Embeddings ?? LocalEmbeddingChoice.Recommended(LocalEmbeddingChoice.Builtin), ct);
+        return StartAsync(Embeddings ?? LocalEmbeddingChoice.Recommended(LocalEmbeddingChoice.Builtin), ct, WindowsService);
     }
 
     /// Settles a refusal decided before any child would start, through the same path a run's failure takes.
@@ -100,23 +107,67 @@ public sealed class LocalInstallController(
     }
 
     async Task RunAsync(
-            LocalEmbeddingChoice embeddings, LocalSetupProgress progress, CancellationToken interrupt, TaskCompletionSource exited,
-            CancellationToken ct) {
+            LocalEmbeddingChoice embeddings, bool windowsService, LocalSetupProgress progress, CancellationToken interrupt,
+            TaskCompletionSource exited, CancellationToken ct) {
         var kcap = cli();
         var unexplained = kcap.CliPath is null ? "cli_missing" : "no_failure_line";
         StreamingResult result;
         try {
-            result = await kcap.SetupLocalAsync(embeddings, line => {
-                if (line.Kind != ProcessStreamKind.Stdout || LocalSetupLine.Parse(line.Text) is not { } parsed) return;
+            if (!await AwaitPrefetchAsync(progress, interrupt).ConfigureAwait(false)) {
+                post(() => progress.Apply(CancelledLine));
+                result = new StreamingResult(130, false, []);
+            } else {
+                result = await kcap.SetupLocalAsync(embeddings, line => {
+                    if (line.Kind != ProcessStreamKind.Stdout || LocalSetupLine.Parse(line.Text) is not { } parsed) return;
 
-                post(() => progress.Apply(parsed));
-            }, interrupt, ct).ConfigureAwait(false);
+                    post(() => Apply(progress, parsed));
+                }, interrupt, ct, windowsService).ConfigureAwait(false);
+            }
         } catch (Exception ex) {
             result = new StreamingResult(-1, false, [new StreamedLine(ProcessStreamKind.Stderr, ex.Message)]);
             unexplained = "spawn_failed";
         }
 
         post(() => Finish(progress, result, unexplained, ct.IsCancellationRequested, exited));
+    }
+
+    static readonly LocalSetupLine CancelledLine =
+        LocalSetupLine.Parse("""{"v":1,"event":"failed","code":"cancelled","message":"The install was cancelled."}""")!;
+
+    /// A fetch still downloading is waited out, its download shown as this run's; false when the run was interrupted first.
+    async Task<bool> AwaitPrefetchAsync(LocalSetupProgress progress, CancellationToken interrupt) {
+        if (prefetch is not { Running: true } fetching) return true;
+
+        void Forward(LocalSetupLine line) {
+            if (line.Event is "downloading" or "download_progress") post(() => progress.Apply(line));
+        }
+        fetching.Line += Forward;
+        try {
+            await fetching.Completion.WaitAsync(interrupt).ConfigureAwait(false);
+            return true;
+        } catch (OperationCanceledException) when (interrupt.IsCancellationRequested) {
+            fetching.Cancel();
+            return false;
+        } finally {
+            fetching.Line -= Forward;
+        }
+    }
+
+    void Apply(LocalSetupProgress progress, LocalSetupLine line) {
+        progress.Apply(line);
+        if (line.Event is not ("windows_service_declined" or "windows_service_unavailable")) return;
+
+        WindowsService = false;
+        if (line.Event == "windows_service_declined") _ = RememberDeclinedAsync();
+    }
+
+    async Task RememberDeclinedAsync() {
+        if (rememberWindowsServiceDeclined is null) return;
+        try {
+            await rememberWindowsServiceDeclined().ConfigureAwait(false);
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"kcap app: recording the declined Windows service failed: {ex.Message}");
+        }
     }
 
     void Finish(

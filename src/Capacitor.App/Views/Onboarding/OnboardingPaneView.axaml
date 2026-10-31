@@ -122,7 +122,7 @@
         <Ellipse Width="900" Height="900" HorizontalAlignment="Center" VerticalAlignment="Center"
                  Fill="{StaticResource OnboardingBloomBrush}" IsHitTestVisible="False" />
 
-        <Grid RowDefinitions="44,*">
+        <Grid RowDefinitions="44,*,Auto">
         <!-- The compact step title takes over as the large heading scrolls out of view.
              Symmetric insets keep it centered and clear of the window controls. -->
         <Border x:Name="TitleBar" Background="{StaticResource OnboardingCanvasBrush}" PointerPressed="OnChromePointerPressed">
@@ -142,11 +142,9 @@
             </Panel>
         </Border>
 
-        <!-- The footer scrolls with the page, so its actions sit below everything the step says; on a short
-             step the viewport-high grid still pins it to the bottom. -->
+        <!-- Only the step scrolls, so a long step never pushes the footer's actions out of the window. -->
         <ScrollViewer x:Name="StepScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                       ScrollChanged="OnStepScrolled">
-        <Grid RowDefinitions="*,Auto" MinHeight="{Binding #StepScroll.Viewport.Height}">
             <StackPanel MaxWidth="620" HorizontalAlignment="Stretch" Margin="32,16,32,24" Spacing="26">
                 <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,-8">
                     <app:ProductWordmark HorizontalAlignment="Left" />
@@ -184,7 +182,9 @@
                 <ContentControl x:Name="StepContent" Content="{Binding Current}" HorizontalAlignment="Stretch"
                                 IsVisible="{Binding StepVisible}" />
             </StackPanel>
-        <Border x:Name="StepFooter" Grid.Row="1" IsVisible="{Binding FooterVisible}" Background="{StaticResource OnboardingCanvasBrush}"
+        </ScrollViewer>
+
+        <Border x:Name="StepFooter" Grid.Row="2" IsVisible="{Binding FooterVisible}" Background="{StaticResource OnboardingCanvasBrush}"
                 BorderBrush="{StaticResource OnboardingDividerBrush}" BorderThickness="0,1,0,0">
                 <StackPanel MaxWidth="620" HorizontalAlignment="Stretch" Margin="32,16,32,24" Spacing="10">
                     <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="12">
@@ -207,8 +207,6 @@
                     </Grid>
                 </StackPanel>
         </Border>
-        </Grid>
-        </ScrollViewer>
         </Grid>
     </Panel>
 </UserControl>

@@ -262,10 +262,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public bool HistoryImportRunning => HistoryImport is { Running: true };
     /// Counts against the same total setup showed, so the figure reads as one run across both windows.
     public string HistoryImportStatus => HistoryImport is not { } run ? ""
-        : run.Running ? $"Importing history · {run.ProcessedOfExpected} sessions processed"
+        : run.Running ? $"Importing history · {run.ProcessedOfExpected} {run.SessionsNoun} processed"
         : run.State is ImportRunState.Failed or ImportRunState.Cancelled
-            ? $"History import didn't finish · {run.ProcessedOfExpected} sessions processed. Reopen setup to retry"
-        : $"History imported · {run.Processed:N0} sessions processed";
+            ? $"History import didn't finish · {run.ProcessedOfExpected} {run.SessionsNoun} processed. Reopen setup to retry"
+        : $"History imported · {run.Processed:N0} {(run.Processed == 1 ? "session" : "sessions")} processed";
+
     public double HistoryImportProgress => HistoryImport?.Progress ?? 0;
 
     ObservableAsPropertyHelper<bool>? _signInVisible;

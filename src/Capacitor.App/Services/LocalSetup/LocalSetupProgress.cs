@@ -4,10 +4,10 @@ namespace Capacitor.App.Services.LocalSetup;
 
 /// The rows and flags a run's JSON lines drive. Lines only move this forward; the outcome is decided
 /// afterwards by <see cref="LocalInstallOutcome.Settle"/>. Unknown events are ignored.
-public sealed class LocalSetupProgress : ReactiveObject {
+public sealed class LocalSetupProgress(LocalEmbeddingChoice? embeddings = null) : ReactiveObject {
     long _bytes;
     double? _downloadFraction;
-    bool _recovering, _rollingBack, _reused, _sawSuccess, _sawRecovery;
+    bool _recovering, _rollingBack, _reused, _sawSuccess, _sawRecovery, _serviceDeclined, _serviceUnavailable;
     string? _serverUrl, _failedCode, _failedMessage;
 
     public InstallRow Download   { get; } = new();
@@ -15,7 +15,7 @@ public sealed class LocalSetupProgress : ReactiveObject {
     public InstallRow Install    { get; } = new();
     public InstallRow FirstStart { get; } = new();
 
-    public LocalEmbeddingProgress Embeddings { get; } = new();
+    public LocalEmbeddingProgress Embeddings { get; } = new(embeddings);
 
     public double? DownloadFraction {
         get => _downloadFraction;
@@ -51,6 +51,18 @@ public sealed class LocalSetupProgress : ReactiveObject {
             this.RaiseAndSetIfChanged(ref _sawSuccess, value);
             this.RaisePropertyChanged(nameof(Plan));
         }
+    }
+
+    /// The administrator prompt for the Windows service was declined; the server runs while the user is signed in.
+    public bool WindowsServiceDeclined {
+        get => _serviceDeclined;
+        private set => this.RaiseAndSetIfChanged(ref _serviceDeclined, value);
+    }
+
+    /// The Windows service could not be installed; the server runs while the user is signed in.
+    public bool WindowsServiceUnavailable {
+        get => _serviceUnavailable;
+        private set => this.RaiseAndSetIfChanged(ref _serviceUnavailable, value);
     }
 
     public string? FailedCode {
@@ -115,6 +127,12 @@ public sealed class LocalSetupProgress : ReactiveObject {
                 ServerUrl = root.Str("server_url") ?? ServerUrl;
                 AllDone();
                 SawSuccess = true;
+                break;
+            case "windows_service_declined":
+                WindowsServiceDeclined = true;
+                break;
+            case "windows_service_unavailable":
+                WindowsServiceUnavailable = true;
                 break;
             case "rolling_back":
                 RollingBack = true;

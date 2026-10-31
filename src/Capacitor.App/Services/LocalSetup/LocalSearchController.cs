@@ -39,7 +39,7 @@ public sealed class LocalSearchController(Func<IKcapCli> cli, Action<Action> pos
     public Task StartAsync(LocalEmbeddingChoice embeddings, CancellationToken ct) {
         if (Running || ct.IsCancellationRequested || held?.Invoke() == true) return Task.CompletedTask;
 
-        var progress  = new LocalSetupProgress();
+        var progress  = new LocalSetupProgress(embeddings);
         var interrupt = new CancellationTokenSource();
         _interrupt = interrupt;
         _exited    = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

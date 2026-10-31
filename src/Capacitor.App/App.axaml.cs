@@ -261,6 +261,8 @@ public partial class App : Application {
     // One per app run, shared by every wizard so a reopened one shows the settled outcome; every
     // close and a quit settle it before moving on.
     LocalInstallController? _localInstall;
+    // One fetch per app run, so a reopened wizard never fetches the bundle a second time.
+    LocalBundlePrefetch? _localPrefetch;
     Window? _wizardWindow;
     // The onboarding window once its flow has finished, waiting for BuildAndShowMainWindow to take
     // it over so the main surface opens in place rather than in a second window.
@@ -1714,6 +1716,7 @@ public partial class App : Application {
             shimInstaller is not null, shimTarget, ct => probe.KcapOnPathAsync(ct), _shutdown.Token);
         var bridges = WizardComposition.BuildBridges(action => Dispatcher.UIThread.Post(action), _telemetry, _endpoints);
         var surface = new WizardLifecycleSurface(ConfirmLifecyclePromptAsync, action => Dispatcher.UIThread.Post(action));
+        _localPrefetch ??= new LocalBundlePrefetch(() => NewWizardCli(_config, _serverEnv, _localRoot, runner, cliPath, probe), _shutdown.Token);
 
         var options = new WizardGraphOptions(
             _config,
@@ -1756,12 +1759,14 @@ public partial class App : Application {
             UsageNotice: _usageNotice,
             ReportCliSetup: ReportWizardCliSetupAsync,
             ReadVisibilityOptions: ReadWizardVisibilityOptionsAsync,
-            // The repair links through a login shell and an administrator prompt only macOS has.
-            RepairClients: OperatingSystem.IsMacOS() ? StaleClientRepair.ForApp(runner, probe, shimTarget, _userHome).RunAsync : null,
+            // The repair relinks through a login shell and an administrator prompt, neither of which it has on Windows.
+            RepairClients: OperatingSystem.IsWindows() ? null : StaleClientRepair.ForApp(runner, probe, shimTarget, _userHome).RunAsync,
             MailSupport: report => FeedbackMail.Send(
                 new FeedbackSubmission(FeedbackCategory.Bug, report, Guid.NewGuid(), FeedbackSource.Desktop),
                 SystemBrowser.Instance, Capacitor.Cli.Core.Auth.Clipboard.TryCopy),
-            ResumeWebSignUp: WizardComposition.ResumesWebSignUp(await _appState.LoadAsync(), _time.GetUtcNow()));
+            ResumeWebSignUp: WizardComposition.ResumesWebSignUp(await _appState.LoadAsync(), _time.GetUtcNow()),
+            Prefetch: _localPrefetch,
+            OffersWindowsService: OperatingSystem.IsWindows());
         _localInstall ??= WizardComposition.NewInstallController(options);
         var graph = WizardComposition.BuildGraph(options with { Install = _localInstall });
 

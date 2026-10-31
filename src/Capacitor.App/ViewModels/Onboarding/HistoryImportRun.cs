@@ -79,9 +79,14 @@ public sealed partial class HistoryImportRun : ReactiveObject {
     }
 
     /// "46 of 94" while the selection's count is an honest denominator, the bare count otherwise.
-    public string ProcessedOfExpected => Expected > 0 && Processed <= Expected
+    public string ProcessedOfExpected => HonestTotal
         ? $"{Processed.ToString("N0", CultureInfo.CurrentCulture)} of {Expected.ToString("N0", CultureInfo.CurrentCulture)}"
         : Processed.ToString("N0", CultureInfo.CurrentCulture);
+
+    /// The noun after <see cref="ProcessedOfExpected"/>: "1 of 3 sessions" agrees with the total, a bare count with itself.
+    public string SessionsNoun => (HonestTotal ? Expected : Processed) == 1 ? "session" : "sessions";
+
+    bool HonestTotal => Expected > 0 && Processed <= Expected;
 
     /// Percent settled against the selection's count, or of passes when there is no count. Too-short and
     /// excluded sessions never settle, so it can stop short of 100 before the run ends.

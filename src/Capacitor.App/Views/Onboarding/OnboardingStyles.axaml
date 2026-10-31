@@ -1,6 +1,8 @@
 <Styles xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:views="clr-namespace:Capacitor.App.Views">
+        xmlns:views="clr-namespace:Capacitor.App.Views"
+        xmlns:onboarding="clr-namespace:Capacitor.App.Views.Onboarding"
+        xmlns:vm="clr-namespace:Capacitor.App.ViewModels.Onboarding">
     <!-- The kcap installer palette, for the onboarding pane only (onboarding-prefixed classes):
          lavender controls, coral eyebrows, and plum cards over a matching bloom.
          Outcome colours stay the app's KcapSuccess / KcapDanger, so a
@@ -232,6 +234,18 @@
         <Setter Property="Background" Value="{StaticResource OnboardingSurfaceBrush}" />
         <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentBrush}" />
         <Setter Property="Foreground" Value="{StaticResource OnboardingTextBrush}" />
+    </Style>
+    <!-- The edition the page leads with reads as selected: a selection mark, never an outcome colour. The padding
+         gives back the wider border, so the cards stay aligned. -->
+    <Style Selector="Button#LocalEditionButton" x:DataType="vm:EditionStepViewModel">
+        <Setter Property="onboarding:EditionPreselect.IsPreselected" Value="{Binding LocalPreselected}" />
+    </Style>
+    <Style Selector="Button.onboardingEditionCard.preselected">
+        <Setter Property="BorderThickness" Value="2" />
+        <Setter Property="Padding" Value="19,17" />
+    </Style>
+    <Style Selector="Button.onboardingEditionCard.preselected /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentBrush}" />
     </Style>
     <!-- An edition this machine cannot take: the head fades, the footer saying why stays legible. -->
     <Style Selector="Button.onboardingEditionCard:disabled Grid.onboardingEditionHead">
