@@ -118,8 +118,8 @@ public class ChatTabViewSmokeTests {
         public ChatTabViewModel Chat { get; }
         public ChatTabView View { get; }
         public Window Window { get; }
-        public ScrollViewer Scroll => View.GetVisualDescendants().OfType<ScrollViewer>().First();
-        public bool HasScroll => View.GetVisualDescendants().OfType<ScrollViewer>().Any();
+        public ScrollViewer Scroll => View.GetVisualDescendants().OfType<ScrollViewer>().First(s => s.Name == "ChatScroll");
+        public bool HasScroll => View.GetVisualDescendants().OfType<ScrollViewer>().Any(s => s.Name == "ChatScroll");
         public TextBox Composer => View.FindControl<TextBox>("ComposerInput")!;
 
         /// `show: false` leaves the window unshown, so the view has no template and no

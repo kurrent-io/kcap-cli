@@ -48,7 +48,7 @@ internal enum LaunchAvailability { Ready, Pending, DaemonUnavailable, ServerDisc
 /// on the daemon client's own background thread (same as MainWindowViewModel/
 /// ConsentPromptViewModel), so projections ObserveOn RxSchedulers.MainThreadScheduler BEFORE the
 /// operator that touches bound state — a binding must never see a mutation off the UI thread.
-public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink {
+public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink, ILaunchChoices {
     /// A repository with no remembered choice falls back to this — never to whatever vendor was
     /// selected for a DIFFERENT repository, which would leak a preference across repositories.
     public const string DefaultVendor = "claude";
@@ -136,8 +136,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         $"{HarnessUnavailableReason(label, remoteMachine)} Choose another agent.";
 
     /// The picker's hover text for a vendor the selected machine does not advertise; null for one it does.
-    public string? UnavailableHarnessTip(HarnessOption option) =>
-        option.Available ? null : HarnessUnavailableReason(option.Label, RemoteMachineSelected ? SelectedMachine : null);
+    public string? UnavailableHarnessTip(HarnessOption harness) =>
+        harness.Available ? null : HarnessUnavailableReason(harness.Label, RemoteMachineSelected ? SelectedMachine : null);
 
     /// Hover text for the button that opens Settings → Harnesses.
     public const string HarnessesSettingsTip =
@@ -1779,10 +1779,6 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal static bool UsageEquals(IReadOnlyDictionary<string, AccountUsageView> a, IReadOnlyDictionary<string, AccountUsageView> b) =>
         a.Count == b.Count && a.All(p => b.TryGetValue(p.Key, out var other) && p.Value.Equals(other));
 
-    /// Equality over what the launcher draws: age and readiness do not change its rows.
-    internal static bool DrawnUsageEquals(IReadOnlyDictionary<string, AccountUsageView> a, IReadOnlyDictionary<string, AccountUsageView> b) =>
-        a.Count == b.Count && a.All(p => b.TryGetValue(p.Key, out var other) && p.Value.DrawnEquals(other));
-
     string AccountMachine(string name, bool remote) => remote ? name : _daemon.DaemonName;
 
     static AccountsSnapshotDto? AccountsSnapshotFor(
@@ -1942,7 +1938,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
         var request = new LaunchRequest(
             draft.Machine, draft.RepoPath, draft.Vendor, draft.Goal, draft.Model, draft.Effort,
-            draft.PermissionMode, attachmentIds, draft.CodexPosture, draft.AccountId);
+            draft.PermissionMode, attachmentIds, draft.CodexPosture, AccountId: draft.AccountId);
         // Captured BEFORE the call, never after: the whole point is to notice a navigation that
         // changed WHILE the launch was in flight.
         var generation = _navigationGeneration?.Invoke() ?? 0;

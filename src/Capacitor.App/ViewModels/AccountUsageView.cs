@@ -33,6 +33,10 @@ public sealed record AccountUsageView(
      && BlockedText == other.BlockedText
      && NextResetText == other.NextResetText;
 
+    /// Equality over what the launcher draws: age and readiness do not change its rows.
+    internal static bool DrawnUsageEquals(IReadOnlyDictionary<string, AccountUsageView> a, IReadOnlyDictionary<string, AccountUsageView> b) =>
+        a.Count == b.Count && a.All(p => b.TryGetValue(p.Key, out var other) && p.Value.DrawnEquals(other));
+
     public override int GetHashCode() {
         var hash = new HashCode();
         foreach (var bar in Bars) hash.Add(bar);

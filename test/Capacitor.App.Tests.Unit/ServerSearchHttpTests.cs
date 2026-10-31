@@ -71,6 +71,30 @@ public class ServerSearchHttpTests {
     }
 
     [Test]
+    public async Task HandoffContext_reads_the_context_and_maps_404_to_unavailable() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/sessions/s1/handoff-context").UsingGet())
+              .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json")
+                  .WithBody("""{"session_id":"s1","repo_owner":"o","repo_name":"r","branch":"feat","pull_request":{"number":7,"title":"t","state":"open","head_ref":"feat","head_sha":"abc","head_owner":"o","head_repo":"r","head_is_fork":false},"session_commits":["abc"]}"""));
+        server.Given(Request.Create().WithPath("/api/sessions/gone/handoff-context").UsingGet())
+              .RespondWith(Response.Create().WithStatusCode(404));
+        var (http, profiles, provider) = await WireMockLane.BuildAsync(server, Config.Root);
+        await using var _ = provider;
+        var read = ServerSearchHttp.HandoffContext(http, profiles);
+
+        var fetch = await read("s1", CancellationToken.None);
+        await Assert.That(fetch.Outcome).IsEqualTo(ServerReadOutcome.Ok);
+        var context = fetch.Context!;
+        await Assert.That(context.Branch).IsEqualTo("feat");
+        await Assert.That(context.PullRequest!.Number).IsEqualTo(7);
+        await Assert.That(context.PullRequest.HeadIsFork).IsFalse();
+        await Assert.That(context.SessionCommits!.Count).IsEqualTo(1);
+        var gone = await read("gone", CancellationToken.None);
+        await Assert.That(gone.Outcome).IsEqualTo(ServerReadOutcome.Unavailable);
+        await Assert.That(gone.Context).IsNull();
+    }
+
+    [Test]
     public async Task Search_propagates_cancellation() {
         using var server = WireMockServer.Start();
         server.Given(Request.Create().WithPath("/api/search").UsingGet())

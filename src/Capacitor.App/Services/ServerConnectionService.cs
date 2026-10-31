@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -390,6 +391,32 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
             return null;
         }
     }
+
+    /// A hung call would leave the hand-off composer checking for as long as it hangs.
+    static readonly TimeSpan LaunchFeaturesTimeout = TimeSpan.FromSeconds(10);
+
+    public async Task<IReadOnlySet<string>?> GetLaunchFeaturesAsync(CancellationToken ct) {
+        var hub = _hub;
+        if (hub is not { State: HubConnectionState.Connected }) return null;
+        using var timeout = new CancellationTokenSource(LaunchFeaturesTimeout, _time);
+        using var call = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
+        try {
+            var features = await hub.InvokeAsync<string[]?>(HubMethods.GetLaunchFeatures, call.Token).ConfigureAwait(false);
+            return features is { Length: > 0 } ? features.ToFrozenSet(StringComparer.Ordinal) : FrozenSet<string>.Empty;
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            throw;
+        } catch (HubException ex) when (IsMissingMethod(ex, HubMethods.GetLaunchFeatures)) {
+            return FrozenSet<string>.Empty;
+        } catch (Exception) {
+            return null;
+        }
+    }
+
+    /// An older server's answer to a method it lacks, in either form a server gives it: the binding
+    /// failure of a JSON-protocol server, or a dispatcher's unknown method. Any other failure is no answer.
+    internal static bool IsMissingMethod(HubException ex, string method) =>
+        string.Equals(ex.Message, $"Failed to invoke '{method}' due to an error on the server. HubException: Method does not exist.", StringComparison.Ordinal)
+     || ex.Message.StartsWith($"Unknown hub method '{method}'", StringComparison.Ordinal);
 
     public Task<HubCallOutcome> RequestStopAgentAsync(string agentId, CancellationToken ct) => InvokeAsync(HubMethods.RequestStopAgent, ct, agentId);
     public Task<HubCallOutcome> UnsubscribeFromChatAsync(string sessionId, CancellationToken ct) => InvokeAsync(HubMethods.UnsubscribeFromChat, ct, sessionId);

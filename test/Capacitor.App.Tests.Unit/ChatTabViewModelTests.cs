@@ -55,6 +55,27 @@ public class ChatTabViewModelTests {
         } finally { release.Set(); await chat.TeardownAsync(); }
     });
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task The_outcome_shows_in_a_newly_opened_live_view() => RunOnUiAsync(async () => {
+        using var session = new BehaviorSubject<ChatSessionInfo>(Session("s2"));
+        using var outcomes = new Subject<Capacitor.Cli.Core.Handoff.HandoffOutcomeDto>();
+        var time = new FakeTimeProvider();
+        var chat = new ChatTabViewModel("a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null),
+            new AcceptingChatInput(), new NoAttachmentUploader(), _ => new HeldFeed(new ManualResetEventSlim(true), new ManualResetEventSlim(true)),
+            new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time), handoffOutcome: outcomes);
+        try {
+            await Assert.That(chat.HandoffOutcome).IsNull();
+
+            outcomes.OnNext(new("s1", "Old session", "done", null,
+                [new("plan", "Plan A", "carried", null)]));
+            await WaitUntilAsync(() => chat.HandoffOutcome is not null, what: "the outcome");
+
+            await Assert.That(chat.HandoffOutcome!.Header).IsEqualTo("Continued from Old session");
+            await Assert.That(chat.HandoffOutcome.Rows[0].Text).IsEqualTo("Plan A — carried over");
+        } finally { await chat.TeardownAsync(); }
+    });
+
     sealed class HeldFeed(ManualResetEventSlim entered, ManualResetEventSlim release) : IChatTranscriptFeed {
         public long? CurrentOffset => 0;
         public FeedRead ReadAppended() {

@@ -18,6 +18,9 @@ public class HomeViewModelServerReachTests {
     sealed class NoLaunch : ILaunchClient {
         public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) =>
             Task.FromResult(new LaunchOutcome(false, null, "unused"));
+
+        public Task<IReadOnlySet<string>?> GetLaunchFeaturesAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlySet<string>?>(null);
     }
 
     HomeViewModel Make(FakeDaemonClientService daemon, FakeServerLane lane, TimeProvider time) =>

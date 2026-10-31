@@ -123,10 +123,45 @@
             <Setter Property="Padding" Value="14,0,0,0" />
         </Style>
     </UserControl.Styles>
-    <Grid RowDefinitions="*,Auto">
+    <Grid RowDefinitions="Auto,*,Auto">
+        <!-- What the hand-off carried over from the previous session; absent for any other session. -->
+        <Border x:Name="HandoffOutcomeCard" Grid.Row="0" Margin="22,14,22,0" Padding="13,10"
+                DataContext="{Binding HandoffOutcome}" x:DataType="vm:HandoffOutcomeViewModel"
+                IsVisible="{Binding $self.DataContext, Converter={x:Static ObjectConverters.IsNotNull}}"
+                Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+                BorderThickness="1" CornerRadius="8">
+            <StackPanel Spacing="6">
+                <TextBlock x:Name="HandoffOutcomeHeader" Text="{Binding Header}" FontSize="13.5" FontWeight="SemiBold"
+                           Foreground="{StaticResource KcapTextBrush}" TextWrapping="Wrap" />
+                <StackPanel x:Name="HandoffOutcomeNote" Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasNote}">
+                    <views:AppIcon Kind="CircleAlert" Size="12" VerticalAlignment="Center" IsVisible="{Binding NoteNeedsAttention}"
+                                   Foreground="{StaticResource KcapWarningBrush}" />
+                    <TextBlock Text="{Binding Note}" FontSize="13" Foreground="{StaticResource KcapMutedBrush}"
+                               TextWrapping="Wrap" VerticalAlignment="Center" />
+                </StackPanel>
+                <ScrollViewer MaxHeight="160" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                <ItemsControl x:Name="HandoffOutcomeRows" ItemsSource="{Binding Rows}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:HandoffOutcomeRow">
+                            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,2,0,0">
+                                <views:AppIcon Kind="Check" Size="12" VerticalAlignment="Center" IsVisible="{Binding IsCarried}"
+                                               Foreground="{StaticResource KcapSuccessBrush}" />
+                                <views:AppIcon Kind="CircleAlert" Size="12" VerticalAlignment="Center" IsVisible="{Binding NeedsAttention}"
+                                               Foreground="{StaticResource KcapWarningBrush}" />
+                                <views:AppIcon Kind="Minus" Size="12" VerticalAlignment="Center" IsVisible="{Binding IsNeutral}"
+                                               Foreground="{StaticResource KcapMutedBrush}" />
+                                <TextBlock Text="{Binding Text}" FontSize="13" Foreground="{StaticResource KcapMutedBrush}"
+                                           TextWrapping="Wrap" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                </ScrollViewer>
+            </StackPanel>
+        </Border>
         <!-- The template owns the ScrollViewer: that is the shape Avalonia virtualizes. An
              ItemsControl inside an external ScrollViewer is measured at infinite height. -->
-        <ItemsControl x:Name="ChatItems" Grid.Row="0" ItemsSource="{Binding Items}">
+        <ItemsControl x:Name="ChatItems" Grid.Row="1" ItemsSource="{Binding Items}">
             <ItemsControl.Template>
                 <ControlTemplate>
                     <ScrollViewer x:Name="ChatScroll" VerticalScrollBarVisibility="Auto" BringIntoViewOnFocusChange="False">
@@ -432,7 +467,7 @@
             </ItemsControl.DataTemplates>
         </ItemsControl>
 
-        <StackPanel Grid.Row="0" Spacing="22" HorizontalAlignment="Center" VerticalAlignment="Center">
+        <StackPanel Grid.Row="1" Spacing="22" HorizontalAlignment="Center" VerticalAlignment="Center">
             <TextBlock x:Name="ChatPhaseNote" Text="{Binding PhaseNote}"
                        IsVisible="{Binding PhaseNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
                        Foreground="{StaticResource KcapMutedBrush}" FontSize="14" HorizontalAlignment="Center" />
@@ -449,7 +484,7 @@
 
         <!-- Everything about the next turn — runs, queue, in-flight note, composer — shares one band,
              so the transcript's last card never reads as part of the input area. -->
-        <Border x:Name="ComposerBand" Grid.Row="1" Padding="22,15,22,16"
+        <Border x:Name="ComposerBand" Grid.Row="2" Padding="22,15,22,16"
                 Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                 BorderThickness="0,1,0,0">
             <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto">
@@ -534,7 +569,7 @@
                            Foreground="{StaticResource KcapMutedBrush}" FontSize="13.5"
                            TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis" />
 
-                <Border x:Name="ReadOnlyBanner" Grid.Row="3" IsVisible="{Binding IsReadOnlyParticipant}"
+                <Border x:Name="ReadOnlyBanner" Grid.Row="3" IsVisible="{Binding ShowsReadOnlyBanner}"
                         Background="{StaticResource KcapWarningDimBrush}" BorderBrush="{StaticResource KcapWarningBrush}"
                         BorderThickness="1" CornerRadius="8" Padding="12,7">
                     <TextBlock Text="{Binding ReadOnlyNotice, StringFormat='Read-only: {0}'}"
@@ -547,9 +582,13 @@
                         <MultiBinding Converter="{x:Static BoolConverters.And}">
                             <Binding Path="!ShowsComposer" />
                             <Binding Path="!IsReadOnlyParticipant" />
+                            <Binding Path="Handoff" Converter="{x:Static ObjectConverters.IsNull}" />
                         </MultiBinding>
                     </TextBlock.IsVisible>
                 </TextBlock>
+                <Panel Grid.Row="3" IsVisible="{Binding Handoff, Converter={x:Static ObjectConverters.IsNotNull}}">
+                    <views:HandoffComposerView x:Name="HandoffComposer" DataContext="{Binding Handoff}" />
+                </Panel>
                 <Border x:Name="ComposerCard" Classes="attachTarget" Grid.Row="3" IsVisible="{Binding ShowsComposer}"
                         Background="{StaticResource KcapSurfaceRaisedBrush}"
                         BorderThickness="1" CornerRadius="10" Padding="13,8,13,12">
