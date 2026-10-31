@@ -56,8 +56,10 @@ running notes file that every PR edits.
 - **Server-origin launch and stop share one serial lane**, sequenced and un-sequenced alike, so
   arrival order survives. One lock guards handler admission and the processor's single null→live
   transition: there is no second command domain, ever.
-- **Codex MCP setup owns only what it created.** Entries it added are tracked in
-  `mcp-ownership-v1.json`, and uninstall preserves anything it cannot prove it wrote.
+- **Codex MCP setup owns only what it created.** Entries it added, and the sandbox network keys it
+  set with the values they replaced, are tracked in `mcp-ownership-v1.json`; uninstall undoes only
+  what it can prove it wrote and still holds kcap's value, and says why it keeps the rest. An empty ledger
+  proves nothing, so it never justifies deleting config.
 - **Desktop-app daemon mutations go through one app-lifetime lane** with one shared evidence
   predicate: classifying a failure as success is the cardinal sin.
 - **Auth commits in one ordered boundary** — claims, then config and provider stamp, then tokens —

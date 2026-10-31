@@ -1156,7 +1156,9 @@ sealed class SetupCommand(
             InstallGrokHooks:         GrokHooksInstaller.Install,
             // Muse's hooks and MCP servers share one JSON settings.json; an unparseable file is a failure, not a success.
             InstallMuseHooks:         p => InstallMuseHooks(p, home, muse, WriteLine),
-            RegisterMuseMcp:          () => MuseSettingsJson.RegisterKcapMcpServers(muse.SettingsJson, home));
+            RegisterMuseMcp:          () => MuseSettingsJson.RegisterKcapMcpServers(muse.SettingsJson, home),
+            ReadAgentSkillsConsumers:  dir => SharedSkillsConsumers.Read(dir, () => SharedSkillsConsumerProbe.Configured(harnesses, home)),
+            WriteAgentSkillsConsumers: (dir, consumers) => SharedSkillsConsumers.Write(dir, consumers));
 
         void WriteLine(string line) => AnsiConsole.MarkupLine(line);
 

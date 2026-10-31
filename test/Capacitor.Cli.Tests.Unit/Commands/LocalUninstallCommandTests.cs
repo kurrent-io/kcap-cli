@@ -29,6 +29,8 @@ public class LocalUninstallCommandTests {
     }
 
     sealed class StackFactory(Func<LocalStack> create) : ILocalStackFactory {
+        public Core.LocalEdition.LocalRoot Root => throw new InvalidOperationException("The command read the root without a platform refusal.");
+
         public LocalStack Create() => create();
 
         public LocalBundleStager Stager() => throw new InvalidOperationException("The command reached the bundles.");

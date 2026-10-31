@@ -819,6 +819,74 @@ public class CodingAgentsStepTests {
         await Assert.That(result.AgentSkillsInstalled).IsTrue();
     }
 
+    // Tools off means no skills, whether or not the vendor records — what `kcap plugin install`'s
+    // skip flags do for the same answer in the desktop app.
+    [Test]
+    public async Task Shared_skills_are_not_written_for_a_vendor_whose_tools_are_off() {
+        var sink  = new Sink();
+        var calls = new InstallerCalls();
+
+        var options = new Options(
+            SkipClaude: true, SkipCodex: true, SkipCursor: false, SkipCopilot: true, NoPrompt: true,
+            SkipGemini: true, SkipPi: true, SkipOpenCode: true, SkipAntigravity: true,
+            SkipCursorMcp: true, ToolsIndependentOfCapture: true);
+
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: true, Copilot: false);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CursorHooksInstalled).IsTrue();
+        await Assert.That(result.AgentSkillsInstalled).IsFalse();
+    }
+
+    // Cursor's tools are off but Codex's are on, and both read one folder: Cursor still sees the
+    // skills, and setup has to say so rather than imply they are off for it.
+    [Test]
+    public async Task A_reader_left_out_of_the_shared_skills_is_told_it_still_sees_them() {
+        var sink  = new Sink();
+        var calls = new InstallerCalls();
+
+        var options = new Options(
+            SkipClaude: true, SkipCodex: false, SkipCursor: false, SkipCopilot: true, NoPrompt: true,
+            SkipGemini: true, SkipPi: true, SkipOpenCode: true, SkipAntigravity: true,
+            SkipCursorMcp: true, ToolsIndependentOfCapture: true);
+
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: true, Copilot: false);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.AgentSkillsInstalled).IsTrue();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Cursor reads the same shared folder"));
+    }
+
+    // Setup records the vendors it installed the shared skills for, on top of whoever already used
+    // them, so a later `plugin remove` of one keeps them for the rest.
+    [Test]
+    public async Task Setup_records_its_shared_skills_audience_beside_the_existing_consumers() {
+        var sink    = new Sink();
+        var calls   = new InstallerCalls();
+        string[]? written = null;
+
+        var options = new Options(
+            SkipClaude: true, SkipCodex: false, SkipCursor: false, SkipCopilot: true, NoPrompt: true);
+
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: true, Copilot: false);
+
+        var installers = calls.AsInstallers() with {
+            ReadAgentSkillsConsumers  = _ => new HashSet<string> { "gemini" },
+            WriteAgentSkillsConsumers = (_, consumers) => written = [.. consumers]
+        };
+
+        await RunAsync(options, detected, TestPaths(), installers, prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(written).IsNotNull();
+        await Assert.That(written!).IsEquivalentTo(new[] { "gemini", "codex", "cursor" });
+    }
+
     // The same whole-vendor opt-out, but with a browser answer present that ticks the vendor. The
     // screen's two axes must not reopen the half of the exclusion the caller never named.
     [Test]

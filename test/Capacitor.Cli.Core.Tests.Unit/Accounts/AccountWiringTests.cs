@@ -99,6 +99,41 @@ public class AccountWiringTests {
     }
 
     [Test]
+    public async Task Unwire_puts_back_the_sandbox_network_settings_wiring_changed() {
+        var b      = Account(HarnessId.Codex, ".codex-b");
+        var config = Home.PathTo(".codex-b", "config.toml");
+        File.WriteAllText(config, """model = "gpt-5.5" """);
+        var store = Store;
+        using (store.Lock()) AccountWiring.Wire(b, Home, Options() with { NetworkAllowDomains = ["**.kcap.ai"] }, store);
+        await Assert.That(File.ReadAllText(config)).Contains("network_access");
+
+        var steps = Unwire(b);
+
+        await Assert.That(AccountWiring.Succeeded(steps)).IsTrue();
+        var text = File.ReadAllText(config);
+        await Assert.That(text).DoesNotContain("network_access");
+        await Assert.That(text).DoesNotContain("network_proxy");
+        await Assert.That(text).Contains("gpt-5.5");
+        await Assert.That(File.Exists(Home.PathTo(".codex-b", "mcp-ownership-v1.json"))).IsFalse();
+    }
+
+    /// <summary>A setting kcap cannot undo is a warning that names it, never a fatal unwire.</summary>
+    [Test]
+    public async Task Unwire_reports_a_sandbox_network_setting_it_keeps() {
+        var b      = Account(HarnessId.Codex, ".codex-b");
+        var config = Home.PathTo(".codex-b", "config.toml");
+        var store  = Store;
+        using (store.Lock()) AccountWiring.Wire(b, Home, Options() with { NetworkAllowDomains = ["**.kcap.ai"] }, store);
+        File.WriteAllText(config, File.ReadAllText(config).Replace("network_access = true", "network_access = false"));
+
+        var steps = Unwire(b);
+
+        await Assert.That(AccountWiring.HasFatalFailure(steps)).IsFalse();
+        await Assert.That(AccountWiring.FailureSummary(steps)).Contains("sandbox_workspace_write.network_access = false (changed after kcap set it)");
+        await Assert.That(File.ReadAllText(config)).Contains("network_access = false");
+    }
+
+    [Test]
     public async Task Unwiring_one_of_two_codex_accounts_keeps_the_shared_agent_skills() {
         var a = Account(HarnessId.Codex, ".codex");
         var b = Account(HarnessId.Codex, ".codex-b");

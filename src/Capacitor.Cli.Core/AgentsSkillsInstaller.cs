@@ -96,6 +96,7 @@ public static class AgentsSkillsInstaller {
                 if (Directory.Exists(retired)) Directory.Delete(retired, recursive: true);
             }
 
+            SkillsFileManifest.Write(targetDir, SourceNames.Select(n => "kcap-" + n));
             WriteMarker(targetDir);
 
             return true;
@@ -119,12 +120,15 @@ public static class AgentsSkillsInstaller {
     /// upgrade onto a marker-aware build would no-op and leave stale skills
     /// untouched, defeating the auto-refresh entirely. After a successful
     /// refresh <see cref="Install"/> writes the marker, so subsequent upgrades
-    /// take the fast path.
+    /// take the fast path. A folder left beside a manifest is one <see cref="Remove"/> kept because the
+    /// user edited it, so it is not an install a refresh may top up.
     /// </remarks>
     public static bool IsInstalled(string targetDir) {
         if (File.Exists(Path.Combine(targetDir, MarkerFileName))) return true;
 
-        return Directory.Exists(targetDir) && SourceNames.Any(name => Directory.Exists(Path.Combine(targetDir, "kcap-" + name)));
+        return Directory.Exists(targetDir)
+            && !File.Exists(Path.Combine(targetDir, SkillsFileManifest.FileName))
+            && SourceNames.Any(name => Directory.Exists(Path.Combine(targetDir, "kcap-" + name)));
     }
 
     /// <summary>
@@ -185,20 +189,37 @@ public static class AgentsSkillsInstaller {
 
     /// <summary>
     /// Deletes every <c>kcap-&lt;name&gt;</c> folder this installer owns
-    /// from <paramref name="targetDir"/>. User-authored folders are left alone.
-    /// Returns a <see cref="RemovalResult"/> indicating whether any folder was
-    /// removed and whether any deletion failed.
+    /// from <paramref name="targetDir"/>. User-authored folders are left alone,
+    /// and so is an owned folder whose files differ from what <see cref="Install"/> recorded — the
+    /// user edited it or added to it. A tree installed before the manifest existed has no record to
+    /// compare against, so its owned folders are deleted by name; an unreadable manifest proves
+    /// nothing, so none are.
     /// </summary>
     public static RemovalResult Remove(string targetDir) {
         if (!Directory.Exists(targetDir)) return new RemovalResult(false, false);
 
-        var removed = false;
-        var errors  = false;
+        var removed   = false;
+        var errors    = false;
+        var preserved = new List<string>();
+        var manifest  = SkillsFileManifest.Read(targetDir, out var recorded);
 
         foreach (var name in SourceNames.Concat(RetiredSourceNames)) {
-            var dst = Path.Combine(targetDir, "kcap-" + name);
+            var folder = "kcap-" + name;
+            var dst    = Path.Combine(targetDir, folder);
 
             if (!Directory.Exists(dst)) continue;
+
+            var owned = manifest switch {
+                SkillsFileManifest.State.Absent => true,
+                _ when RetiredSourceNames.Contains(name) => true,
+                SkillsFileManifest.State.Present => SkillsFileManifest.IsPristine(targetDir, folder, recorded),
+                _ => false,
+            };
+
+            if (!owned) {
+                preserved.Add(folder);
+                continue;
+            }
 
             try {
                 Directory.Delete(dst, recursive: true);
@@ -219,7 +240,26 @@ public static class AgentsSkillsInstaller {
             }
         }
 
-        return new RemovalResult(removed, errors);
+        // The manifest stays while anything it describes is left, so a later removal still knows
+        // those folders are the user's.
+        if (preserved.Count == 0) SkillsFileManifest.Delete(targetDir);
+
+        return new RemovalResult(removed, errors) { Preserved = preserved };
+    }
+
+    /// <summary>
+    /// True when <see cref="Remove"/> would keep <paramref name="folder"/> under
+    /// <paramref name="targetDir"/> because the user changed it, so a sweep of the <c>kcap-</c>
+    /// prefix leaves it too.
+    /// </summary>
+    public static bool IsUserEdited(string targetDir, string folder) {
+        if (!SourceNames.Any(n => "kcap-" + n == folder)) return false;
+
+        return SkillsFileManifest.Read(targetDir, out var recorded) switch {
+            SkillsFileManifest.State.Absent  => false,
+            SkillsFileManifest.State.Present => !SkillsFileManifest.IsPristine(targetDir, folder, recorded),
+            _                                => true,
+        };
     }
 
     /// <summary>
@@ -311,4 +351,9 @@ public static class AgentsSkillsInstaller {
 /// Describes the outcome of a removal operation performed by
 /// <see cref="AgentsSkillsInstaller"/>.
 /// </summary>
-public readonly record struct RemovalResult(bool RemovedAny, bool HadErrors);
+public readonly record struct RemovalResult(bool RemovedAny, bool HadErrors) {
+    readonly IReadOnlyList<string>? _preserved;
+
+    /// <summary>Owned folder names left in place because the user edited them.</summary>
+    public IReadOnlyList<string> Preserved { get => _preserved ?? []; init => _preserved = value; }
+}

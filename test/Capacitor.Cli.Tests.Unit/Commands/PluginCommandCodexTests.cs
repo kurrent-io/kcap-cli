@@ -730,6 +730,70 @@ public class PluginCommandCodexInstallIntegrationTests {
         await Assert.That(await File.ReadAllTextAsync(configPath)).IsEqualTo(before);
     }
 
+    [Test]
+    public async Task RemoveCodex_user_scope_restores_the_network_settings_kcap_claimed() {
+        using var fakeHome = new TempDir();
+        var configPath = fakeHome.GetResolvedPath(".codex", "config.toml");
+        fakeHome.CreateDir(".codex");
+        File.WriteAllText(configPath, """model = "gpt-5.5" """);
+        CodexConfigToml.EnableNetworkAccess(["**.kcap.ai"], configPath);
+        var stdout = new StringWriter();
+
+        var exit = await new PluginCommand(TestEnv(fakeHome.GetResolvedPath(), stdout: stdout), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
+            ["plugin", "remove", "--codex"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(stdout.ToString()).Contains("Codex sandbox network settings restored");
+        var toml = await File.ReadAllTextAsync(configPath);
+        await Assert.That(toml).DoesNotContain("network_access");
+        await Assert.That(toml).DoesNotContain("network_proxy");
+        await Assert.That(File.Exists(fakeHome.GetResolvedPath(".codex", "mcp-ownership-v1.json"))).IsFalse();
+    }
+
+    /// <summary>With no record of kcap's change the settings stay, and the output says which and why.</summary>
+    [Test]
+    public async Task RemoveCodex_user_scope_keeps_and_explains_unclaimed_network_settings() {
+        using var fakeHome = new TempDir();
+        fakeHome.CreateDir(".codex");
+        var configPath = fakeHome.GetResolvedPath(".codex", "config.toml");
+        const string config = """
+            [sandbox_workspace_write]
+            network_access = true
+
+            [features.network_proxy]
+            enabled = true
+
+            [features.network_proxy.domains]
+            "**.kcap.ai" = "allow"
+            """;
+        File.WriteAllText(configPath, config);
+        var stderr = new StringWriter();
+
+        var exit = await new PluginCommand(TestEnv(fakeHome.GetResolvedPath(), stderr: stderr), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
+            ["plugin", "remove", "--codex"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(stderr.ToString()).Contains("kcap cannot prove are safe to undo");
+        await Assert.That(stderr.ToString()).Contains("sandbox_workspace_write.network_access = true (kcap has no record that it made this change)");
+        await Assert.That(await File.ReadAllTextAsync(configPath)).IsEqualTo(config);
+    }
+
+    [Test]
+    public async Task RemoveCodex_project_scope_leaves_the_user_global_network_settings() {
+        using var fakeHome = new TempDir();
+        fakeHome.CreateDir(".codex");
+        var configPath = fakeHome.GetResolvedPath(".codex", "config.toml");
+        CodexConfigToml.EnableNetworkAccess(["**.kcap.ai"], configPath);
+        var before = await File.ReadAllTextAsync(configPath);
+
+        var exit = await new PluginCommand(TestEnv(fakeHome.GetResolvedPath()), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
+            ["plugin", "remove", "--codex", "--project"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(await File.ReadAllTextAsync(configPath)).IsEqualTo(before);
+        await Assert.That(File.Exists(fakeHome.GetResolvedPath(".codex", "mcp-ownership-v1.json"))).IsTrue();
+    }
+
     static string SeedCodexConfigWithKcapServers(string fakeHome) {
         var codexDir = Path.Combine(fakeHome, ".codex");
         Directory.CreateDirectory(codexDir);
