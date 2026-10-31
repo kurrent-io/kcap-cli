@@ -3347,11 +3347,12 @@ public class HomeViewModelTests {
     }
 
     [Test]
-    [Arguments("u1", true)]
-    [Arguments("someone-else", false)]
+    [Arguments("u1", "u1", true)]
+    [Arguments("someone-else", "someone-else", false)]
+    [Arguments("u1", "someone-else", false)]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_remote_session_selects_its_machine_and_repository_only_when_the_viewer_owns_the_machine(
-            string owner, bool adopted) {
+    public async Task A_remote_session_selects_its_machine_and_repository_only_when_the_viewer_owns_the_session_and_machine(
+            string owner, string rowOwner, bool adopted) {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var daemon = new FakeDaemonClientService();
             Connect(daemon);
@@ -3361,7 +3362,7 @@ public class HomeViewModelTests {
                 Known(), TimeProvider.System, daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"));
             await vm.SelectRepositoryAsync("/repo/a");
 
-            await vm.SelectRepositoryOfAsync(LocalRow("/srv/repo") with { Origin = AgentOrigin.Remote, MachineBadge = "box" });
+            await vm.SelectRepositoryOfAsync(LocalRow("/srv/repo") with { Origin = AgentOrigin.Remote, MachineBadge = "box", OwnerUserId = rowOwner });
 
             await Assert.That(vm.RemoteMachineSelected).IsEqualTo(adopted);
             await Assert.That(vm.SelectedRepoPath).IsEqualTo(adopted ? "/srv/repo" : "/repo/a");

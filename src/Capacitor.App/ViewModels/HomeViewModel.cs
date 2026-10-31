@@ -1409,6 +1409,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
         if (row.Origin == AgentOrigin.Remote) {
             if (row.MachineBadge is not { Length: > 0 } machine) return;
+            // Daemon names are unique per owner only: a teammate's row can name one of the viewer's machines.
+            if (await _viewerId(_shutdown) is not { } viewer || !string.Equals(row.OwnerUserId, viewer, StringComparison.Ordinal)) return;
             bool OnMachine() => RemoteMachineSelected && string.Equals(SelectedMachine, machine, StringComparison.Ordinal);
             if (!OnMachine()) await SelectMachineAsync(machine, isLocal: false);
             if (OnMachine()) await SelectRepositoryAsync(path);
