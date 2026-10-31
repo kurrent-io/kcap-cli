@@ -292,7 +292,7 @@ static class ClaudeCliRunner {
                 // External cancel while writing stdin: kill the subprocess so
                 // we don't leave claude running after the caller has given up,
                 // then propagate so the daemon's cancellation path sees it.
-                try { process.Kill(entireProcessTree: true); } catch {
+                try { ProcessTree.Kill(process); } catch {
                     /* ignore */
                 }
 
@@ -302,7 +302,7 @@ static class ClaudeCliRunner {
                 // not a stdin I/O failure, so it must not fall into the generic catch below.
                 log($"Claude process timed out ({timeout.TotalSeconds:0}s) while streaming stdin, killing");
 
-                try { process.Kill(entireProcessTree: true); } catch {
+                try { ProcessTree.Kill(process); } catch {
                     /* ignore */
                 }
 
@@ -310,7 +310,7 @@ static class ClaudeCliRunner {
             } catch (Exception ex) {
                 log($"Failed to stream prompt to claude stdin: {ex.Message}");
 
-                try { process.Kill(entireProcessTree: true); } catch {
+                try { ProcessTree.Kill(process); } catch {
                     /* ignore */
                 }
 
@@ -381,7 +381,7 @@ static class ClaudeCliRunner {
             // subprocess (otherwise the await unblocks but claude keeps
             // running) and rethrow so the caller's cancellation path fires.
             try {
-                process.Kill(entireProcessTree: true);
+                ProcessTree.Kill(process);
             } catch {
                 /* ignore */
             }
@@ -391,7 +391,7 @@ static class ClaudeCliRunner {
             log($"Claude process timed out ({timeout.TotalSeconds:0}s), killing");
 
             try {
-                process.Kill(entireProcessTree: true);
+                ProcessTree.Kill(process);
             } catch {
                 /* ignore */
             }
