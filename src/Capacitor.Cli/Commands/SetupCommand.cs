@@ -1863,7 +1863,7 @@ sealed class SetupCommand(
             })
             : BackgroundImportLaunch.NotNeeded;
 
-        PrintBackground(launch, skip: skip);
+        PrintBackground(launch, skip: skip, nameSessions: nameSessions);
 
         var eligible        = HandoffVendorEligibility.Eligible(harnesses, inputs.Paths);
         var detectedVendors = HandoffVendorEligibility.Detected(harnesses);
@@ -1901,9 +1901,12 @@ sealed class SetupCommand(
     /// <param name="browser">The browser flow's import is per repository and per level, which plain
     /// <c>kcap import</c> cannot reproduce, so its retry names setup instead.</param>
     /// <param name="skip">What the retry must leave out again.</param>
-    internal static void PrintBackground(BackgroundImportLaunch launch, bool browser = false, ImportSkip? skip = null) {
+    /// <param name="nameSessions">Whether the user agreed to naming; without that yes the retry must not name.</param>
+    internal static void PrintBackground(
+            BackgroundImportLaunch launch, bool browser = false, ImportSkip? skip = null, bool nameSessions = false) {
         var log   = Markup.Escape(launch.LogPath ?? "");
-        var retry = string.Join(" ", (skip ?? ImportSkip.None).ImportArgs.Select(Quoted).Prepend("kcap import --all --yes"));
+        var retry = string.Join(" ", (skip ?? ImportSkip.None).ImportArgs.Select(Quoted)
+            .Prepend(nameSessions ? "kcap import --all --yes" : "kcap import --all --yes --skip-title"));
 
         switch (launch.Status) {
             case BackgroundImportStatus.Running:

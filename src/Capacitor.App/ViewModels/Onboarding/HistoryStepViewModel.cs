@@ -25,6 +25,8 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     readonly TimeProvider   _time;
     readonly Func<bool>     _onLocalPath;
 
+    readonly Dictionary<string, HistoryRepoRow> _lastRows = new(StringComparer.OrdinalIgnoreCase);
+
     bool                     _discovered;
     bool                     _discoveredLocal;
     HistoryState             _state = HistoryState.Looking;
@@ -143,7 +145,12 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
 
     public bool FoldersVisible => DetailsVisible && Folders.Count > 0;
 
-    public int SelectedFolderCount => Folders.Count(f => f.Included);
+    public int SelectedFolderCount => IncludedFolders.Count();
+
+    /// A folder pass names no harness of its own: with every harness unchecked it would take no vendor
+    /// flag, which the CLI reads as every harness.
+    IEnumerable<HistoryFolderRow> IncludedFolders =>
+        Sources.Count > 0 && !Sources.Any(s => s.IsSelected) ? [] : Folders.Where(f => f.Included);
 
     /// Unchecking is a choice about this import, never a setting: recording and the exclusions already
     /// saved go on exactly as before.
@@ -289,6 +296,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         _discovery = null;
         _report    = null;
         Groups     = [];
+        _lastRows.Clear();
         Sources    = [];
         Folders    = [];
         _windows.Clear();
@@ -375,18 +383,18 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         this.RaisePropertyChanged(nameof(UnmatchedNote));
     }
 
-    /// The repositories the selected harnesses wrote to. A repository that stays keeps the choices
-    /// already made on it.
+    /// The repositories the selected harnesses wrote to. A repository keeps the choices made on it, even
+    /// across its harness being unchecked and checked again.
     void Regroup() {
         if (_report is not { } report) return;
 
-        var before = Groups.SelectMany(g => g.Repos).ToDictionary(r => r.Slug, StringComparer.OrdinalIgnoreCase);
-        var rows   = new List<HistoryRepoRow>();
+        var rows = new List<HistoryRepoRow>();
         foreach (var repo in report.Repos) {
             if (Project(repo, id => Sources.Any(s => s.Id == id && s.IsSelected)) is not { } projected) continue;
 
             var row = new HistoryRepoRow(projected, _discoveredLocal);
-            if (before.TryGetValue(row.Slug, out var previous)) row.Adopt(previous);
+            if (_lastRows.TryGetValue(row.Slug, out var previous)) row.Adopt(previous);
+            _lastRows[row.Slug] = row;
             row.PropertyChanged += (_, e) => {
                 if (e.PropertyName == nameof(HistoryRepoRow.Level)) Restate();
             };
@@ -469,7 +477,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         List<ImportRequest> passes = [];
         foreach (var level in new[] { ImportLevel.OnlyMe, ImportLevel.Shared }) {
             var repos   = selected.Where(r => r.Level == level).Select(r => r.Slug).ToList();
-            var folders = Folders.Where(f => f.Level == level).Select(f => f.Path).ToList();
+            var folders = IncludedFolders.Where(f => f.Level == level).Select(f => f.Path).ToList();
             if (repos.Count == 0 && folders.Count == 0) continue;
             passes.Add(new ImportRequest(ImportScopeChoice.Repo, null, vendors, repos, window.Since,
                 Private: level == ImportLevel.OnlyMe, SkipTitle: skip, Folders: folders.Count == 0 ? null : folders));
@@ -516,7 +524,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
 
         return [
             .. Groups.SelectMany(g => g.Repos).Where(r => r.Level != ImportLevel.Skip).Select(r => r.SessionsSince(since)),
-            .. Folders.Where(f => f.Included).Select(f => everyHarness ? f.SessionsSince(since) : null),
+            .. IncludedFolders.Select(f => everyHarness ? f.SessionsSince(since) : null),
         ];
     }
 

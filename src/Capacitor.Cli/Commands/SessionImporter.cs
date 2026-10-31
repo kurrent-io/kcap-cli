@@ -285,12 +285,14 @@ static class SessionImporter {
     /// unpaired: a wrong pairing would open one subagent's transcript from another's row.
     /// </summary>
     static Dictionary<string, string> SpawnCalls(List<(string AgentId, string CallId)> links, Dictionary<string, int> toolUsePositions) {
-        var known  = links.Where(l => toolUsePositions.ContainsKey(l.CallId)).Distinct().ToList();
-        var paired = new Dictionary<string, string>(StringComparer.Ordinal);
+        // A link to a call this transcript does not hold still disagrees, so it is checked before that filter.
+        var distinct = links.Distinct().ToList();
+        var paired   = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        foreach (var group in known.GroupBy(l => l.AgentId, StringComparer.Ordinal)) {
+        foreach (var group in distinct.GroupBy(l => l.AgentId, StringComparer.Ordinal)) {
             var calls = group.Select(l => l.CallId).Distinct(StringComparer.Ordinal).ToList();
-            if (calls.Count == 1 && known.Count(l => l.CallId == calls[0]) == 1) paired[group.Key] = calls[0];
+            if (calls.Count == 1 && toolUsePositions.ContainsKey(calls[0]) && distinct.Count(l => l.CallId == calls[0]) == 1)
+                paired[group.Key] = calls[0];
         }
 
         return paired;

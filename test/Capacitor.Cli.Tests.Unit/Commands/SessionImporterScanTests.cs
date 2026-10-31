@@ -126,14 +126,17 @@ public class SessionImporterScanTests {
         await Assert.That(scan.SpawnCallByAgent["agent-xyz"]).IsEqualTo("toolu_2");
     }
 
-    /// <summary>Evidence that disagrees, or one call claimed by two agents, names no call at all: a wrong
-    /// link would open another subagent's transcript from the row.</summary>
+    /// <summary>Evidence that disagrees, even where one side names a call this transcript does not hold, or
+    /// one call claimed by two agents, names no call at all: a wrong link would open another subagent's
+    /// transcript from the row.</summary>
     [Test]
     public async Task ScanAgentLifecycle_LeavesConflictingOrSharedCallsUnlinked() {
         var transcript = """
                          {"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Task","input":{}}]}}
                          {"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_2","name":"Task","input":{}}]}}
+                         {"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_3","name":"Task","input":{}}]}}
                          {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1"}]},"toolUseResult":{"status":"completed","agentId":"a1"}}
+                         {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_3"}]},"toolUseResult":{"status":"completed","agentId":"e1"}}
                          """;
 
         using var tmp = new TempDir();
@@ -142,6 +145,7 @@ public class SessionImporterScanTests {
         tmp.CreateFile(["transcript", "subagents", "agent-b1.meta.json"], """{"toolUseId":"toolu_9"}""");
         tmp.CreateFile(["transcript", "subagents", "agent-c1.meta.json"], """{"toolUseId":"toolu_2"}""");
         tmp.CreateFile(["transcript", "subagents", "agent-d1.meta.json"], """{"toolUseId":"toolu_2"}""");
+        tmp.CreateFile(["transcript", "subagents", "agent-e1.meta.json"], """{"toolUseId":"toolu_8"}""");
 
         var scan = SessionImporter.ScanAgentLifecycle(path);
 

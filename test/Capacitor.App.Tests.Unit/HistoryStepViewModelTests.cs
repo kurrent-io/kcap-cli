@@ -136,6 +136,40 @@ public class HistoryStepViewModelTests {
         await Assert.That(h.Cli.ImportCallCount).IsEqualTo(0);
     }
 
+    /// A folder pass carries no harness of its own, so with no harness left it would read every one.
+    [Test]
+    public async Task With_every_harness_unchecked_a_checked_folder_imports_nothing() {
+        var h = new Harness(OlderClaudeAndCodexHistory() with {
+            UnmatchedSessions = 3, UnmatchedFolders = [new("/w/scratch", 3, [new(D30, 1), new(D90, 2), new(null, 3)])],
+        });
+        await h.EnterAsync();
+
+        h.Vm.Folders.Single().Included = true;
+        foreach (var source in h.Vm.Sources) source.IsSelected = false;
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+
+        await Assert.That(h.Vm.SelectedFolderCount).IsEqualTo(0);
+        await Assert.That(h.Vm.ImportLine).IsEqualTo("Nothing is selected to import");
+        await Assert.That(h.Vm.NextLabel).IsEqualTo("Continue");
+        await Assert.That(h.Cli.ImportCallCount).IsEqualTo(0);
+    }
+
+    /// A repository that leaves the list with its harness comes back with the choices made on it.
+    [Test]
+    public async Task A_repository_keeps_its_choices_when_its_harness_is_unchecked_and_checked_again() {
+        var h = new Harness(OlderClaudeAndCodexHistory());
+        await h.EnterAsync();
+        h.Repo("solo/notes").OnlyMe = true;
+        h.Repo("acme/api").Included = false;
+
+        foreach (var source in h.Vm.Sources) source.IsSelected = false;
+        foreach (var source in h.Vm.Sources) source.IsSelected = true;
+
+        await Assert.That(h.Repo("solo/notes").Level).IsEqualTo(ImportLevel.OnlyMe);
+        await Assert.That(h.Repo("acme/api").Level).IsEqualTo(ImportLevel.Skip);
+        await Assert.That(h.Repo("acme/web").Level).IsEqualTo(ImportLevel.Shared);
+    }
+
     /// A report that does not split repositories by harness offers no harness choice and imports with no
     /// vendor flag, the same every-harness scope it counted.
     [Test]

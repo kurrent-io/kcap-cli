@@ -1517,6 +1517,21 @@ public class SetupCommandTests {
         await Assert.That(console.Flat).Contains("kcap import --all --yes");
     }
 
+    /// <summary>The printed retry repeats the naming answer: without a yes it would name what the user
+    /// declined to send.</summary>
+    [Test, NotInParallel]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task Terminal_flow_retry_names_sessions_only_on_a_yes(bool answer) {
+        var runner = FakeImportRunner.Succeeding().Discovering(Discovered(3, 20, 5));
+        using var console = new SpectreCapture();
+
+        await Command(runner, FakeBackgroundImportSpawner.Failing(), FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs(nameSessions: () => answer));
+
+        await Assert.That(console.Flat.Contains("kcap import --all --yes --skip-title")).IsEqualTo(!answer);
+    }
+
     [Test, NotInParallel]
     public async Task Browser_flow_background_failure_names_kcap_setup() {
         using var console = new SpectreCapture();
