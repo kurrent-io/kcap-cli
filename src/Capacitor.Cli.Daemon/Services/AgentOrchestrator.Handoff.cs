@@ -227,8 +227,8 @@ internal partial class AgentOrchestrator {
             outcome = Failed(source, "takeover_error");
         }
 
-        PutHandoffOutcome(successor, outcome);
-        SettleHandoffSource(agentId);
+        // The source stays until the outcome is on disk: a restart reads the stored running as interrupted.
+        if (PutHandoffOutcome(successor, outcome)) SettleHandoffSource(agentId);
         LogHandoffTakeover(agentId, source.SessionId, successor, outcome.State, outcome.Detail);
     }
 
@@ -348,11 +348,13 @@ internal partial class AgentOrchestrator {
         }
     }
 
-    void PutHandoffOutcome(string successor, HandoffOutcomeDto outcome) {
+    bool PutHandoffOutcome(string successor, HandoffOutcomeDto outcome) {
         try {
             _handoffOutcomes.Put(successor, outcome);
+            return true;
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             LogHandoffOutcomeNotSaved(ex, successor);
+            return false;
         }
     }
 
