@@ -966,7 +966,8 @@ public partial class App : Application {
 
         // Composition-root outcome consumer: shares lifecycle's own surface/probe/CliVersion and the lane itself, so a Takeover accept re-mutates through the same gate.
         _ = ConsumeMutationOutcomesAsync(
-            channel, lifecycleSurface, lane.RunAsync, lifecycleProbe.TerminalPathAsync, () => lifecycle.CliVersion, _shutdown.Token);
+            channel, lifecycleSurface, lane.RunAsync, lifecycleProbe.TerminalPathAsync, () => lifecycle.CliVersion, _shutdown.Token,
+            daemonVersion: () => lifecycle.AttachedDaemonVersion);
 
         service.Start();
         _service = service;
@@ -2446,7 +2447,7 @@ public partial class App : Application {
             OutcomeChannel channel, ILifecycleSurface surface,
             Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation,
             Func<CancellationToken, Task<string?>> terminalPathAsync, Func<string?> cliVersion, CancellationToken ct,
-            Func<string, string?>? attentionCopy = null) {
+            Func<string, string?>? attentionCopy = null, Func<string?>? daemonVersion = null) {
         var declinedTakeoverPairs = new HashSet<(MutationRequest Request, string Token)>();
         try {
             await foreach (var lease in channel.ConsumeAsync(ct)) {
@@ -2454,7 +2455,7 @@ public partial class App : Application {
                 try {
                     await PresentOutcomeAsync(
                             surface, lease.Envelope, runMutation, terminalPathAsync, cliVersion, ct, declinedTakeoverPairs,
-                            () => presented = true, attentionCopy)
+                            () => presented = true, attentionCopy, daemonVersion)
                         .ConfigureAwait(false);
                     lease.Ack(); // ran to completion — whether or not anything needed showing
                 } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
@@ -2476,7 +2477,7 @@ public partial class App : Application {
             Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation,
             Func<CancellationToken, Task<string?>> terminalPathAsync, Func<string?> cliVersion, CancellationToken ct,
             HashSet<(MutationRequest Request, string Token)>? declinedTakeoverPairs = null, Action? markPresented = null,
-            Func<string, string?>? attentionCopy = null) {
+            Func<string, string?>? attentionCopy = null, Func<string?>? daemonVersion = null) {
         // The controller that started a reload awaits its outcome and renders it as state in the rail;
         // posting it here too would put a withdrawable condition on a lane nothing can withdraw from.
         if (envelope.Request.Verb == MutationVerb.Reload) {
@@ -2517,8 +2518,9 @@ public partial class App : Application {
                 }
 
                 var pathDegraded = await terminalPathAsync(ct).ConfigureAwait(false) is null;
-                var prompt = new LifecyclePrompt(
-                    LifecyclePrompt.KindTakeover, null, cliVersion(), pathDegraded, DaemonLifecycleController.TakeoverDisclosure);
+                var prompt = DaemonLifecycleController.WithVersionChange(
+                    new LifecyclePrompt(LifecyclePrompt.KindTakeover, null, cliVersion(), pathDegraded, DaemonLifecycleController.TakeoverDisclosure),
+                    daemonVersion?.Invoke(), cliVersion());
                 var accepted = await surface.TryConfirmAsync(prompt, ct).ConfigureAwait(false);
                 if (accepted is null) { ct.ThrowIfCancellationRequested(); throw new OperationCanceledException(ct); } // cancelled before the dialog ever ran — never presented
                 markPresented?.Invoke(); // the dialog was shown and answered — everything after this is post-presentation

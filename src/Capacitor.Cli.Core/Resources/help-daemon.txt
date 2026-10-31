@@ -41,6 +41,10 @@ Options for stop:
                           graceful stop; to stop a supervised daemon, use
                           `daemon service stop`.
 
+A daemon that a service supervises (launchd, systemd, or on Windows kcap-service
+or a Scheduled Task) is not stopped, since the service would restart it: stop
+exits 1 and prints the `kcap daemon service stop --name N` command to use.
+
 Options for restart:
   (none)                  Restart now. Interactive agents and Claude flow
                           reviewers are stopped and resumed on the new daemon.
@@ -99,6 +103,10 @@ Subcommands for service (per-user; auto-restarts on crash/SIGKILL, starts at log
                           contended, never taken over.
                           --no-start cannot be combined with --verify (verify
                           proves the STARTED daemon is ready).
+                          Refused, changing nothing, from inside an agent that
+                          the daemon it would stop or retire hosts: stopping
+                          that daemon would end the command partway. Run it
+                          from a terminal the daemon does not host.
   install --system [...]  Windows: first install or update the machine's
                           kcap-service (one administrator prompt), then hand
                           this daemon to it. Needs the desktop app's install,
@@ -121,6 +129,8 @@ Subcommands for service (per-user; auto-restarts on crash/SIGKILL, starts at log
                           the OS supervisor; stays installed — returns at next
                           login or `service start`). Ends its hosted agents;
                           --keep-agents keeps them for the next start to resume.
+                          While the desktop app runs, it starts its stopped
+                          daemon service again; quit the app to keep it stopped.
   ensure [--name N] [--profile P] [--json]
                           Flow-driven ladder: from a fresh status read, install
                           when there is no unit (baking the born-prompt consent

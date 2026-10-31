@@ -27,9 +27,11 @@ sealed class RecordingServiceManager(Dictionary<string, string?> binaries) : ISe
     public IReadOnlyList<string>? TryListInstalled() => ListingFails ? null : ListInstalled();
     public IReadOnlyDictionary<string, string>? UnitEnvironment(string serviceId) => null;
 
+    /// <summary>A unit it does not hold reads as not installed.</summary>
     public ServiceStatus Status(string serviceId) {
         Interlocked.Increment(ref _statusReads);
-        return binaries[serviceId] switch {
+        if (!binaries.TryGetValue(serviceId, out var held)) return new(ServiceState.NotInstalled, null);
+        return held switch {
             Unreadable  => throw new IOException("unreadable wrapper"),
             Unanswering => throw new InvalidOperationException("kcap-service is not answering on its pipe"),
             var binary  => new(ServiceState.Installed, binary),
