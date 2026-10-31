@@ -86,7 +86,8 @@ sealed class LocalStackControl(LocalStack stack, Func<int, PortHolder?> findHold
     }
 
     /// <summary>Waits as long as a migration may take, but gives up early on what no wait will fix: a stranger on the
-    /// port, a server that exited for good, or one that keeps exiting.</summary>
+    /// port, named by the OS or by an answer the kcap server never gives, a server that exited for good, or one that
+    /// keeps exiting.</summary>
     async Task WaitReadyAsync(LocalServerUnit unit, CancellationToken ct) {
         var started  = stack.Time.GetUtcNow();
         var deadline = started + LocalServerReadiness.StartBudget;
@@ -106,6 +107,11 @@ sealed class LocalStackControl(LocalStack stack, Func<int, PortHolder?> findHold
                     throw Failed($"Port {unit.Port} is taken by {holder.Command} (pid {holder.Pid}), so the server cannot listen on it. "
                                + "The port is part of this installation's identity; stop that process and the server starts on its own, or run kcap local stop to stop it trying.");
             }
+
+            if (health is ServerHealth.Foreign(var what))
+                throw Failed($"Port {unit.Port} answers as {what}, not as the kcap server, so the server cannot listen on it. "
+                           + "The port is part of this installation's identity; stop that program and the server starts on its own, or run kcap local stop to stop it trying. "
+                           + "kcap local status says more.");
 
             // Serving readiness stays healthy during an online rebuild. Its planned restart still belongs to this update.
             if (health is ServerHealth.Answered { Ready: true, UpdatePending: false } && activity is UnitActivity.Running) return;

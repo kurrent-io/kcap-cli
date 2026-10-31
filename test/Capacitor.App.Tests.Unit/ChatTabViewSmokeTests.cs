@@ -5,6 +5,7 @@ using System.Reactive.Threading.Tasks;
 using System.Reactive.Subjects;
 using System.Text;
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Avalonia.Controls.Presenters;
@@ -973,7 +974,7 @@ public class ChatTabViewSmokeTests {
             await host.LoadAsync(path);
 
             var label = host.View.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "ToolRowLabel" && t.IsEffectivelyVisible);
-            var detail = host.View.GetVisualDescendants().OfType<SelectableTextBlock>().Single(t => t.IsEffectivelyVisible && t.Text == "Retention brief");
+            var detail = host.View.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "ToolRowDetail" && t.IsEffectivelyVisible && t.Text == "Retention brief");
             await Assert.That(label.Text).IsEqualTo("Published page");
             await Assert.That(label.FontFamily.Name).IsEqualTo(detail.FontFamily.Name);
             await Assert.That(label.LineHeight).IsEqualTo(detail.LineHeight);
@@ -1040,6 +1041,35 @@ public class ChatTabViewSmokeTests {
 
     static object? Brush(bool isError) =>
         ToolOutcomeBrushConverter.Instance.Convert(isError, typeof(IBrush), null, CultureInfo.InvariantCulture);
+
+    /// A click on a tool row opens what its call recorded — status, command and output, each
+    /// selectable — and a second click closes it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Clicking_a_tool_row_opens_its_recorded_command_and_output() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("open.jsonl", [ToolCallLine, ToolErrorLine]));
+            host.Settle();
+            var row = ToolRows(host.View).Single();
+            var toggle = row.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "ToolRowToggle");
+            var body = row.GetVisualDescendants().OfType<Border>().Single(b => b.Name == "ToolInspection");
+            await Assert.That(body.IsEffectivelyVisible).IsFalse();
+            await Assert.That(AutomationProperties.GetName(toggle)).IsEqualTo("Show details: Searched files ls -la");
+
+            Click(host, toggle);
+
+            await Assert.That(OnlyGroup(host).Calls[0].IsExpanded).IsTrue();
+            await Assert.That(body.IsEffectivelyVisible).IsTrue();
+            var texts = body.GetVisualDescendants().OfType<SelectableTextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text ?? "").ToList();
+            await Assert.That(texts).IsEquivalentTo(new[] { "Failed", "ls -la", "boom" }, CollectionOrdering.Matching);
+            await Assert.That(AutomationProperties.GetName(toggle)).IsEqualTo("Hide details: Searched files ls -la");
+
+            Click(host, toggle);
+            await Assert.That(body.IsEffectivelyVisible).IsFalse();
+            await host.CloseAsync();
+        });
+    }
 
     /// Pins that Enter reaches the send: the composer consumes it, the typed text leaves as one
     /// bracketed paste followed by the CR, and no newline is left behind in the box.

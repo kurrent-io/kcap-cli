@@ -43,6 +43,60 @@ public class SessionAccessServiceTests {
         await Assert.That(h.Lane.ChatSubscribes).DoesNotContain("s1");
     }
 
+    /// A live workspace can open the session before the server has it, which the server answers
+    /// exactly as it answers a hidden one. The recorded session's workspace takes the same id over
+    /// after Stop and must be asked again, not handed that verdict.
+    [Test]
+    public async Task A_new_lease_re_asks_a_session_an_earlier_lease_was_denied() {
+        using var h = new Harness();
+        h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
+        h.Connect();
+        using var live = h.Service.Acquire("s1");
+        await WaitUntilAsync(async () => await Harness.Current(live) == SessionAccessState.Denied, "denied before the server had the session");
+
+        h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Ok);
+        using var recorded = h.Service.Acquire("s1");
+
+        await WaitUntilAsync(async () => await Harness.Current(recorded) == SessionAccessState.Established, "the newcomer re-asked");
+        await Assert.That(await Harness.Current(live)).IsEqualTo(SessionAccessState.Established);
+    }
+
+    /// Re-asking is not forgiving: a session the server still refuses stays refused, chat and all.
+    [Test]
+    public async Task A_new_lease_on_a_session_the_server_still_refuses_stays_denied() {
+        using var h = new Harness();
+        h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
+        h.Connect();
+        using var first = h.Service.Acquire("s1");
+        await WaitUntilAsync(async () => await Harness.Current(first) == SessionAccessState.Denied, "denied");
+
+        using var second = h.Service.Acquire("s1");
+
+        await WaitUntilAsync(() => h.Lane.AccessWatches.Count(s => s == "s1") == 2, what: "asked again");
+        await WaitUntilAsync(async () => await Harness.Current(second) == SessionAccessState.Denied, "still denied");
+        await Assert.That(h.Lane.ChatSubscribes).DoesNotContain("s1");
+    }
+
+    [Test]
+    public async Task Recheck_re_asks_only_a_denied_session() {
+        using var h = new Harness();
+        h.Connect();
+        using var lease = h.Service.Acquire("s1");
+        await WaitUntilAsync(async () => await Harness.Current(lease) == SessionAccessState.Established, "established");
+
+        h.Service.RecheckDenied("s1");
+        await Task.Delay(50);
+        await Assert.That(h.Lane.AccessWatches.Count(s => s == "s1")).IsEqualTo(1);
+
+        h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
+        h.Lane.SessionAccessChangedSubject.OnNext("s1");
+        await WaitUntilAsync(async () => await Harness.Current(lease) == SessionAccessState.Denied, "revoked");
+        h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Ok);
+
+        h.Service.RecheckDenied("s1");
+        await WaitUntilAsync(async () => await Harness.Current(lease) == SessionAccessState.Established, "re-asked once refused");
+    }
+
     [Test]
     public async Task Lane_down_is_unavailable_and_reconnect_re_establishes() {
         using var h = new Harness();

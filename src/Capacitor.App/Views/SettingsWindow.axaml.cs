@@ -17,6 +17,8 @@ namespace Capacitor.App.Views;
 public partial class SettingsWindow : Window {
     const double UnscaledMinWidth = 760;
     const double UnscaledMinHeight = 520;
+    /// The page header row's height in SettingsStyles, which the drag strip matches.
+    internal const double UnscaledChromeHeight = 40;
 
     UiScaleSetting? _contentScale;
     IDisposable? _contentScaleSubscription;
@@ -67,6 +69,7 @@ public partial class SettingsWindow : Window {
     void ApplyScale(double scale) {
         _scale = scale;
         ScaleHost.LayoutTransform = scale == UiScale.Default ? null : new ScaleTransform(scale, scale);
+        ChromeStrip.Height = UnscaledChromeHeight * scale;
         ApplyMinimumSize();
     }
 
@@ -141,4 +144,9 @@ public partial class SettingsWindow : Window {
     }
 
     public void ShowSearch() => SettingsTabs.SelectedItem = SearchTab;
+
+    public void ShowPage(SettingsTab page) {
+        if (page == SettingsTab.Search) ShowSearch();
+        else if (page == SettingsTab.Harnesses) SettingsTabs.SelectedItem = HarnessesTab;
+    }
 }

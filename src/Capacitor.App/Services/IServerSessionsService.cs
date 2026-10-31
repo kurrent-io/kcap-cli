@@ -35,7 +35,7 @@ public interface IServerSessionsService {
     /// Re-reads the live listing and the whole ended prefix and replaces the caches with the result.
     Task ReconcileAsync();
     /// The session whose row is open in the rail: it stays in the snapshot's Ended set when a read
-    /// no longer lists it, until another (or none) is kept.
+    /// no longer lists it, as ended if it was last listed live, until another (or none) is kept.
     void Keep(string? sessionId);
     /// The account and connection the caches and the pin answer for; replays the latest.
     IObservable<SessionIdentity> Identity { get; }

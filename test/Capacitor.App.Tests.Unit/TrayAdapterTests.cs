@@ -509,7 +509,7 @@ public class TrayAdapterTests {
     [NotInParallel("AvaloniaSession")]
     public async Task Eager_cadence_populates_the_menu_at_construction_and_opens_the_window_on_click() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var (labels, commandIsOpen) = await AvaloniaSession.DispatchAsync(() => {
+            var (labels, commandIsOpen, tooltip, expectedTooltip) = await AvaloniaSession.DispatchAsync(() => {
                 var service = new FakeDaemonClientService();
                 var pause = new FakePauseController();
                 var consent = new FakeConsentService();
@@ -520,12 +520,14 @@ public class TrayAdapterTests {
                 var trayIcon = TrayIcon.GetIcons(app)!.Single();
 
                 var items = trayIcon.Menu!.Items.OfType<NativeMenuItem>().Select(i => i.Header).ToList();
-                return (items, ReferenceEquals(trayIcon.Command, vm.OpenMainWindowCommand));
+                return (items, ReferenceEquals(trayIcon.Command, vm.OpenMainWindowCommand), trayIcon.ToolTipText, vm.MenuModel.ToolTip);
             });
 
             await Assert.That(labels).Contains("Open kcap");
             await Assert.That(labels).Contains("Quit");
             await Assert.That(commandIsOpen).IsTrue();
+            // The tooltip is the icon's accessible name on Windows, so it follows the state as the menu does.
+            await Assert.That(tooltip).IsEqualTo(expectedTooltip);
         });
     }
 

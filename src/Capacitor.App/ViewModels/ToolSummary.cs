@@ -107,9 +107,10 @@ public static class ToolSummary {
         _                      => "Tool",
     };
 
-    /// Human verb for a built-in tool row whose input carries no prose description of its own.
+    /// The past-tense verb a built-in tool row opens with, whichever vendor recorded it. A prose
+    /// description the call carries is the row's detail, never its verb; a question has no verb.
     public static string? RowLabel(string name, ToolCategory category, string? inputJson) {
-        if (category == ToolCategory.Question || ToolDetail.RawForKey(inputJson, "description").Length > 0) return null;
+        if (category == ToolCategory.Question) return null;
         switch (name.ToLowerInvariant()) {
             case "write" or "write_file":                       return "Wrote file";
             case "ls":                                          return "Listed files";
@@ -122,6 +123,9 @@ public static class ToolSummary {
             case "resume_agent":                                return "Resumed agent";
             case "list_agents":                                 return "Listed agents";
         }
+        // A patch whose headers name no file says only that it was a patch.
+        if (category == ToolCategory.Edit && ToolDetail.PatchTargets(inputJson, category) is { } targets)
+            return targets.Count switch { 0 => "Applied patch", 1 => "Edited file", _ => "Edited files" };
         return category switch {
             ToolCategory.Read      => "Read file",
             ToolCategory.Edit      => "Edited file",

@@ -1,4 +1,6 @@
 using Avalonia;
+using Avalonia.Automation;
+using Avalonia.Automation.Peers;
 using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Threading;
@@ -49,6 +51,26 @@ public class AppIconTests {
                 Dispatcher.UIThread.RunJobs();
                 await Assert.That(headerIcon.IsEffectivelyVisible).IsFalse();
             } finally { window.Close(); }
+        });
+    }
+
+    /// An unnamed icon stays out of what a screen reader walks; a named one is an image that
+    /// speaks its name, with none of the glyph's drawing parts beneath it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Only_a_named_icon_is_exposed_to_assistive_technology() {
+        await RunOnUiAsync(async () => {
+            var plain = ControlAutomationPeer.CreatePeerForElement(new AppIcon { Kind = LucideIconKind.Check });
+            var named = new AppIcon { Kind = LucideIconKind.Check };
+            AutomationProperties.SetName(named, "Done");
+            var peer = ControlAutomationPeer.CreatePeerForElement(named);
+
+            await Assert.That(plain.IsControlElement()).IsFalse();
+            await Assert.That(plain.IsContentElement()).IsFalse();
+            await Assert.That(peer.IsControlElement()).IsTrue();
+            await Assert.That(peer.GetAutomationControlType()).IsEqualTo(AutomationControlType.Image);
+            await Assert.That(peer.GetName()).IsEqualTo("Done");
+            await Assert.That(peer.GetChildren()).IsEmpty();
         });
     }
 }

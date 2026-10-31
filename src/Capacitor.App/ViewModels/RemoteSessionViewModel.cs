@@ -274,7 +274,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             LastReads<PullRequestSnapshot>? pullRequestSnapshots = null, Action<string>? pullRequestLinksChanged = null,
             SubagentEventsReader? readSubagent = null, AccountReadings? readings = null, IMessageSenderSource? senders = null,
             IRemoteAgentsService? remoteAgents = null, IAppNotifier? notifier = null, IObservable<string?>? appSubject = null,
-            IServerSessionsService? serverSessions = null) {
+            IServerSessionsService? serverSessions = null, WorkContextLayout? workContextLayout = null) {
         _drafts = drafts;
         _time = time;
         _permissions = permissions;
@@ -296,11 +296,12 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
                 ShowsArtefactsTab = show;
                 if (!show && IsArtefactsActive) ActiveTab = RemoteTab.Chat;
             }).DisposeWith(_disposables);
-        var runs = _runs = new SessionRuns(time);
+        var runs = _runs = new SessionRuns(time) { OpensSubagents = readSubagent is not null };
         commands?.Track($"remote:{row.Id}", runs).DisposeWith(_disposables);
         WorkContext = new WorkContextViewModel(_presence, workContext, time, opener, runs,
             requestSignIn, signInCompleted, actions.OpenWorkItemInWeb, plans, planActivity,
-            artefacts: Artefacts, isRemote: true);
+            artefacts: Artefacts, isRemote: true, sessionOnly: row.Origin == AgentOrigin.Server, serverLane: lane.Status,
+            layout: workContextLayout);
         WorkContext.RunOpened += OpenSubagent;
         _disposables.Add(Disposable.Create(() => WorkContext.RunOpened -= OpenSubagent));
         // An open subagent belongs to the session it was opened from.
@@ -320,7 +321,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
                 }).DisposeWith(_disposables);
         lane.Status.Select(s => s.State).DistinctUntilChanged().Skip(1)
             .Where(state => state == ServerLaneState.Connected).ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(_ => { PullRequests?.Reconnected(); WorkContext.Reconnected(); }).DisposeWith(_disposables);
+            .Subscribe(_ => PullRequests?.Reconnected()).DisposeWith(_disposables);
 
         WorkContext.PullRequests = PullRequests;
         _accessStates.Where(s => s == SessionAccessState.Established)
@@ -504,8 +505,14 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         var sessionId = _workAccessDenied ? null : _row.SessionId;
         _presence.OnNext(new AgentStatusDto(_row.Id, _row.Kind, _row.Vendor, _row.RepoPath, _row.Status,
             null, null, null, _row.CreatedAt, _row.Model, _row.RequesterDisplay,
-            Title: _row.Title, SessionId: sessionId, Branch: _row.Branch));
+            Title: _row.Title, WorktreePath: _row.WorktreePath, WorkLocation: _row.WorkLocation,
+            BorrowedFrom: _row.BorrowedFrom, SessionId: sessionId, Branch: _row.Branch));
         if (string.IsNullOrEmpty(sessionId)) PullRequests?.ClearSession();
+    }
+
+    /// Reopening a refused session asks the server again; a genuine revocation answers Denied again.
+    public void RecheckAccess() {
+        if (Access == RemoteSessionAccess.Denied && _leasedSession is { } sessionId) _access.RecheckDenied(sessionId);
     }
 
     void AcquireLease(string sessionId) {

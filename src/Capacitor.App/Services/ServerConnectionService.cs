@@ -221,7 +221,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
                     closeReason = await closed.Task.ConfigureAwait(false);
 
                 if (!ct.IsCancellationRequested)
-                    Publish(generation, new(ServerLaneState.Retrying, closeReason?.Message));
+                    Publish(generation, new(ServerLaneState.Retrying, closeReason?.Message, Failure: LaneFailures.Unanswered(closeReason)));
             } catch (OperationCanceledException) {
                 break;
             } catch (Exception ex) when (IsUnauthorized(ex)) {
@@ -232,7 +232,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
                 ParkSignedOutCore(generation, ex.Message);
                 return;
             } catch (Exception ex) {
-                Publish(generation, new(ServerLaneState.Retrying, ex.Message));
+                Publish(generation, new(ServerLaneState.Retrying, ex.Message, Failure: LaneFailures.Unanswered(ex)));
             } finally {
                 _streams = null;
                 _hub = null;

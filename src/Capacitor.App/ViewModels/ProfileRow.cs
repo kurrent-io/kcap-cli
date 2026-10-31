@@ -16,12 +16,19 @@ public sealed record ProfileRow(string Name, string? ServerUrl, bool IsActive, b
     };
 
     public bool HasServer => ServerUrl is { Length: > 0 };
-    /// Signed in is the normal state, so only a status that needs something is shown.
-    public bool ShowsStatus => Status is not (ProfileCredentialStatus.NoServer or ProfileCredentialStatus.SignedIn
-        or ProfileCredentialStatus.NoSignInNeeded);
+    /// Signed in is the normal state, so only a status that needs something is shown, and a server that takes
+    /// no sign-in, so its row is not read as one missing a credential.
+    public bool ShowsStatus => Status is not (ProfileCredentialStatus.NoServer or ProfileCredentialStatus.SignedIn);
+
+    /// How this app and the daemon are connected through this profile right now; null for a profile neither uses.
+    /// Being in use says nothing about this, nor does a stored credential.
+    public string? Connection { get; init; }
+
+    /// The connection is down for a reason someone has to act on.
+    public bool ConnectionNeedsAttention { get; init; }
 
     /// A profile in use that cannot reach its server is the one that needs you now.
-    public bool StatusNeedsAttention => ShowsStatus && (IsActive || IsBound);
+    public bool StatusNeedsAttention => ShowsStatus && Status is not ProfileCredentialStatus.NoSignInNeeded && (IsActive || IsBound);
 
     /// The blank profile every config starts with, never given a server: nothing to show or do.
     public bool IsPlaceholder => Name == ProfileConfig.DefaultName && !HasServer && !IsActive && !IsBound;

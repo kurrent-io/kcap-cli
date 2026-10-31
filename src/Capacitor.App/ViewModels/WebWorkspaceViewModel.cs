@@ -23,26 +23,26 @@ public sealed class WebWorkspaceViewModel : ReactiveObject, IDisposable {
         _local = local is { IsLocalServer: true } ? local : null;
 
         var changes = _local is null ? Observable.Return(Unit.Default)
-            : _local.WhenAnyValue(x => x.ServerDown, x => x.IsStarting, x => x.Visible,
+            : _local.WhenAnyValue(x => x.ServerDown, x => x.IsStarting, x => x.StartOffered,
                 (_, _, _) => Unit.Default);
         _disposables.Add(changes.Subscribe(_ => this.RaisePropertyChanged(nameof(Label))));
         OpenCommand = ReactiveCommand.CreateFromTask(OpenAsync,
             changes.Select(_ => _url is not null && !(_local?.IsStarting ?? false)
-                && !(_local is { ServerDown: true, Visible: false }))
+                && !(_local is { ServerDown: true, StartOffered: false }))
                 .ObserveOn(RxSchedulers.MainThreadScheduler));
         _disposables.Add(OpenCommand);
     }
 
     public bool IsVisible => _url is not null;
     public string Label => _local is { IsStarting: true } ? "Starting server…"
-        : _local is { ServerDown: true, Visible: true } ? "Start server and open dashboard" : "Open dashboard";
+        : _local is { ServerDown: true, StartOffered: true } ? "Start server and open dashboard" : "Open dashboard";
     public string Tooltip => $"Open {_url} in your browser";
     public ReactiveCommand<Unit, Unit> OpenCommand { get; }
 
     async Task OpenAsync() {
         if (_url is null || _shutdown.IsCancellationRequested) return;
         if (_local is { ServerDown: true } local) {
-            if (!local.Visible) return;
+            if (!local.StartOffered) return;
             if (!await local.StartAsync()) {
                 if (!_shutdown.IsCancellationRequested)
                     _notify(local.Message ?? "The local server could not be started.");

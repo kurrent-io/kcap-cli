@@ -406,7 +406,7 @@
         <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         <Setter Property="TextWrapping" Value="Wrap" />
     </Style>
-    <Style Selector="TextBlock.profileStatus.attention">
+    <Style Selector="TextBlock.profileStatus.attention, TextBlock.profileConnection.attention">
         <Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" />
     </Style>
     <Style Selector="SelectableTextBlock.settingsErrorDetail">

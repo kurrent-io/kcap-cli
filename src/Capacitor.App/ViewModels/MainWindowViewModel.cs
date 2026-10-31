@@ -6,6 +6,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.LocalEdition;
 using Avalonia.Media;
 using Capacitor.App.Services;
 using Capacitor.App.Views;
@@ -60,49 +61,27 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     ObservableAsPropertyHelper<string>? _daemonName;
     public string DaemonName => _daemonName?.Value ?? "";
 
-    // Compact rail label: the daemon semver alone — build metadata stays off the line.
-    ObservableAsPropertyHelper<string>? _versionDisplay;
-    public string VersionDisplay => _versionDisplay?.Value ?? "";
-
     ObservableAsPropertyHelper<string>? _serverUrl;
     public string ServerUrl => _serverUrl?.Value ?? "";
 
-    // Single-word presentation of the OVERALL connection situation (local attach State first,
-    // falling back to the daemon's own upstream Connection only once State is Connected — see
-    // ConnectionDisplayFor). Capitalized, in-progress words get a trailing ellipsis ("Connecting…").
-    ObservableAsPropertyHelper<string>? _connectionDisplay;
-    public string ConnectionDisplay => _connectionDisplay?.Value ?? "";
+    ObservableAsPropertyHelper<RailAlert?>? _alert;
+    /// The footer's one status line, null while everything works: component health and versions
+    /// live in Settings › About, so a healthy rail shows none.
+    public RailAlert? Alert => _alert?.Value;
 
-    // The color ConnectionDisplay is painted in — the word itself carries the status, so this
-    // and the text come from parallel switches over one bucketing.
     ObservableAsPropertyHelper<IBrush>? _statusBrush;
+    /// The alert's tone. The text carries the status, so it is painted rather than given a dot.
     public IBrush StatusBrush => _statusBrush?.Value ?? Paint(StatusColors.Unavailable);
+
+    ObservableAsPropertyHelper<System.Windows.Input.ICommand?>? _alertActionCommand;
+    /// The command behind the alert's recovery action; null when the alert offers none.
+    public System.Windows.Input.ICommand? AlertActionCommand => _alertActionCommand?.Value;
 
     ObservableAsPropertyHelper<bool>? _showsUpdateContext;
     public bool ShowsUpdateContext => _showsUpdateContext?.Value ?? false;
     public string UpdateContextName => LocalStack is not null ? "kcap local" : TenantName.Length > 0 ? TenantName : "kcap";
 
-    // "n of m agents" only while Connected — active_agents is a display count, never capacity.
-    // Empty otherwise, which is what hides it: the service still retains the last snapshot
-    // across disconnects, so a count would go on reading as live.
-    ObservableAsPropertyHelper<string>? _agentCountText;
-    public string AgentCountText => _agentCountText?.Value ?? "";
-
-    // False until a snapshot has a daemon name or a displayable version. The help chip
-    // then shares the status line; a second row with nothing in it would leave the chip
-    // sitting under that line.
-    ObservableAsPropertyHelper<bool>? _showsDaemonLine;
-    public bool ShowsDaemonLine => _showsDaemonLine?.Value ?? false;
-
     internal const string RestartPendingMessage = "The daemon is waiting for active turns. It restarts when the configured wait ends. Long turns may be interrupted. Eligible agents resume if auto-resume is on. Other sessions may need attention.";
-
-    // The daemon has a restart-after-update queued (DaemonRestartPendingWatcher) and we are
-    // attached to it: a passive marker only, the restart is the daemon's own.
-    ObservableAsPropertyHelper<bool>? _restartPending;
-    public bool RestartPending => _restartPending?.Value ?? false;
-
-    ObservableAsPropertyHelper<string?>? _restartPendingText;
-    public string? RestartPendingText => _restartPendingText?.Value;
 
     internal const string BackgroundPriorityMessage = "Daemon runs at background priority — agent terminals lag under load.";
 
@@ -138,22 +117,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     ObservableAsPropertyHelper<string?>? _reason;
     public string? Reason => _reason?.Value;
 
-    // The server lane's silent-deafness diagnostic — informational only, never blocking; null
-    // while the lane is healthy or absent.
-    ObservableAsPropertyHelper<string?>? _serverLaneTip;
-    public string? ServerLaneTip => _serverLaneTip?.Value;
-
-    ObservableAsPropertyHelper<bool>? _connectionHasDetail;
-    public bool ConnectionHasDetail => _connectionHasDetail?.Value ?? false;
-
-    public const string ConnectionStatusTip = "Connection to the daemon and server";
-    public const string DaemonNameTip = "Name of the daemon on this machine";
-
     /// Caption under the URL in the org label's hover — the org is what you point at, the
     /// server it talks to is what the hover tells you.
     public const string ServerUrlTip = "kcap server for this organization";
-    public const string VersionIdentityTip = "Version of the kcap daemon on this machine";
-    public const string AgentCountTip = "Agents running on this daemon";
 
     readonly BehaviorSubject<string?> _startMessageChanges = new(null);
     readonly Subject<Unit> _launcherNudges = new();
@@ -202,7 +168,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     /// The active profile's name — the tenant slug (profiles are named after it at sign-in).
     /// "" when absent or when the name is the literal built-in "default" (hiding that segment
-    /// so the rail footer does not read as a second "Default" next to connection state).
+    /// so the rail footer does not read as a second "Default").
     public string TenantName { get; }
 
     /// The local stack's rail row beside the daemon's; null unless the server is this machine's local installation.
@@ -367,11 +333,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// The Sessions rail. Null means this window has no rail to keep in sync.
     /// </param>
     /// <param name="laneStatus">
-    /// The app's own server lane (IServerLane.Status), for the footer's ServerLaneTip diagnostic
-    /// and the connection row's hover. Null means the hover stays on ConnectionStatusTip.
+    /// The app's own server lane (IServerLane.Status): its sign-in state and diagnostic reach the
+    /// footer alert. Null means neither ever shows.
     /// </param>
     /// <param name="restartPending">
-    /// DaemonRestartPendingWatcher.Pending. Null means the indicator never shows.
+    /// DaemonRestartPendingWatcher.Pending. Null means the alert for it never shows.
     /// </param>
     /// <param name="originOf">
     /// Which lane an agent id belongs to, for routing a click at the right workspace. Null reads
@@ -533,24 +499,13 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .ToProperty(this, x => x.DaemonName, "")
                 .DisposeWith(disposables);
 
-            _showsDaemonLine = snapshots
-                .Select(s => !string.IsNullOrEmpty(s.Daemon.Name) || StripBuildMetadata(s.Daemon.Version).Length > 0)
-                .ToProperty(this, x => x.ShowsDaemonLine, false)
-                .DisposeWith(disposables);
-
-            _versionDisplay = snapshots.Select(s => StripBuildMetadata(s.Daemon.Version))
-                .ToProperty(this, x => x.VersionDisplay, "")
-                .DisposeWith(disposables);
-
             _serverUrl = snapshots.Select(s => s.Daemon.ServerUrl)
                 .ToProperty(this, x => x.ServerUrl, "")
                 .DisposeWith(disposables);
 
-            // Seeded with "" so this fires even before the FIRST snapshot ever arrives (a daemon
-            // never previously connected has nothing in Snapshots yet) — ConnectionDisplayFor/
-            // StatusDotFor only read the daemon-connection word once status.State is Connected,
-            // where DaemonClientService's ordering guarantee (snapshot applied before the Connected
-            // transition, see its own comment) means a real value is always already there by then.
+            // Seeded with "" so this fires before the first snapshot arrives. AlertFor reads the word
+            // only once the attach is Connected, and DaemonClientService applies the snapshot before
+            // that transition, so a real value is there by then.
             var daemonConnection = snapshots.Select(s => s.Daemon.Connection).StartWith("");
 
             // Expired sign-in is a separate diagnosis from the daemon hub word: auto-reconnect
@@ -563,8 +518,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .DistinctUntilChanged()
                 .ObserveOn(RxSchedulers.MainThreadScheduler);
 
-            // The daemon's own sign-in explains a hub that will not connect, so the footer says
-            // Signed out instead of reconnecting forever. The app's Sign in repairs it only when the
+            // The daemon's own sign-in explains a hub that will not connect, so the footer asks for
+            // a sign-in instead of reconnecting forever. The app's Sign in repairs it only when the
             // daemon runs on the app's own profile.
             var daemonSignIn = status
                 .CombineLatest(snapshots.Select(s => (DaemonInfoDto?)s.Daemon).StartWith((DaemonInfoDto?)null),
@@ -597,9 +552,6 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             _showsUpdateContext = updating.CombineLatest(signedOut, (active, expired) => active && !expired)
                 .ToProperty(this, x => x.ShowsUpdateContext, false)
                 .DisposeWith(disposables);
-            _connectionDisplay = status.CombineLatest(daemonConnection, signedOut, ConnectionDisplayFor)
-                .ToProperty(this, x => x.ConnectionDisplay, "")
-                .DisposeWith(disposables);
 
             // The rail describes the local daemon even while the launcher targets a remote machine.
             // Keep its lifecycle failure independent of the selected machine's banner.
@@ -610,17 +562,6 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                     Home is { } home ? home.WhenAnyValue(x => x.BannerFailed) : Observable.Return(false),
                     (local, banner) => local || banner)
                 .DistinctUntilChanged();
-            _statusBrush = status.CombineLatest(daemonConnection, signedOut, failed, StatusBrushFor)
-                .ToProperty(this, x => x.StatusBrush, Paint(StatusColors.Unavailable))
-                .DisposeWith(disposables);
-
-            _agentCountText = status.CombineLatest(snapshots, (st, snap) => (st, snap))
-                .Select(t => t.st.State != AttachState.Connected ? ""
-                    : t.snap.Daemon.MaxAgents == 0
-                        ? $"{t.snap.Daemon.ActiveAgents} agents (unlimited)"
-                        : $"{t.snap.Daemon.ActiveAgents} of {t.snap.Daemon.MaxAgents} agents")
-                .ToProperty(this, x => x.AgentCountText, "")
-                .DisposeWith(disposables);
 
             // Only while attached: a marker left by a daemon we cannot reach says nothing about
             // what the user is looking at. The watcher publishes from its poll thread, so it is
@@ -631,12 +572,37 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                     (st, pending) => pending && st.State == AttachState.Connected)
                 .DistinctUntilChanged();
 
-            _restartPending = pendingWhileConnected
-                .ToProperty(this, x => x.RestartPending, false)
-                .DisposeWith(disposables);
+            var localServer = Home?.LocalServer is { } recovery
+                ? recovery.WhenAnyValue(x => x.ServerDown, x => x.IsStarting, x => x.StartOffered, x => x.Condition,
+                    (down, starting, offered, condition) => (Down: down, Starting: starting, Offered: offered, Condition: condition))
+                : Observable.Return((Down: false, Starting: false, Offered: false, Condition: (LocalServerCondition?)null));
+            var updateFailed = (LocalStack ?? Home?.LocalStack) is { } localStack
+                ? localStack.WhenAnyValue(x => x.Attention)
+                : Observable.Return(false);
+            var localAlert = localServer.CombineLatest(updateFailed,
+                    (server, update) => LocalServerAlertFor(update, server.Starting, server.Down, server.Offered, server.Condition))
+                .DistinctUntilChanged();
+            var diagnostic = (laneStatus ?? Observable.Return(new ServerLaneStatus(ServerLaneState.Dormant)))
+                .Select(s => s.Diagnostic)
+                .DistinctUntilChanged()
+                .ObserveOn(RxSchedulers.MainThreadScheduler);
+            var moving = (movingToWindowsService ?? Observable.Return(false)).ObserveOn(RxSchedulers.MainThreadScheduler);
 
-            _restartPendingText = pendingWhileConnected.Select(p => p ? RestartPendingMessage : null)
-                .ToProperty(this, x => x.RestartPendingText, (string?)null)
+            var alert = status
+                .CombineLatest(daemonConnection, signedOut, failed, signInVisible, moving,
+                    (st, connection, expired, broken, canSignIn, isMoving) => (st, connection, expired, broken, canSignIn, isMoving))
+                .CombineLatest(localAlert, pendingWhileConnected, diagnostic,
+                    (d, local, pending, detail) => AlertFor(d.st, d.connection, d.expired, d.broken, d.canSignIn, d.isMoving,
+                        local, pending, detail))
+                .DistinctUntilChanged();
+            _alert = alert
+                .ToProperty(this, x => x.Alert, (RailAlert?)null)
+                .DisposeWith(disposables);
+            _statusBrush = alert.Select(a => Paint(a?.Tone ?? StatusColors.Unavailable))
+                .ToProperty(this, x => x.StatusBrush, Paint(StatusColors.Unavailable))
+                .DisposeWith(disposables);
+            _alertActionCommand = alert.Select(a => CommandFor(a?.Recovery ?? RailRecovery.None))
+                .ToProperty(this, x => x.AlertActionCommand, (System.Windows.Input.ICommand?)null)
                 .DisposeWith(disposables);
 
             var backgroundSource = (backgroundPriority ?? Observable.Return(false)).ObserveOn(RxSchedulers.MainThreadScheduler);
@@ -683,19 +649,6 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
             _reason = status.Select(ReasonText)
                 .ToProperty(this, x => x.Reason, (string?)null)
-                .DisposeWith(disposables);
-
-            var lane = (laneStatus ?? Observable.Empty<ServerLaneStatus>())
-                .ObserveOn(RxSchedulers.MainThreadScheduler);
-
-            _serverLaneTip = lane
-                .Select(s => s.Diagnostic)
-                .ToProperty(this, x => x.ServerLaneTip, (string?)null)
-                .DisposeWith(disposables);
-
-            _connectionHasDetail = lane
-                .Select(s => !string.IsNullOrWhiteSpace(s.Diagnostic))
-                .ToProperty(this, x => x.ConnectionHasDetail, false)
                 .DisposeWith(disposables);
 
             // A connect clears the progress lines back to the standing identity report, whichever of the two the
@@ -872,6 +825,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         // lane's same-id agent is a different agent, and a remote host the local daemon has taken
         // over no longer owns the id at all: both are a real swap.
         if (CurrentWorkspace is { } open && open.AgentId == agentId && !Superseded(open, lane)) {
+            if (open is RemoteSessionViewModel remote) remote.RecheckAccess();
             if (revealInRail) Rail?.NotifySessionOpened(agentId, lane);
             return true;
         }
@@ -917,14 +871,57 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             CloseWorkspace();
     }
 
-    /// The coordinator's close paths. Before shutdown, even a close-to-hide with no workspace
-    /// open must retire an in-flight launch's captured generation. Shutdown already released the
-    /// workspace; its final window-close notification must not touch disposed dependencies.
+    /// Before shutdown, even a close with no workspace open must retire an in-flight launch's
+    /// captured generation. Shutdown already released the workspace; its final window-close
+    /// notification must not touch disposed dependencies.
     public void CloseWorkspace() {
         if (_shutdownLatched || _navigation.ShutdownLatched) return;
         SwapTo(null);
         // Nothing is selected, so nothing keeps a pin; an open page may still be pinning its hit.
         if (!IsSearchOpen) ReleasePinUnless(null);
+    }
+
+    (string AgentId, bool Terminal, bool PullRequest, bool Artefacts, PullRequestSubjectDto? Subject, int Generation)? _parked;
+
+    /// Hide-to-tray: releases the workspace as CloseWorkspace does, but remembers the session and its
+    /// tab for RestoreParkedWorkspace. The pin stays, since a session opened from search may have no
+    /// rail row without it. A repeated park with nothing open keeps what the first one remembered.
+    public void ParkWorkspace() {
+        if (_shutdownLatched || _navigation.ShutdownLatched) return;
+        var parked = _parked;
+        if (CurrentWorkspace is { } open) {
+            var (terminal, pullRequest, artefacts) = open switch {
+                WorkspaceViewModel local => (local.IsTerminalActive, local.IsPullRequestActive, local.IsArtefactsActive),
+                RemoteSessionViewModel remote => (remote.IsTerminalActive, remote.IsPullRequestActive, remote.IsArtefactsActive),
+                _ => (false, false, false),
+            };
+            parked = (open.AgentId, terminal, pullRequest, artefacts, open.PullRequests?.Selected?.Subject, 0);
+        }
+        SwapTo(null);
+        _parked = parked is { } p
+            ? (p.AgentId, p.Terminal, p.PullRequest, p.Artefacts, p.Subject, _navigation.Generation)
+            : null;
+    }
+
+    /// Reopens what the last hide-to-tray parked, on the tab it showed, unless anything has
+    /// navigated since. The lane is resolved afresh, as a rail click would, so a session that moved
+    /// lanes while hidden opens where it is now, and one no lane lists any longer leaves the launcher.
+    public void RestoreParkedWorkspace() {
+        if (_parked is not { } parked) return;
+        _parked = null;
+        if (parked.Generation != _navigation.Generation || CurrentWorkspace is not null) return;
+        if (_originOf(parked.AgentId) is not { } lane || !OpenSessionCore(parked.AgentId, lane, revealInRail: true)) {
+            if (!IsSearchOpen) ReleasePinUnless(null);
+            return;
+        }
+
+        switch (CurrentWorkspace) {
+            case WorkspaceViewModel local when parked.Terminal: local.ShowTerminalCommand.Execute().Subscribe(); break;
+            case RemoteSessionViewModel remote when parked.Terminal: remote.ShowTerminalCommand.Execute().Subscribe(); break;
+            case WorkspaceViewModel local when parked.Artefacts: local.ShowArtefactsCommand.Execute().Subscribe(); break;
+            case RemoteSessionViewModel remote when parked.Artefacts: remote.ShowArtefactsCommand.Execute().Subscribe(); break;
+            case { } open when parked.PullRequest: open.OpenPullRequest(parked.Subject); break;
+        }
     }
 
     static IObservable<bool> CanRefreshOpenWork(ISessionWorkspace? workspace) =>
@@ -1031,7 +1028,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 }),
             _ => Disposable.Empty,
         };
-        var watch = new CompositeDisposable(moves, ended);
+        // A registry row only disappears; the accepted stop is what says its agent finished.
+        var finished = workspace is RemoteSessionViewModel { IsSessionOnly: false } stopped && _directory is { } finishedIn
+            ? stopped.Ended.Subscribe(_ => { if (SessionOf(stopped) is { } sessionId) finishedIn.NoteFinished(sessionId); })
+            : Disposable.Empty;
+        var watch = new CompositeDisposable(moves, ended, finished);
         // A watch that fired while it was still being armed has already swapped the workspace and
         // armed the next one: keeping this subscription would retire that one unwatched.
         if (ReferenceEquals(CurrentWorkspace, workspace)) _rebind.Disposable = watch;
@@ -1080,12 +1081,26 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     enum HandoffOutcome { ServerRow, Returned, Lapsed }
 
-    /// Waits for the server's row for the session, within the grace, unless the daemon row comes
-    /// back live first. `closeWithout` is the local workspace's rule: nothing arrived, so close as
-    /// the rail already dropped it; a hosted remote workspace keeps its retained transcript instead.
+    /// Waits for the server's row for the session unless the daemon row comes back live first. The
+    /// listing keeps the session while the server moves it from live to ended, so the rail does not
+    /// drop the open row in between. `closeWithout` is the local workspace's rule: once the grace has
+    /// passed and the rail no longer shows the daemon row, nothing will arrive, so close; a row the
+    /// rail still shows keeps the workspace open, and a hosted remote workspace keeps its retained
+    /// transcript until the server row arrives.
     void ArmHandoff(ISessionWorkspace open, IAgentDirectory directory, string sessionId, string daemonKey, bool closeWithout) {
         // The server spells the id its own way, so its row is found by identity rather than by key.
         AgentRow? EndedServerRow() => directory.Rows.Items.FirstOrDefault(r => r.IsEndedSession && SessionIds.SameSession(r.SessionId, sessionId));
+        var listed = directory.Rows.Items.FirstOrDefault(r => r.Origin == AgentOrigin.Server && SessionIds.SameSession(r.SessionId, sessionId))?.SessionId;
+        _sessions?.Keep(listed ?? SessionIds.Canonical(sessionId));
+        var daemonRowGone = directory.Rows.Connect()
+            .Where(changes => changes.Any(change => change.Key == daemonKey && change.Reason == ChangeReason.Remove))
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Select(_ => HandoffOutcome.Lapsed);
+        var lapsed = closeWithout
+            ? After(Time, AgentDirectory.HandoverGrace).Take(1).SelectMany(_ => directory.Rows.Lookup(daemonKey).HasValue
+                ? daemonRowGone
+                : Observable.Return(HandoffOutcome.Lapsed))
+            : Observable.Never<HandoffOutcome>();
         // The daemon row has returned only when a change to that row after arming shows it live and
         // the directory still says so when the change is read: the directory can carry the row as
         // running at the instant the workspace learns it completed, another row's revision proves
@@ -1105,13 +1120,16 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                     : (HandoffOutcome?)null)
             .Where(outcome => outcome is not null)
             .Select(outcome => outcome!.Value)
-            .Merge(After(Time, AgentDirectory.HandoverGrace).Select(_ => HandoffOutcome.Lapsed))
+            .Merge(lapsed)
             .Take(1);
         _handoff.Disposable = outcomes.Subscribe(outcome => {
             if (!ReferenceEquals(CurrentWorkspace, open)) return;
             switch (outcome) {
-                case HandoffOutcome.ServerRow when EndedServerRow() is { } row: Rebind(open, AgentOrigin.Server, row.Id, terminal: false, pullRequest: false); break;
-                case HandoffOutcome.Lapsed when closeWithout: CloseWorkspace(); break;
+                // One directory edit can drop the daemon row and add the server row together.
+                case HandoffOutcome.ServerRow or HandoffOutcome.Lapsed when EndedServerRow() is { } row:
+                    Rebind(open, AgentOrigin.Server, row.Id, terminal: false, pullRequest: false);
+                    break;
+                case HandoffOutcome.Lapsed: CloseWorkspace(); break;
             }
         });
     }
@@ -1166,9 +1184,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         return plus < 0 ? version : version[..plus];
     }
 
-    static string Capitalize(string word) => word.Length == 0 ? word : char.ToUpperInvariant(word[0]) + word[1..];
-
-    /// Named profiles stay visible beside Connected; the built-in "default" profile does not —
+    /// Named profiles stay visible in the footer; the built-in "default" profile does not —
     /// that word collides with the model/effort "Default" elsewhere in the chrome.
     internal static string ProfileLabelForRail(string? profileName) =>
         string.IsNullOrWhiteSpace(profileName)
@@ -1176,7 +1192,24 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             ? ""
             : profileName;
 
-    internal const string SignedOutDisplay = "Signed out";
+    internal const string SignInRequiredText    = "Sign in required";
+    internal const string DaemonConnectingText  = "Connecting to the daemon…";
+    internal const string DaemonRestartingText  = "Daemon restarting…";
+    internal const string DaemonStoppedText     = "Daemon not running";
+    internal const string DaemonMismatchText    = "Daemon version doesn't match";
+    internal const string DaemonUnreachableText = "Daemon unreachable";
+    internal const string ServerConnectingText  = "Connecting to the server…";
+    internal const string ReconnectingText      = "Reconnecting…";
+    internal const string ServerLostText        = "Server disconnected";
+    internal const string RestartPendingText    = "Daemon restart pending";
+    internal const string LiveUpdatesText       = "Live updates may be missing";
+    internal const string LocalStoppedText      = "Local server stopped";
+    internal const string LocalChangingText     = "Local server changing…";
+    internal const string LocalRemovedText      = "Local server removed";
+    internal const string LocalNeedsAttentionText = "Local server needs attention";
+    internal const string LocalPortTakenText    = "Local server port in use";
+    internal const string LocalStartingText     = "Starting the local server…";
+    internal const string LocalUpdateFailedText = "Local server update failed";
 
     /// Whether the daemon reports its own sign-in as what keeps its hub from connecting, and whether
     /// signing the app in repairs that: only with a resolved app profile, and the daemon on it or not
@@ -1188,49 +1221,69 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                      && (daemon.Profile is null || string.Equals(daemon.Profile, appProfile, StringComparison.Ordinal)))
             : (false, false);
 
-    // Single word for the merged status line. Expired sign-in wins: waiting on the daemon hub
-    // will not restore a session. Otherwise local attach State is checked FIRST — the daemon's
-    // own upstream Connection word is only meaningful once State is Connected (see the
-    // daemonConnection seam comment above); an Unreachable/Connecting attach state always wins
-    // regardless of whatever Connection word a stale retained snapshot might carry.
-    internal static string ConnectionDisplayFor(
-            AttachStatus status, string daemonConnection, bool signInExpired = false) {
-        if (signInExpired) return SignedOutDisplay;
-        if (status.State == AttachState.Connecting) return "Connecting…";
-        if (status.State == AttachState.Unreachable)
-            return status.Reason switch {
-                IncompatibleReason => "Incompatible",
-                ExpectedDaemonRestart.Reason => "Restarting…",
-                _ => "Unreachable",
-            };
-
-        var word = Capitalize(daemonConnection);
-        return daemonConnection is "connecting" or "reconnecting" ? word + "…" : word;
-    }
-
-    /// The launcher's tones: red when something broke, amber when it needs the user, the spinner's grey while
-    /// work is in progress. Kept as its own switch, not derived from the text,
-    /// so a wording change there cannot retune it.
+    /// The footer's alert, or null while everything works. An expired sign-in wins: waiting on the
+    /// daemon hub will not restore a session. The attach comes next, because the daemon's own
+    /// upstream word means something only while attached, and a retained snapshot can carry a stale
+    /// one. A local server problem explains a daemon that cannot reach its server, so it outranks
+    /// that word. Tones follow the launcher card: red when something broke, amber when it needs the
+    /// user, grey while work is in progress.
     /// <param name="failed">The launcher's card reports a failure: versions that cannot work together, a local
     /// server that refused the app, or a daemon still down after a start that did not work.</param>
-    internal static IBrush StatusBrushFor(
-            AttachStatus status, string daemonConnection, bool signInExpired = false, bool failed = false) {
-        if (signInExpired) return Paint(failed ? StatusColors.Disrupted : StatusColors.InProgress);
-        if (status.State == AttachState.Connecting) return Paint(StatusColors.Pending);
+    /// <param name="moving">The daemon is moving to the Windows service, which brings it back itself.</param>
+    /// <param name="local">The local server's own alert, from <see cref="LocalServerAlertFor"/>.</param>
+    internal static RailAlert? AlertFor(
+            AttachStatus status, string daemonConnection, bool signedOut = false, bool failed = false,
+            bool canSignIn = false, bool moving = false, RailAlert? local = null, bool restartPending = false,
+            string? laneDiagnostic = null) {
+        var needsUser = failed ? StatusColors.Disrupted : StatusColors.InProgress;
+        if (signedOut) return new(SignInRequiredText, needsUser, canSignIn ? RailRecovery.SignIn : RailRecovery.None);
+        if (status.State == AttachState.Connecting) return new(DaemonConnectingText, StatusColors.Pending);
         if (status.State == AttachState.Unreachable)
             return status.Reason switch {
-                IncompatibleReason => Paint(StatusColors.Disrupted),
-                ExpectedDaemonRestart.Reason => Paint(StatusColors.Pending),
-                _ => Paint(failed ? StatusColors.Disrupted : StatusColors.InProgress),
+                IncompatibleReason => new(DaemonMismatchText, StatusColors.Disrupted, RailRecovery.Reconnect,
+                    HomeViewModel.DaemonIncompatibleNotice),
+                ExpectedDaemonRestart.Reason => new(DaemonRestartingText, StatusColors.Pending, Detail: HomeViewModel.DaemonRestartingNotice),
+                UnreachableReason when moving => new(DaemonRestartingText, StatusColors.Pending),
+                UnreachableReason => new(DaemonStoppedText, needsUser, RailRecovery.StartDaemon, HomeViewModel.DaemonDownNotice),
+                _ => new(DaemonUnreachableText, needsUser, RailRecovery.Reconnect),
             };
+        if (local is not null) return local;
 
         return daemonConnection switch {
-            "connected" => Paint(StatusColors.Connected),
-            "connecting" or "reconnecting" => Paint(StatusColors.Pending),
-            "disconnected" => Paint(StatusColors.InProgress),
-            _ => Paint(StatusColors.Unavailable),
+            "connecting"   => new(ServerConnectingText, StatusColors.Pending),
+            "reconnecting" => new(ReconnectingText, StatusColors.Pending),
+            "disconnected" => new(ServerLostText, StatusColors.InProgress),
+            _ when restartPending => new(RestartPendingText, StatusColors.InProgress, Detail: RestartPendingMessage),
+            _ when !string.IsNullOrWhiteSpace(laneDiagnostic) => new(LiveUpdatesText, StatusColors.InProgress, Detail: laneDiagnostic),
+            _ => null,
         };
     }
+
+    /// The local server's alert: null when it runs, or when there is no local server at all.
+    /// <param name="canStart">The launcher's Start is offered: an installation that exists and nothing else owns.</param>
+    /// <param name="condition">What the local root's files say; null until they have been read.</param>
+    internal static RailAlert? LocalServerAlertFor(bool updateFailed, bool starting, bool stopped, bool canStart,
+            LocalServerCondition? condition = null) =>
+        updateFailed ? new(LocalUpdateFailedText, StatusColors.Disrupted)
+        : starting   ? new(LocalStartingText, StatusColors.Pending)
+        : !stopped   ? null
+        : condition switch {
+            LocalServerCondition.Changing => new(LocalChangingText, StatusColors.Pending, Detail: condition.Value.Explanation),
+            LocalServerCondition.PortTaken => new(LocalPortTakenText, StatusColors.InProgress, Detail: condition.Value.Explanation),
+            LocalServerCondition.Uninstalled or LocalServerCondition.Purged or LocalServerCondition.NotInstalled
+                => new(LocalRemovedText, StatusColors.InProgress, Detail: condition.Value.Explanation),
+            LocalServerCondition.FilesMissing or LocalServerCondition.Interrupted or LocalServerCondition.Unreadable
+                => new(LocalNeedsAttentionText, StatusColors.InProgress, Detail: condition.Value.Explanation),
+            _ => new(LocalStoppedText, StatusColors.InProgress, canStart ? RailRecovery.StartLocalServer : RailRecovery.None),
+        };
+
+    System.Windows.Input.ICommand? CommandFor(RailRecovery recovery) => recovery switch {
+        RailRecovery.SignIn           => SignInCommand,
+        RailRecovery.StartDaemon      => StartDaemonCommand,
+        RailRecovery.Reconnect        => RetryCommand,
+        RailRecovery.StartLocalServer => Home?.LocalServer?.StartCommand,
+        _                             => null,
+    };
 
     async Task InvokeStartAsync(Func<CancellationToken, Task> start, CancellationToken ct) {
         StartMessage = StartingMessage;

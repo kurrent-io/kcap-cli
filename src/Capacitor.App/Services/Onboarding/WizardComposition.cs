@@ -296,7 +296,7 @@ internal static class WizardComposition {
             : null;
         // The name persists to the same fresh identity the enabler gates on, falling back to ActiveProfile.
         var machineName = new MachineNameViewModel(options.Root, options.DefaultDaemonName, () => options.ResolveIdentity()?.Profile);
-        var machine     = MachineLabel(Environment.MachineName);
+        var machine     = MachineLabel(Environment.MachineName, HostName());
         // ONE detection feed for both vendor steps: two would probe the login shell twice for the
         // same answer, and the two steps' vendor lists could then disagree.
         var detect = options.DetectionFeed(options.Probe);
@@ -361,7 +361,8 @@ internal static class WizardComposition {
                 local,
                 local ? LocalEndpoints.Read(root).Active?.ServerUrl : null,
                 daemon.Busy,
-                options.Surface.AttentionText ?? options.Surface.StatusText);
+                options.Surface.AttentionText ?? options.Surface.StatusText,
+                harnesses.PathResolved);
         }, options.UrlOpener, PrepareWorkspaceAsync, serviceChanged,
             // The same page Help and support → Set up kcap leads through to connect an agent.
             addAgent: () => shell?.TryGoTo(WizardStepId.Harnesses));
@@ -439,10 +440,28 @@ internal static class WizardComposition {
         return name == configured ? null : name;
     }
 
-    /// The machine's own name as a person would say it: no ".local", lower case.
-    internal static string MachineLabel(string machineName) {
-        var name = machineName.EndsWith(".local", StringComparison.OrdinalIgnoreCase) ? machineName[..^6] : machineName;
+    internal const string UnnamedMachine = "this machine";
 
-        return name.ToLowerInvariant();
+    /// The machine's own name as a person would say it: no ".local", lower case. Windows reports its
+    /// NetBIOS name, cut to 15 characters, so the host name it was cut from wins. A generated name of
+    /// hex digits and dashes, as a sandbox or a container gets, reads like an error code in a sentence.
+    internal static string MachineLabel(string machineName, string? hostName = null) {
+        var label = hostName?.Split('.')[0] is { } host && host.Length > machineName.Length
+            && host.StartsWith(machineName, StringComparison.OrdinalIgnoreCase) ? host : machineName;
+        if (label.EndsWith(".local", StringComparison.OrdinalIgnoreCase)) label = label[..^6];
+        label = label.ToLowerInvariant();
+
+        return label.Length == 0 || LooksGenerated(label) ? UnnamedMachine : label;
+    }
+
+    static bool LooksGenerated(string label) =>
+        label.Length >= 8 && label.Any(char.IsAsciiDigit) && label.All(c => char.IsAsciiHexDigitLower(c) || c == '-');
+
+    static string? HostName() {
+        try {
+            return System.Net.Dns.GetHostName();
+        } catch (System.Net.Sockets.SocketException) {
+            return null;
+        }
     }
 }
