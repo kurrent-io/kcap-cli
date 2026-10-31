@@ -4,6 +4,7 @@ using Capacitor.App.Services;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Pages;
 using Capacitor.Cli.Core.Plans;
 
 namespace Capacitor.App.Tests.Unit;
@@ -15,6 +16,7 @@ public class ServerPlanArtifactSourceTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     const string Session = "0123456789abcdef0123456789abcdef";
+    static readonly Capacitor.Cli.Core.Http.ArtefactDto Page = new("a1", "Poll", "u1", "org", 1, DateTimeOffset.UtcNow, false, "https://srv.test/pages/a1");
 
     /// Answers each request with the next status, and the pages route with one listed page.
     sealed class SequencedHandler(Queue<HttpStatusCode> statuses) : HttpMessageHandler {
@@ -94,5 +96,54 @@ public class ServerPlanArtifactSourceTests {
         await Assert.That(source.CachedPages(Session)).IsNull();
         await Assert.That(source.Cached(Session)).IsNull();
         await source.DisposeAsync();
+    }
+
+    [Test]
+    public async Task Content_and_bridge_calls_without_a_profile_read_signed_out() {
+        var (source, handlers) = Build(Config.Root, profiles: null, new());
+        using var payload = System.Text.Json.JsonDocument.Parse("{}");
+
+        await Assert.That(await source.ReadContentAsync("a1", null, CancellationToken.None)).IsTypeOf<PageContentRead.SignedOut>();
+        await Assert.That((await source.SubmitAsync("a1", 1, payload.RootElement, CancellationToken.None)).Status).IsEqualTo(401);
+        await Assert.That((await source.MineAsync("a1", 1, CancellationToken.None)).Status).IsEqualTo(401);
+        await Assert.That((await source.ResultsAsync("a1", 1, CancellationToken.None)).Status).IsEqualTo(401);
+        await Assert.That(await source.ResultsAccessAsync("a1", Page, CancellationToken.None)).IsEqualTo(PageResultsAccess.SignedOut);
+        await Assert.That(handlers).IsEmpty();
+        await source.DisposeAsync();
+    }
+
+    [Test]
+    public async Task A_signed_out_content_read_retires_the_client_and_drops_the_cached_lists() {
+        using var handler = new SequencedHandler(new([HttpStatusCode.OK, HttpStatusCode.OK, HttpStatusCode.Unauthorized, HttpStatusCode.OK]));
+        var built = 0;
+        var source = new ServerPlanArtifactSource(Config.Root, Resolutions.At("http://server.test", Config.Root), ProfileOverrides.None,
+            MachineAuth.None, (_, _, _, _) => {
+                built++;
+                return Task.FromResult((new HttpClient(handler, disposeHandler: false), AuthStatus.Ok));
+            });
+        await source.ReadAsync(Session, CancellationToken.None);
+        await source.ReadPagesAsync(Session, CancellationToken.None);
+
+        var content = await source.ReadContentAsync("p1", null, CancellationToken.None);
+
+        await Assert.That(content).IsTypeOf<PageContentRead.SignedOut>();
+        await Assert.That(source.Cached(Session)).IsNull();
+        await Assert.That(source.CachedPages(Session)).IsNull();
+        await source.ReadAsync(Session, CancellationToken.None);
+        await Assert.That(built).IsEqualTo(2);
+        await source.DisposeAsync();
+    }
+
+    [Test]
+    public async Task The_viewer_name_is_the_stored_sign_in_name_or_empty() {
+        await using var named = new ServerPlanArtifactSource(Config.Root, null, ProfileOverrides.None, MachineAuth.None, viewerName: _ => Task.FromResult<string?>("Ada"));
+        await using var unnamed = new ServerPlanArtifactSource(Config.Root, null, ProfileOverrides.None, MachineAuth.None, viewerName: _ => Task.FromResult<string?>(null));
+        await using var failing = new ServerPlanArtifactSource(Config.Root, null, ProfileOverrides.None, MachineAuth.None, viewerName: _ => throw new IOException("locked"));
+        await using var none = new ServerPlanArtifactSource(Config.Root, null, ProfileOverrides.None, MachineAuth.None);
+
+        await Assert.That(await named.ViewerNameAsync(CancellationToken.None)).IsEqualTo("Ada");
+        await Assert.That(await unnamed.ViewerNameAsync(CancellationToken.None)).IsEqualTo("");
+        await Assert.That(await failing.ViewerNameAsync(CancellationToken.None)).IsEqualTo("");
+        await Assert.That(await none.ViewerNameAsync(CancellationToken.None)).IsEqualTo("");
     }
 }
