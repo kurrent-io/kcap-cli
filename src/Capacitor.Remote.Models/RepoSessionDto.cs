@@ -25,5 +25,8 @@ public sealed record RepoSessionDto {
     [JsonPropertyName("last_prompt")]       public string? LastPrompt { get; init; }
     /// Null when the server does not send the field at all; withheld below full access.
     [JsonPropertyName("pull_requests")]     public RepoSessionPullRequests? PullRequests { get; init; }
+    /// Where the session was recorded. Listed to the owner only; null from an older server, and for a
+    /// session recorded before its CLI reported it.
+    [JsonPropertyName("recording")]         public RepoSessionRecordingDto? Recording { get; init; }
     [JsonPropertyName("repo")]              public RepoSessionRepositoryDto? Repo { get; init; }
 }

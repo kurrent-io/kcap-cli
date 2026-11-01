@@ -269,6 +269,11 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     /// Still on the launch's stand-in row: the registry has not listed the agent yet.
     public bool IsPlaceholder => _row.IsPlaceholder;
 
+    readonly LocalMachine? _localMachine;
+
+    /// Whether the listing recorded this session on this machine. False without the app's own machine id.
+    public bool RecordedOnThisMachine => _row.RecordedOn(_localMachine?.Id);
+
     public RemoteSessionViewModel(
             AgentRow row, IAgentDirectory directory, SessionAccessService access, IPermissionService permissions,
             AgentActionService actions, IServerLane lane, SessionDetailReader readDetail, IUrlOpener opener, TimeProvider time, IWorkContextSource workContext,
@@ -280,8 +285,10 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             SubagentEventsReader? readSubagent = null, AccountReadings? readings = null, IMessageSenderSource? senders = null,
             IRemoteAgentsService? remoteAgents = null, IAppNotifier? notifier = null, IObservable<string?>? appSubject = null,
             IServerSessionsService? serverSessions = null, WorkContextLayout? workContextLayout = null,
-            Func<AgentRow, HandoffComposerViewModel>? handoff = null, HandoffOutcomeReader? handoffOutcomes = null) {
+            Func<AgentRow, HandoffComposerViewModel>? handoff = null, LocalMachine? localMachine = null,
+            HandoffOutcomeReader? handoffOutcomes = null) {
         _drafts = drafts;
+        _localMachine = localMachine;
         _handoffFactory = handoff;
         _time = time;
         _permissions = permissions;

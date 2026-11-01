@@ -50,10 +50,17 @@ public sealed record AgentRow(
         string? Branch = null,
         // The app's own stand-in on the remote lane, until the registry publishes the launch.
         bool IsPlaceholder = false,
+        // Where the listing says the session was recorded; null below ownership, from an older server, and on a daemon row.
+        RepoSessionRecordingDto? Recording = null,
         string? AccountLabel = null) {
 
     /// A session the server lists as ended; a daemon row's Completed is not this.
     public bool IsEndedSession => Origin == AgentOrigin.Server && Status == "Completed";
+
+    /// Whether the listing recorded the session on the machine whose id is <paramref name="machineId"/>.
+    /// A missing id on either side is another machine.
+    public bool RecordedOn(string? machineId) =>
+        machineId is { Length: > 0 } && Recording?.MachineId is { } recorded && recorded == machineId;
 
     public static AgentRow FromLocal(AgentStatusDto dto, RepoIdentity repo) => new(
         Key: $"local:{dto.Id}", Origin: AgentOrigin.Local, Id: dto.Id, SessionId: dto.SessionId, Kind: dto.Kind,
@@ -102,7 +109,7 @@ public sealed record AgentRow(
             OwnerAvatarUrl: dto.Owner?.AvatarUrl,
             LastActivityAt: dto.LastActivityAt.UtcDateTime, EndedAt: dto.EndedAt?.UtcDateTime,
             IsStale: dto.Stale, IsTerminalSession: active && !hostedPresentation, AccessLevel: dto.AccessLevel,
-            ListedPullRequests: dto.PullRequests, Branch: dto.Branch);
+            ListedPullRequests: dto.PullRequests, Branch: dto.Branch, Recording: dto.Recording);
     }
 
     static string CanonicalRemoteStatus(string status) => status.ToLowerInvariant() switch {

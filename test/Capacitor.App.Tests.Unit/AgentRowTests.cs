@@ -17,6 +17,31 @@ public class AgentRowTests {
     };
 
     [Test]
+    public async Task Server_row_carries_the_recording_identity() {
+        var recording = new RepoSessionRecordingDto { MachineId = "m-1", DaemonName = "laptop", AccountId = "acct-1", ConfigDir = "/Users/me/.claude" };
+
+        var row = AgentRow.FromServer(Listed() with { Recording = recording }, hostedPresentation: false);
+
+        await Assert.That(row.Recording).IsEqualTo(recording);
+        await Assert.That(row.RecordedOn("m-1")).IsTrue();
+        await Assert.That(row.RecordedOn("m-2")).IsFalse();
+    }
+
+    /// A listing from an older server, or for a session recorded before its CLI reported it, names no
+    /// machine; neither it nor an app with no machine id of its own may read as this machine.
+    [Test]
+    public async Task A_missing_machine_id_is_never_this_machine() {
+        var unrecorded = AgentRow.FromServer(Listed(), hostedPresentation: false);
+        var noMachine  = AgentRow.FromServer(Listed() with { Recording = new() { ConfigDir = "/Users/me/.claude" } }, hostedPresentation: false);
+        var recorded   = AgentRow.FromServer(Listed() with { Recording = new() { MachineId = "m-1" } }, hostedPresentation: false);
+
+        await Assert.That(unrecorded.RecordedOn("m-1")).IsFalse();
+        await Assert.That(noMachine.RecordedOn("m-1")).IsFalse();
+        await Assert.That(recorded.RecordedOn(null)).IsFalse();
+        await Assert.That(recorded.RecordedOn("")).IsFalse();
+    }
+
+    [Test]
     public async Task Server_row_maps_an_ended_listing_row() {
         var row = AgentRow.FromServer(Listed(), hostedPresentation: false);
 
