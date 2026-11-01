@@ -47,7 +47,10 @@ public sealed record DaemonInfoDto(
     Dictionary<string, VendorModelOption[]>? VendorModelsByAccount = null,
     // The signed-in account's stable subject, echoed back in a rename so the daemon can refuse
     // when the client was looking at another account. Null = older daemon or signed out.
-    string? UserSubject = null);
+    string? UserSubject = null,
+    // Harness tokens this daemon runs a local-edition server's headless prompts on, the list it advertises on
+    // DaemonConnect; gated by the headless/1 capability. Null from an older daemon, which a client reads as unknown.
+    string[]? HeadlessVendors = null);
 
 /// <summary>
 /// <see cref="Status"/> is the daemon's internal status string VERBATIM (PascalCase, open
