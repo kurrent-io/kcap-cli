@@ -64,20 +64,23 @@ public static class AgentsSkillsInstaller {
     ];
 
     public static bool Install(string sourceDir, string targetDir) {
-        if (!Directory.Exists(sourceDir)) return false;
+        if (TryInstall(sourceDir, targetDir) is not { } failure) return true;
+
+        Console.Error.WriteLine($"Could not install agent skills: {failure.Reason}");
+
+        return false;
+    }
+
+    /// <summary>Copies the skills, returning why it could not, or null once they are in place.</summary>
+    public static SkillsInstallFailure? TryInstall(string sourceDir, string targetDir) {
+        if (!Directory.Exists(sourceDir)) return new($"kcap's plugin has no skills folder ({sourceDir})", PluginIncomplete: true);
 
         var missing = SourceNames
             .Where(n => !File.Exists(Path.Combine(sourceDir, n, "SKILL.md")))
             .ToList();
 
-        if (missing.Count > 0) {
-            Console.Error.WriteLine(
-                $"Cannot install agent skills: missing SKILL.md for skill(s) under {sourceDir}: "
-              + string.Join(", ", missing)
-            );
-
-            return false;
-        }
+        if (missing.Count > 0)
+            return new($"kcap's plugin is missing SKILL.md for {string.Join(", ", missing)} ({sourceDir})", PluginIncomplete: true);
 
         try {
             Directory.CreateDirectory(targetDir);
@@ -99,11 +102,9 @@ public static class AgentsSkillsInstaller {
             SkillsFileManifest.Write(targetDir, SourceNames.Select(n => "kcap-" + n));
             WriteMarker(targetDir);
 
-            return true;
+            return null;
         } catch (Exception ex) {
-            Console.Error.WriteLine($"Could not install agent skills: {ex.Message}");
-
-            return false;
+            return new(ex.Message, PluginIncomplete: false);
         }
     }
 

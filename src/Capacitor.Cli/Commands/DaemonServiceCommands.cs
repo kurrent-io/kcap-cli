@@ -175,8 +175,8 @@ sealed class DaemonServiceCommands(
     }
 
     /// <summary>launchd reads a plist only when the job loads, so the rewrite takes a reload that keeps the
-    /// daemon's agents for it to resume; systemd reads the unit at the next start, which the daemon is asked
-    /// for once idle.</summary>
+    /// daemon's agents for it to resume; systemd and kcap-service read the environment at the next start, which
+    /// the daemon is asked for once idle; a Scheduled Task's wrapper is read only when the task starts.</summary>
     async Task<PathRefresh> RefreshPathAsync(string path) {
         switch (manager) {
             case LaunchdServiceManager launchd: {
@@ -203,6 +203,27 @@ sealed class DaemonServiceCommands(
                     // the next run reads the rewrite as applied.
                     systemd.RestoreUnit(id, previous);
                     return new(UnitRefresh.Deferred);
+                } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) {
+                    return new(UnitRefresh.Failed, ex.Message);
+                }
+            case WindowsServiceManager windows:
+                try {
+                    if (windows.SetEnvironment(id, "PATH", path) is not { } previous) return new(UnitRefresh.Current);
+                    switch (await RequestRestartAsync("when-idle")) {
+                        case "restarting": return new(UnitRefresh.Reloaded);
+                        case "queued":     return new(UnitRefresh.NotLoaded);
+                    }
+                    if (manager.Query(id).State != ServiceState.Running) return new(UnitRefresh.NotLoaded);
+
+                    windows.RestoreEnvironment(id, previous);
+                    return new(UnitRefresh.Deferred);
+                } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) {
+                    return new(UnitRefresh.Failed, ex.Message);
+                }
+            case WindowsScheduledTaskServiceManager tasks:
+                try {
+                    var outcome = tasks.SetEnvironment(id, "PATH", path, () => Proceeds(StopForReload(id, "now", whenIdle: true)), out var error);
+                    return new(outcome, error);
                 } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) {
                     return new(UnitRefresh.Failed, ex.Message);
                 }

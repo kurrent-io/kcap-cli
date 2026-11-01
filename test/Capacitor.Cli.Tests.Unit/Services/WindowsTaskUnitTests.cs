@@ -10,6 +10,35 @@ public class WindowsTaskUnitTests {
         ["--max-agents", "8"]);
 
     [Test]
+    public async Task WithEnvironmentValue_replaces_the_variable_in_place() {
+        var wrapper = WindowsTaskUnit.Wrapper(Spec());
+
+        var rewritten = WindowsTaskUnit.WithEnvironmentValue(wrapper, "PATH", @"C:\bin;C:\npm 50%")!;
+
+        await Assert.That(WindowsTaskUnit.EnvFromWrapper(rewritten)["PATH"]).IsEqualTo(@"C:\bin;C:\npm 50%");
+        await Assert.That(rewritten.Replace("set \"PATH=C:\\bin;C:\\npm 50%%\"", "set \"PATH=C:\\bin\"")).IsEqualTo(wrapper);
+    }
+
+    /// <summary>A unit installed without the variable gets it ahead of the relaunch loop, where cmd sets it once
+    /// for every daemon the loop starts.</summary>
+    [Test]
+    public async Task WithEnvironmentValue_adds_a_missing_variable_before_the_loop() {
+        var spec    = Spec() with { Environment = new Dictionary<string, string> { ["KCAP_PROFILE"] = "work" } };
+        var wrapper = WindowsTaskUnit.Wrapper(spec);
+
+        var lines = WindowsTaskUnit.WithEnvironmentValue(wrapper, "PATH", @"C:\npm")!.Split("\r\n");
+
+        await Assert.That(Array.IndexOf(lines, "set \"PATH=C:\\npm\"")).IsEqualTo(Array.IndexOf(lines, "set \"KCAP_PROFILE=work\"") + 1);
+        await Assert.That(Array.IndexOf(lines, "set \"PATH=C:\\npm\"")).IsLessThan(Array.IndexOf(lines, ":run"));
+        await Assert.That(lines.Length).IsEqualTo(wrapper.Split("\r\n").Length + 1);
+    }
+
+    [Test]
+    public async Task WithEnvironmentValue_refuses_a_file_kcap_did_not_write() {
+        await Assert.That(WindowsTaskUnit.WithEnvironmentValue("\"C:\\other.exe\"\r\n", "PATH", @"C:\npm")).IsNull();
+    }
+
+    [Test]
     public async Task TaskName_is_per_id() {
         await Assert.That(WindowsTaskUnit.TaskName("laptop")).IsEqualTo("kcap-daemon-laptop");
     }

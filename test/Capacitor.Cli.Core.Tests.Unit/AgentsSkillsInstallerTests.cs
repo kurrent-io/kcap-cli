@@ -182,6 +182,46 @@ public class AgentsSkillsInstallerTests {
         await Assert.That(Directory.Exists(dst.PathTo("kcap-recap"))).IsFalse();
     }
 
+    /// <summary>A plugin directory copied without its subfolders has no skills folder at all, which must say so
+    /// and point at the plugin rather than at the target.</summary>
+    [Test]
+    public async Task TryInstall_names_a_missing_skills_folder_as_the_plugin_being_incomplete() {
+        using var plugin = new TempDir();
+        using var dst    = new TempDir();
+        var src = plugin.PathTo("skills");
+
+        var failure = AgentsSkillsInstaller.TryInstall(src, dst.Path);
+
+        await Assert.That(failure).IsNotNull();
+        await Assert.That(failure!.PluginIncomplete).IsTrue();
+        await Assert.That(failure.Reason).Contains("no skills folder");
+        await Assert.That(failure.Reason).Contains(src);
+    }
+
+    [Test]
+    public async Task TryInstall_names_the_skills_missing_from_the_plugin() {
+        using var src = new TempDir();
+        using var dst = new TempDir();
+
+        foreach (var name in SourceNames.Where(n => n != "pages")) src.CreateFile([name, "SKILL.md"], $"---\nname: {name}\n---\nbody");
+
+        var failure = AgentsSkillsInstaller.TryInstall(src.Path, dst.Path);
+
+        await Assert.That(failure!.PluginIncomplete).IsTrue();
+        await Assert.That(failure.Reason).Contains("pages");
+    }
+
+    [Test]
+    public async Task TryInstall_returns_null_once_the_skills_are_in_place() {
+        using var src = new TempDir();
+        using var dst = new TempDir();
+
+        foreach (var name in SourceNames) src.CreateFile([name, "SKILL.md"], $"---\nname: {name}\n---\nbody");
+
+        await Assert.That(AgentsSkillsInstaller.TryInstall(src.Path, dst.PathTo(".agents", "skills"))).IsNull();
+        await Assert.That(AgentsSkillsInstaller.IsCurrent(dst.PathTo(".agents", "skills"))).IsTrue();
+    }
+
     [Test]
     public async Task Install_returns_false_when_SKILL_md_is_missing() {
         using var src = new TempDir();

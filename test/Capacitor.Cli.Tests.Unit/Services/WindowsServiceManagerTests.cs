@@ -269,6 +269,30 @@ public class WindowsServiceManagerTests {
         await Assert.That(env!["KCAP_PROFILE"]).IsEqualTo("work");
     }
 
+    /// <summary>kcap-service reads the environment file at each launch, so setting a variable is a file write
+    /// the next start picks up; the previous file comes back for a refresh that cannot apply it.</summary>
+    [Test]
+    public async Task SetEnvironment_rewrites_the_environment_file_and_returns_the_old_one() {
+        const string previous = """{"KCAP_PROFILE":"work"}""";
+        var file = Config.CreateFile("daemon-service-laptop.env.json", previous);
+        _store.Current = new ServiceEnrollment("laptop", Daemon, null, null, file);
+
+        var replaced = Manager().SetEnvironment("laptop", "PATH", @"C:\npm");
+
+        await Assert.That(replaced).IsEqualTo(previous);
+        await Assert.That(_written[file]).Contains("\"PATH\":\"C:\\\\npm\"");
+        await Assert.That(_written[file]).Contains("\"KCAP_PROFILE\":\"work\"");
+    }
+
+    [Test]
+    public async Task SetEnvironment_leaves_a_current_value_alone() {
+        var file = Config.CreateFile("daemon-service-laptop.env.json", """{"PATH":"C:\\npm"}""");
+        _store.Current = new ServiceEnrollment("laptop", Daemon, null, null, file);
+
+        await Assert.That(Manager().SetEnvironment("laptop", "PATH", @"C:\npm")).IsNull();
+        await Assert.That(_written).IsEmpty();
+    }
+
     [Test]
     public async Task GenerateFiles_is_the_captured_environment_as_json() {
         var files = Manager().GenerateFiles(Spec());

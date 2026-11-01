@@ -69,6 +69,32 @@ sealed class WindowsServiceManager(
         }
     }
 
+    /// <summary>Sets one variable in the enrollment's environment file, which kcap-service reads at each launch of the
+    /// daemon. Returns the file as it was, for <see cref="RestoreEnvironment"/>; null when nothing is enrolled under
+    /// the name or the file already carries the value.</summary>
+    public string? SetEnvironment(string serviceId, string key, string value) {
+        if (Enrolled(serviceId)?.EnvironmentFile is not { } file || ReadExisting(file) is not { } previous) return null;
+
+        Dictionary<string, string> env;
+        try {
+            env = JsonSerializer.Deserialize(previous, ServicePipeJsonContext.Default.DictionaryStringString)
+               ?? throw new InvalidOperationException($"{file} holds no environment");
+        } catch (JsonException ex) {
+            throw new InvalidOperationException($"{file} is not an environment kcap wrote ({ex.Message})");
+        }
+
+        if (env.TryGetValue(key, out var current) && current == value) return null;
+
+        env[key] = value;
+        _write(file, JsonSerializer.Serialize(env, ServicePipeJsonContext.Default.DictionaryStringString));
+
+        return previous;
+    }
+
+    public void RestoreEnvironment(string serviceId, string previous) {
+        if (Enrolled(serviceId)?.EnvironmentFile is { } file) _write(file, previous);
+    }
+
     public ServiceQuery Query(string serviceId) {
         if (Enrolled(serviceId) is not { } enrollment) return new ServiceQuery(LabelProbe.Absent, false, ServiceState.NotInstalled, null, null);
 

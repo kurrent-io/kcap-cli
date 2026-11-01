@@ -27,7 +27,7 @@ public class CodingAgentsStepMuseTests {
             InstallCopilotHooks: _ => true,
             InstallGeminiHooks: _ => true,
             CapacitorOnPath: () => onPath,
-            InstallAgentSkills: (_, _) => true,
+            InstallAgentSkills: (_, _) => null,
             CleanLegacyCodexSkills: _ => false,
             InstallMuseHooks: path => { hookCalls.Add(path); return hooksOk; },
             RegisterMuseMcp: () => { mcpCalls.Add(SettingsPath); return mcp; });

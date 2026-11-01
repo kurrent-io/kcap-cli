@@ -17,6 +17,17 @@ public class ServiceEnvironmentTests {
         await Assert.That(env.ContainsKey("IRRELEVANT")).IsFalse();
     }
 
+    /// <summary>A Windows process block usually spells the search path <c>Path</c>; the unit must still carry it,
+    /// or the setup that installed it reads the unit's search path as stale at once.</summary>
+    [Test]
+    public async Task Build_captures_the_search_path_whatever_its_case_on_windows() {
+        var src = new Dictionary<string, string> { ["Path"] = @"C:\Windows\system32;C:\Users\u\AppData\Roaming\npm" };
+
+        await Assert.That(ServiceEnvironment.Build(null, src, Config.Root, isWindows: true)["PATH"])
+            .IsEqualTo(@"C:\Windows\system32;C:\Users\u\AppData\Roaming\npm");
+        await Assert.That(ServiceEnvironment.Build(null, src, Config.Root, isWindows: false).ContainsKey("PATH")).IsFalse();
+    }
+
     /// <summary>The root comes from the installer's context, not from its environment: a unit
     /// inherits nothing, so capturing the variable would bake a root only when one happened to be
     /// exported and leave the supervisor's own HOME to decide otherwise.</summary>
