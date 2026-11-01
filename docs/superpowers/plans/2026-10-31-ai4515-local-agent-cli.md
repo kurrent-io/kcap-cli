@@ -127,7 +127,7 @@ Done 2026-10-31: the published v1.4.1-beta.2 local bundle run in the foreground 
 
 **Server contract:** `POST /api/admin/intelligence`, kcap-server `src/Capacitor.Api.Public.Abstractions/Setup/`. Request `{mode, harness?, vendor?, model?, api_key?, import_outcomes?}`; response `{mode, harness, vendor, import_outcomes, backlog_session_touches_per_day, resolving}`; a refusal is 400 with `{"error": "<code>"}` (`unknown_mode`, `not_offered`, `unknown_harness`, `unknown_vendor`, `key_required`, `model_required`, `key_rejected: …`, `key_pinned_above_store: …`, `import_outcomes_pinned_above_store`). The local edition authenticates nobody, so the CLI posts over the loopback lane with no bearer.
 
-**Answers:** one token names the whole answer: `claude` or `codex` (the local agent), `anthropic`, `openai`, `openrouter` or `cohere` (a provider), `none`. A provider's key is read from its own variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `COHERE_API_KEY`) or a hidden prompt, never from argv. OpenAI has no server default model, so it needs `--model`.
+**Answers:** one token names the whole answer: `claude` or `codex` (the local agent), `anthropic`, `openai`, `openrouter` or `cohere` (a provider), `none`. A provider's key is read from its own variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `COHERE_API_KEY`) or a hidden prompt, never from argv. OpenAI has no server default model, so without `--model` the CLI sends `gpt-5-mini`; the other vendors send no model and run the server's default.
 
 ### Task 7: Core contract and probe
 
@@ -181,4 +181,4 @@ Done 2026-10-31: the published v1.4.1-beta.2 local bundle run in the foreground 
 
 - [ ] README (`## Getting started` and the `setup` and `local` sections), help text
 - [ ] Core, Cli and App suites; `dotnet publish -c Release` with no IL2026/IL3050
-- [ ] End-to-end against an isolated local server (`KCAP_LOCAL_ROOT` under a short `/private/tmp` path, `Local__Port`): `kcap local intelligence claude --json` and `none`, and a refused provider key; record the result in the PR
+- [x] End-to-end against an isolated local server (`KCAP_LOCAL_ROOT` under a short `/private/tmp` path, `Local__Port`): `kcap local intelligence claude --json` and `none`, and a refused provider key; record the result in the PR
