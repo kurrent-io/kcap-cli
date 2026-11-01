@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Daemon.Harness.Claude;
 
@@ -47,6 +48,24 @@ internal static class CodexSessionRolloutLocator {
         No,
         /// <summary>No parseable <c>payload.cwd</c> in the inspected lines — may still be being written; re-check later.</summary>
         Unknown,
+    }
+
+    /// <summary>The rollout of a session whose id the agent already holds, by the id in its file name, anywhere under
+    /// <paramref name="sessionsRoot"/>: a resumed session's rollout can be weeks old, so neither the spawn-time filter
+    /// nor the recent-days scan would find it. Null for an id that is not a GUID or a session with no rollout yet.</summary>
+    internal static (string SessionId, string Path)? TryLocateSession(string sessionsRoot, string sessionId) {
+        if (SessionIds.Canonical(sessionId) is not { } wanted || !Guid.TryParseExact(wanted, "N", out var guid) || !Directory.Exists(sessionsRoot))
+            return null;
+
+        try {
+            foreach (var file in Directory.EnumerateFiles(sessionsRoot, $"rollout-*{guid:D}.jsonl", SearchOption.AllDirectories)) {
+                if (CodexPaths.ExtractSessionIdFromFileName(file) == wanted) return (wanted, file);
+            }
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            // The tree moved mid-scan; discovery polls again.
+        }
+
+        return null;
     }
 
     /// <summary>

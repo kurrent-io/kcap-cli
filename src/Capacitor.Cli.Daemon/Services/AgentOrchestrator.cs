@@ -2565,6 +2565,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// that was cleaned up, is <c>launch_failed_cleaned</c>; a registered agent is <c>launch_executed</c>.</summary>
     async Task<CommandOutcome> HandleAdmittedLaunchAsync(
             LaunchAgentCommand cmd, LaunchHold hold, CancellationToken cancel = default, Action<AgentInstance>? onPublished = null) {
+        if (cmd.ResumeInPlace is not { } inPlace) return await HandleAdmittedLaunchAsync(cmd, hold, null, cancel, onPublished);
+
+        // Held from arrival: the server took the lease before sending, and consent can take minutes.
+        await using var lease = KeepSourceLease(inPlace.ReservationToken, inPlace.SourceSessionId);
+
+        return await HandleAdmittedLaunchAsync(cmd, hold, inPlace, cancel, onPublished);
+    }
+
+    async Task<CommandOutcome> HandleAdmittedLaunchAsync(
+            LaunchAgentCommand cmd, LaunchHold hold, ResumeInPlaceLaunch? inPlace, CancellationToken cancel, Action<AgentInstance>? onPublished) {
         var agentId = cmd.AgentId;
 
         // A caller-selected ACP permission preset is a pure, side-effect-free rejection (wrong-vendor /
@@ -2587,6 +2597,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // Before consent for the same reason as the preset guard above.
         if (HandoffLaunchRefusal(cmd, resuming: false) is { } handoffRefusal) {
             await _server.LaunchFailedAsync(cmd.AgentId, handoffRefusal);
+
+            return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
+        }
+
+        if (inPlace is not null && await InPlaceLaunchRefusalAsync(cmd, inPlace) is { } inPlaceRefusal) {
+            await _server.LaunchFailedAsync(cmd.AgentId, inPlaceRefusal);
 
             return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
         }
@@ -2617,7 +2633,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
         }
 
-        return await LaunchAdmittedAsync(cmd, consent, hold, cancel: cancel, onPublished: onPublished);
+        return inPlace is not null
+            ? await LaunchInPlaceAsync(cmd, inPlace, consent, hold, cancel, onPublished)
+            : await LaunchAdmittedAsync(cmd, consent, hold, cancel: cancel, onPublished: onPublished);
     }
 
     /// <summary>The admitted launch after its consent decision. A <paramref name="resume"/> relaunches a
@@ -2977,7 +2995,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 if (AttachmentIds.Validate(attachmentIds) is { } invalid)
                     throw new InvalidOperationException($"attachments_refused: {invalid}");
 
-                if (placement == AttachmentPlacement.Worktree && work == WorkLocation.BorrowedCwd)
+                if (placement == AttachmentPlacement.Worktree && work is WorkLocation.BorrowedCwd or WorkLocation.InPlace)
                     throw new InvalidOperationException(
                         $"attachments_refused: {AttachmentRefusals.NeedsOwnedWorktree}");
 
@@ -3223,7 +3241,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 string.Equals(cmd.Vendor, "codex", StringComparison.OrdinalIgnoreCase)
              && cmd.Kind == LaunchKind.Default
              && !cmd.Borrowed
-             && work == WorkLocation.OwnedWorktree
+             && work is WorkLocation.OwnedWorktree or WorkLocation.InPlace
                     ? CodexPosturePolicy.Resolve(work, isReviewFlow, cmd.CodexPosture)
                     : null;
 
@@ -4919,7 +4937,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             if (AttachmentIds.Validate(attachmentIds) is { } invalid) return RefuseAttachments(invalid);
             if (agent.Kind != LaunchKind.Default) return RefuseAttachments(AttachmentRefusals.ReviewParticipant);
 
-            if (agent.Placement == AttachmentPlacement.Worktree && agent.Work == WorkLocation.BorrowedCwd)
+            if (agent.Placement == AttachmentPlacement.Worktree && agent.Work is WorkLocation.BorrowedCwd or WorkLocation.InPlace)
                 return RefuseAttachments(AttachmentRefusals.NeedsOwnedWorktree);
 
             if (!agent.Runtime.EmitsTerminalOutput && IsQuitCommand(text))
@@ -6067,8 +6085,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     Task DetectSessionIdAsync(AgentInstance agent, string vendor, DateTime spawnedAtUtc) {
         Func<ISet<string>, (string SessionId, string Path)?>? locate = vendor.ToLowerInvariant() switch {
             "claude" => ClaudeTranscriptLocator(agent, spawnedAtUtc),
-            "codex"  => ruledOut => CodexSessionRolloutLocator.TryLocateWinner(
-                CodexPathsFor(agent.Account).Sessions, agent.Worktree.Path, spawnedAtUtc, ruledOut),
+            "codex"  => CodexRolloutLocator(agent, spawnedAtUtc),
             "muse"   => _ => MuseHostedSessionLocator.TryLocate(
                 _config.Home, _harnesses.Of<MuseHarness>().Paths, agent.Id, DateOnly.FromDateTime(_time.GetLocalNow().DateTime),
                 (agent.Runtime as MuseMspHostedAgentRuntime)?.Session),
@@ -6080,6 +6097,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         var task = RunDiscoveryAsync(agent, locate);
         agent.DiscoveryTask = task;
         return task;
+    }
+
+    /// An agent that already holds its session is found by that id: a resumed rollout predates the spawn.
+    Func<ISet<string>, (string SessionId, string Path)?> CodexRolloutLocator(AgentInstance agent, DateTime spawnedAtUtc) {
+        var sessions = CodexPathsFor(agent.Account).Sessions;
+
+        return (agent.VendorSession ?? agent.SessionId) is { } known
+            ? _ => CodexSessionRolloutLocator.TryLocateSession(sessions, known)
+            : ruledOut => CodexSessionRolloutLocator.TryLocateWinner(sessions, agent.Worktree.Path, spawnedAtUtc, ruledOut);
     }
 
     /// Null for an in-place agent with no session id: every Claude session in a borrowed folder

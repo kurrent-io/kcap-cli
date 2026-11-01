@@ -45,7 +45,7 @@ Two PRs. kcap-server (Tasks 1–3), reference line `Part of kurrent-io/kcap-cli#
 ## Review Focus
 
 1. A resume admitted and paused at consent, then a hand-off takeover of the same source: the takeover is refused `source_reserved`; denying consent releases the lease and a retried takeover is admitted. Pinned in Tasks 2 and 6.
-2. A resume whose ACP transcript bind is refused or whose Codex source claim is refused after a live row appears: one `LaunchFailed`, no runtime left, the directory untouched, the lease released, and the app's draft returns with Resume hidden. Pinned in Tasks 6 and 9.
+2. A resume whose ACP transcript bind is refused or whose Codex source claim is refused after a live row appears: a `LaunchFailed` (the vendor's own startup-failure report may precede it; the app acts on the first), no runtime left, the directory untouched, the lease released, and the app's draft returns with Resume hidden. Pinned in Tasks 6 and 9.
 3. A newer app with an older server, a newer server with an older daemon: no Resume shown, and a hand-crafted resume request is refused, never launched as an ordinary agent. Pinned in Tasks 2, 6 and 8.
 4. A retained daemon worktree resumed in place, then cleaned and the daemon restarted: the startup sweep keeps it while the agent is active or recoverable. Pinned in Task 7.
 5. A Codex session a week old: resumed with an empty and a non-empty first message, its rollout found by id. Pinned in Task 6.

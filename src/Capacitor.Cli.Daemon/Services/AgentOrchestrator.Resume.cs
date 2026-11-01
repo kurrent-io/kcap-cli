@@ -1577,7 +1577,7 @@ internal partial class AgentOrchestrator {
         var launch = entry.Launch;
         var path   = launch.WorktreePath;
 
-        if (launch.Work == WorkLocation.BorrowedCwd) return WorktreeInfo.Borrowed(path);
+        if (launch.Work is WorkLocation.BorrowedCwd or WorkLocation.InPlace) return WorktreeInfo.Borrowed(path);
 
         // An entry written before the worktree fields existed carries none of them.
         return new WorktreeInfo(
