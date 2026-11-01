@@ -803,7 +803,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             Accounts: GetAccountsSnapshot?.Invoke(),
             HeadlessVendors: RunHeadlessPromptHandler is null ? [] : GetHeadlessVendors?.Invoke() ?? [],
             SupportsScratchWorkspace: true,
-            SupportsHandoffLaunch: true);
+            SupportsHandoffLaunch: true, SupportsResumeInPlace: true);
     }
 
     async Task DaemonConnectCoreAsync(RegistrationAttempt attempt) {
