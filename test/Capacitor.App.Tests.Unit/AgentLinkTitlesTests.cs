@@ -95,6 +95,51 @@ public class AgentLinkTitlesTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task A_title_that_arrived_while_detached_shows_on_reattach() {
+        await RunOnUiAsync(async () => {
+            var (window, view, rows, labels) = ShowWithLabels($"Started {Agent}");
+            using var _ = labels;
+            try {
+                window.Content = null;
+                Settle(window);
+                rows.AddOrUpdate(Row(AgentOrigin.Remote, "990c76dd", "Build the deep-link endpoint"));
+                window.Content = view;
+                Settle(window);
+
+                await Assert.That(LinksIn(view)).IsEquivalentTo(new[] { ("Build the deep-link endpoint", Agent) });
+            } finally {
+                window.Close();
+            }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments("Started " + Agent)]
+    [Arguments("No agent here, just https://elsewhere.example/page")]
+    public async Task Reattaching_a_view_whose_links_still_read_the_same_does_not_redraw_it(string markdown) {
+        await RunOnUiAsync(async () => {
+            var (window, view, rows, labels) = ShowWithLabels(markdown);
+            using var _ = labels;
+            try {
+                rows.AddOrUpdate(Row(AgentOrigin.Remote, "990c76dd", "Build the deep-link endpoint"));
+                Settle(window);
+                var drawn = AllLinks(view).First().Block;
+
+                window.Content = null;
+                Settle(window);
+                window.Content = view;
+                Settle(window);
+
+                await Assert.That(AllLinks(view).First().Block).IsSameReferenceAs(drawn);
+            } finally {
+                window.Close();
+            }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task A_link_elsewhere_keeps_its_url() {
         await RunOnUiAsync(async () => {
             const string other = "https://elsewhere.example/agents/990c76dd";

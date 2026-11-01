@@ -61,6 +61,7 @@ public sealed class MarkdownView : ContentControl {
     readonly AgentLinkTitles _agentLinkTitles;
     // Agents linked under their short-id stand-in, whose title arriving redraws the view.
     readonly HashSet<string> _untitledAgents = new(StringComparer.Ordinal);
+    readonly Dictionary<string, string?> _agentLinkTexts = new(StringComparer.Ordinal);
     AgentLinkLabels? _watchedLinks;
     bool _attached;
     IDisposable? _titledWatch;
@@ -75,7 +76,7 @@ public sealed class MarkdownView : ContentControl {
         RunCodeProperty.Changed.AddClassHandler<MarkdownView>((view, _) => view._codeActions.ApplyRunCode());
         FlavorProperty.Changed.AddClassHandler<MarkdownView>((view, _) => view.ApplyFlavor());
         ReferenceBaseProperty.Changed.AddClassHandler<MarkdownView>((view, _) => view.Render());
-        AgentLinksProperty.Changed.AddClassHandler<MarkdownView>((view, _) => view.Render());
+        AgentLinksProperty.Changed.AddClassHandler<MarkdownView>((view, _) => view.RelabelAgentLinks());
     }
 
     public MarkdownView() {
@@ -124,7 +125,7 @@ public sealed class MarkdownView : ContentControl {
         _selectionHost = this.FindAncestorOfType<ChatTabView>();
         _selectionHost?.UpdateSelection(this);
         _attached = true;
-        WatchTitles();
+        RelabelAgentLinks();
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e) {
@@ -218,6 +219,7 @@ public sealed class MarkdownView : ContentControl {
     void Render() {
         _linkKeys.Clear();
         _untitledAgents.Clear();
+        _agentLinkTexts.Clear();
         if (ToolTip.GetTip(_viewer) is not null) ToolTip.SetTip(_viewer, null);
         if (_viewer.Markdown == Text) _viewer.Markdown = null;
         try {
@@ -232,9 +234,18 @@ public sealed class MarkdownView : ContentControl {
     }
 
     internal string? AgentLinkLabel(string url) {
-        if (GetValue(AgentLinksProperty)?.For(url) is not { } label) return null;
-        if (!label.IsTitle) _untitledAgents.Add(label.AgentId);
-        return label.Text;
+        var label = GetValue(AgentLinksProperty)?.For(url);
+        _agentLinkTexts[url] = label?.Text;
+        if (label is { IsTitle: false }) _untitledAgents.Add(label.AgentId);
+        return label?.Text;
+    }
+
+    /// The inherited labels come and go as the view is detached and reattached, and a title can land
+    /// while it is away, so redraw only when a link it drew would now read differently. A view
+    /// without labels keeps what it drew: it is detached, not shown elsewhere.
+    void RelabelAgentLinks() {
+        if (GetValue(AgentLinksProperty) is { } links && _agentLinkTexts.Any(link => links.For(link.Key)?.Text != link.Value)) Render();
+        else WatchTitles();
     }
 
     /// Watches only while attached and holding a stand-in, so a chat of settled messages subscribes to nothing.
