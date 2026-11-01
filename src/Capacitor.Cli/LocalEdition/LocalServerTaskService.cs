@@ -214,16 +214,19 @@ sealed class LocalServerTaskService(
         // Past the grace, /End and /Delete are still tried; one that times out fails the uninstall with the marker kept.
         _schtasksQuick(LocalServerTaskUnit.EndArgs(unit));
 
+        // A Task Scheduler that timed out answering the delete would stall the absence check too.
         var (exit, _, err) = _schtasksQuick(LocalServerTaskUnit.DeleteArgs(unit));
-        if (exit != 0 && !ConfirmedAbsent(unit)) throw Failed(LocalServerTaskUnit.DeleteArgs(unit), exit, err);
+        if (exit != 0 && (exit == TimedOutExit || !ConfirmedAbsent(unit))) throw Failed(LocalServerTaskUnit.DeleteArgs(unit), exit, err);
 
         if (File.Exists(LocalServerTaskUnit.WrapperPath(home, unit))) File.Delete(LocalServerTaskUnit.WrapperPath(home, unit));
         if (live(unit.Root) is null && _findServer(unit) is null) ClearStop(unit);
     }
 
+    const int TimedOutExit = -1;
+
     static (int ExitCode, string StdOut, string StdErr) Bounded(string[] args, TimeSpan budget) {
         var (exit, stdout, stderr, timedOut) = ServiceProcess.RunBounded("schtasks", args, budget);
-        return timedOut ? (-1, stdout, $"schtasks did not answer within {budget.TotalSeconds:0}s") : (exit, stdout, stderr);
+        return timedOut ? (TimedOutExit, stdout, $"schtasks did not answer within {budget.TotalSeconds:0}s") : (exit, stdout, stderr);
     }
 
     void Check(string[] args) {

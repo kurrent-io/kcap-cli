@@ -116,6 +116,20 @@ public class LocalServerTaskServiceTests {
         await Assert.That(File.Exists(StopMarker)).IsTrue();
     }
 
+    /// <summary>A Task Scheduler too slow to answer the delete would be as slow to list its tasks, so the quick path
+    /// fails at once rather than ask, and keeps the marker that stops the wrapper relaunching the server.</summary>
+    [Test]
+    public async Task A_quick_uninstall_whose_delete_times_out_fails_without_asking_again() {
+        var schtasks = new Schtasks { Results = { ["/Delete"] = (-1, "", "schtasks did not answer within 2s") } };
+        Write(WrapperPath, WrapperText);
+
+        await Assert.That(() => Service(schtasks).UninstallWithinAsync(Unit, TimeSpan.FromMilliseconds(100), CancellationToken.None))
+            .Throws<LocalLifecycleException>().WithMessageContaining("did not answer");
+
+        await Assert.That(schtasks.Calls).DoesNotContain(call => call.StartsWith("/Query", StringComparison.Ordinal));
+        await Assert.That(File.Exists(StopMarker)).IsTrue();
+    }
+
     [Test]
     public async Task A_stop_disables_the_task_breaks_the_server_and_then_ends_the_wrapper() {
         var schtasks = new Schtasks();
