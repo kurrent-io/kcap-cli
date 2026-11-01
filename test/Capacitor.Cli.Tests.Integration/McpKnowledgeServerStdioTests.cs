@@ -8,7 +8,7 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Integration;
 
 /// <summary>The real binary answers <c>kcap mcp knowledge</c>: the subcommand dispatches, the server
-/// resolves from DI, its handshake names it, it lists the eight tools, and a read scopes to the
+/// resolves from DI, its handshake names it, it lists the eleven tools, and a read scopes to the
 /// working directory's repo resolved on the first call.</summary>
 public class McpKnowledgeServerStdioTests : IDisposable {
     [TempDaemonPaths] public required TempDaemonStore Daemons { get; init; }
@@ -54,7 +54,7 @@ public class McpKnowledgeServerStdioTests : IDisposable {
             await Assert.That(init["result"]?["serverInfo"]?["name"]?.GetValue<string>()).IsEqualTo("kcap-knowledge");
 
             var list = await SendAsync(proc, RpcRequest(2, "tools/list", new JsonObject()));
-            await Assert.That(list["result"]!["tools"]!.AsArray().Count).IsEqualTo(8);
+            await Assert.That(list["result"]!["tools"]!.AsArray().Count).IsEqualTo(11);
 
             var call = await SendAsync(proc, RpcRequest(3, "tools/call", new JsonObject { ["name"] = "list_skills", ["arguments"] = new JsonObject() }));
             await Assert.That(call["result"]).IsNotNull();

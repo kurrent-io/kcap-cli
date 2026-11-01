@@ -1002,7 +1002,7 @@ Without `plan_id`, every tool acts on the session's current plan — the one it 
 kcap mcp knowledge
 ```
 
-Stdio MCP server for reading retained facts and curated skills, then fine-tuning them. `kcap setup` and `kcap plugin install` register it with each supported harness. It offers eight tools:
+Stdio MCP server for reading retained facts and curated skills, then fine-tuning them. `kcap setup` and `kcap plugin install` register it with each supported harness. It offers eleven tools:
 
 - **`list_skills`** / **`get_skill`** — browse skills and read one skill with its bodies, members, assignment pins, history and `doc_revision`.
 - **`list_facts`** / **`search_facts`** — browse retained facts or search by meaning within a repo, project or org home. Results carry a `curation_key` for writes.
@@ -1010,6 +1010,7 @@ Stdio MCP server for reading retained facts and curated skills, then fine-tuning
 - **`transition_skill`** — approve, reject, dismiss, revoke or restore a skill.
 - **`adjust_skill_members`** — exclude or include members for the next approval, or add, remove or clear assignment pins for the topic sweep to settle.
 - **`curate_fact_cluster`** — curate a fact cluster by its `curation_key`.
+- **`list_category_merges`** / **`merge_categories`** / **`dismiss_category_merge`** — review pairs of facts filed under different categories that read as the same lesson, and fold one into the other or dismiss the pair for good. The agent shows the user both texts and acts only on their decision.
 
 Reads default to the current repository and refuse to widen when none resolves. List responses include `next_cursor` for the next page. Writes carry an `operation_id`; skill writes use the `doc_revision` from `get_skill` or the last write as `expected_doc_revision`. Server refusals pass through with their codes and any current revision they return so an agent can recover. To move a cluster out of a serving skill, exclude it, approve a body without it, then remove its pin before adding it to the destination skill.
 

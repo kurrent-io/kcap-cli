@@ -20,6 +20,8 @@ public class McpKnowledgeServerTests {
 
     const string Doc = "0b9c2f4e-6a1d-4c0e-9d7b-3f2a1e5c8d90";
 
+    const string Pair = """{"survivor_uid":"5a0e1c2d-3b4f-4a6e-8c7d-9e0f1a2b3c4d","absorbed_uid":"6b1f2d3e-4c5a-4b7f-9d8e-0f1a2b3c4d5e"}""";
+
     McpKnowledgeServer Server(TimeProvider? time = null) =>
         new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), new FixedCapacitorHttpClient(),
             NoTelemetry.Startup, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory),
@@ -142,12 +144,13 @@ public class McpKnowledgeServerTests {
     }
 
     [Test]
-    public async Task The_tool_list_is_the_eight_tools_and_every_array_declares_its_items() {
+    public async Task The_tool_list_is_the_eleven_tools_and_every_array_declares_its_items() {
         var tools = McpKnowledgeServer.BuildToolsList();
 
         await Assert.That(tools.Select(t => t.Name)).IsEquivalentTo(new[] {
             "list_skills", "get_skill", "list_facts", "search_facts",
             "edit_skill_body", "transition_skill", "adjust_skill_members", "curate_fact_cluster",
+            "list_category_merges", "merge_categories", "dismiss_category_merge",
         });
         foreach (var property in tools.SelectMany(t => t.InputSchema.Properties.Values).Where(p => p.Type == "array"))
             await Assert.That(property.Items).IsNotNull();
@@ -164,11 +167,12 @@ public class McpKnowledgeServerTests {
     }
 
     sealed class RecordingHandler(HttpStatusCode status = HttpStatusCode.OK, string body = """{"ok":true}""") : HttpMessageHandler {
-        public List<(HttpMethod Method, string Path)> Calls { get; } = [];
+        public List<(HttpMethod Method, string Path, string? Body)> Calls { get; } = [];
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
-            Calls.Add((request.Method, request.RequestUri!.AbsolutePath));
-            return Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(body) });
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+            var sent = request.Content is null ? null : await request.Content.ReadAsStringAsync(ct);
+            Calls.Add((request.Method, request.RequestUri!.AbsolutePath, sent));
+            return new HttpResponseMessage(status) { Content = new StringContent(body) };
         }
     }
 
@@ -187,6 +191,9 @@ public class McpKnowledgeServerTests {
     [Arguments("transition_skill", """{"doc_id":"0b9c2f4e-6a1d-4c0e-9d7b-3f2a1e5c8d90","action":"restore","operation_id":"o","expected_doc_revision":1}""", "POST", "/api/knowledge/skills/0b9c2f4e-6a1d-4c0e-9d7b-3f2a1e5c8d90/transition")]
     [Arguments("adjust_skill_members", """{"doc_id":"0b9c2f4e-6a1d-4c0e-9d7b-3f2a1e5c8d90","action":"add","cluster_uids":["u"],"operation_id":"o"}""", "POST", "/api/knowledge/skills/0b9c2f4e-6a1d-4c0e-9d7b-3f2a1e5c8d90/members")]
     [Arguments("curate_fact_cluster", """{"curation_key":{"source_repo_hash":"r","category":"c","cluster_id":"k"},"operation_id":"o","audience_kind":"everyone"}""", "POST", "/api/knowledge/facts/curate")]
+    [Arguments("list_category_merges", "{}", "GET", "/api/knowledge/merges")]
+    [Arguments("merge_categories", Pair, "POST", "/api/knowledge/merges/merge")]
+    [Arguments("dismiss_category_merge", Pair, "POST", "/api/knowledge/merges/dismiss")]
     public async Task Each_tool_reaches_its_own_route(string tool, string args, string method, string path) {
         var handler = new RecordingHandler();
 
@@ -195,6 +202,43 @@ public class McpKnowledgeServerTests {
         await Assert.That(handler.Calls.Single().Method.Method).IsEqualTo(method);
         await Assert.That(handler.Calls.Single().Path).IsEqualTo(path);
         await Assert.That(response).DoesNotContain("\"isError\":true");
+    }
+
+    [Test]
+    [Arguments("merge_categories")]
+    [Arguments("dismiss_category_merge")]
+    public async Task A_merge_decision_sends_the_pair_and_nothing_else(string tool) {
+        var handler = new RecordingHandler(HttpStatusCode.NoContent, "");
+
+        await CallAsync(handler, tool, """{"survivor_uid":"5A0E1C2D-3B4F-4A6E-8C7D-9E0F1A2B3C4D","absorbed_uid":"6b1f2d3e-4c5a-4b7f-9d8e-0f1a2b3c4d5e","scope":"org"}""");
+
+        await Assert.That(handler.Calls.Single().Body).IsEqualTo(Pair);
+    }
+
+    [Test]
+    [Arguments("""{"absorbed_uid":"6b1f2d3e-4c5a-4b7f-9d8e-0f1a2b3c4d5e"}""", "survivor_uid")]
+    [Arguments("""{"survivor_uid":"5a0e1c2d-3b4f-4a6e-8c7d-9e0f1a2b3c4d","absorbed_uid":"nope"}""", "absorbed_uid")]
+    public async Task A_merge_decision_without_both_uids_is_refused_before_sending(string args, string named) {
+        var handler = new RecordingHandler();
+
+        var response = await CallAsync(handler, "merge_categories", args);
+
+        await Assert.That(response).Contains("\"isError\":true");
+        await Assert.That(response).Contains(named);
+        await Assert.That(handler.Calls.Count).IsEqualTo(0);
+    }
+
+    /// <summary>A 404 is the pair already merged, dismissed or gone; a coded refusal keeps its code,
+    /// so the agent can tell the user which.</summary>
+    [Test]
+    [Arguments(HttpStatusCode.NoContent, "", false, "OK: HTTP 204")]
+    [Arguments(HttpStatusCode.NotFound, "", true, "Error: HTTP 404 (no body)")]
+    [Arguments(HttpStatusCode.Conflict, """{"code":"cluster_topic_claimed","message":"m"}""", true, "cluster_topic_claimed")]
+    public async Task A_merge_decision_passes_the_servers_answer_through(HttpStatusCode status, string body, bool isError, string expected) {
+        var response = JsonNode.Parse(await CallAsync(new RecordingHandler(status, body), "dismiss_category_merge", Pair))!;
+
+        await Assert.That(response["result"]!["content"]![0]!["text"]!.GetValue<string>()).Contains(expected);
+        await Assert.That(response["result"]!["isError"]?.GetValue<bool>() ?? false).IsEqualTo(isError);
     }
 
     [Test]
