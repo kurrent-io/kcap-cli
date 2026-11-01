@@ -11,10 +11,10 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
 
-/// The composer of an ended server session: whether it can be handed off from this machine, where
-/// the new session would start, and the launch. A hand-off never degrades into an ordinary launch,
-/// so Start needs the server's and the daemon's handoff/1 and a probed start, and what launches is
-/// exactly the start the strip shows.
+/// The composer of an ended server session: whether it can be resumed in place or handed off from this
+/// machine, where a new session would start, and the launch. Neither degrades into an ordinary launch:
+/// Resume needs both hops' resume-in-place/1 and the daemon's probe, Start their handoff/1 and a probed
+/// start, and what launches is exactly what the strip shows.
 public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAttachmentSink {
     public const string NeedsFullAccess = "You need full access to this session to hand it off";
     public const string ServerTooOld = "Your kcap server doesn't support hand-off yet";
@@ -30,6 +30,8 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
     public const string ChangedDuringUpload = "Your kcap daemon or server changed while the files uploaded. Check where the new session would start and send again.";
     public const string Checking ="Checking where the new session would start…";
     public const string WaitingForDaemon = "Waiting for your local kcap daemon…";
+    public const string Resuming = "Resuming…";
+    public const string ResumeSendsTextOnly = "Resume sends only your message. Hand off to send files too.";
     const string StripPrefix = "New session in a fresh worktree";
     const string FullAccess = "full";
 
@@ -62,6 +64,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
     readonly string? _appServerUrl;
     readonly Action<int>? _onUnauthorized;
     readonly TimeProvider _time;
+    readonly Func<string?>? _localMachineId;
     readonly CancellationToken _shutdown;
     readonly HandoffChoicesViewModel _choices;
     readonly CompositeDisposable _disposables = new();
@@ -91,6 +94,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
     /// <param name="appServerUrl">The app's server: the local daemon must be connected to it, since the
     /// launch reaches the daemon through that server.</param>
     /// <param name="onUnauthorized">IServerLane's ParkSignedOut, for a 401 on an upload or a launch.</param>
+    /// <param name="localMachineId">This app's machine id, which a session recorded here carries; null offers no Resume.</param>
     public HandoffComposerViewModel(
             RepoSessionDto session, IDaemonClientService daemon, ILaunchClient launch, IServerSessionsService sessions,
             ILocalControlOps ops, LocalCheckoutFinder finder, Func<CancellationToken, Task<IReadOnlyList<string>>> candidateRoots,
@@ -99,7 +103,9 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
             Action<string> closeFailedLaunch, Func<string, PinPresentation, Task<bool>> reopenSource, IAppNotifier notifier,
             string? appServerUrl,
             IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null,
-            Action<int>? onUnauthorized = null, TimeProvider? time = null, CancellationToken shutdown = default) {
+            Action<int>? onUnauthorized = null, TimeProvider? time = null,
+            Func<string?>? localMachineId = null,
+            CancellationToken shutdown = default) {
         _session = session;
         _daemon = daemon;
         _launch = launch;
@@ -118,6 +124,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
         _appServerUrl = appServerUrl;
         _onUnauthorized = onUnauthorized;
         _time = time ?? TimeProvider.System;
+        _localMachineId = localMachineId;
         _shutdown = shutdown;
         _choices = new HandoffChoicesViewModel(daemon, session.Vendor, modelCatalog).DisposeWith(_disposables);
 
@@ -150,7 +157,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
             .DisposeWith(_disposables);
         // A daemon that connects, restarts, updates or moves server under an open composer answers again.
         daemon.Status
-            .Select(s => (s.State, Handoff: HasHandoff(s)))
+            .Select(s => (s.State, Handoff: HasHandoff(s), Resume: HasResume(s)))
             .DistinctUntilChanged()
             .Skip(1)
             .Select(_ => Unit.Default)
@@ -174,13 +181,20 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
             .ToProperty(this, x => x.AttachHint, initialValue: (string?)null)
             .DisposeWith(_disposables);
 
-        var canStart = this.WhenAnyValue(x => x.ProbedStart, x => x.DisabledReason, x => x.IsLaunching,
-            (start, reason, launching) => start is not null && reason is null && !launching);
+        var canStart = this.WhenAnyValue(x => x.ProbedStart, x => x.DisabledReason, x => x.IsLaunching, x => x.IsResuming,
+            (start, reason, launching, resuming) => start is not null && reason is null && !launching && !resuming);
         StartCommand = ReactiveCommand.CreateFromTask(StartAsync, canStart);
+        var canResume = this.WhenAnyValue(x => x.ResumeOffered, x => x.IsLaunching, x => x.IsResuming,
+            (offered, launching, resuming) => offered && !launching && !resuming);
+        ResumeCommand = ReactiveCommand.CreateFromTask(ResumeAsync, canResume);
+        OpenStripCommand  = ReactiveCommand.Create(OpenStrip);
+        CloseStripCommand = ReactiveCommand.Create(CloseStrip);
         // An unobserved command fault takes ReactiveUI's crash path, and a launch can fault after
         // Dispose, so the observer lives as long as the command rather than in _disposables.
         StartCommand.ThrownExceptions
             .Subscribe(ex => Console.Error.WriteLine($"kcap: hand-off start: {ex.Message}"));
+        ResumeCommand.ThrownExceptions
+            .Subscribe(ex => Console.Error.WriteLine($"kcap: resume: {ex.Message}"));
     }
 
     public AttachmentTray Tray { get; } = new();
@@ -205,6 +219,63 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
 
     public ILaunchChoices Choices => _choices;
     public ReactiveCommand<Unit, Unit> StartCommand { get; }
+    public ReactiveCommand<Unit, Unit> ResumeCommand { get; }
+    public ReactiveCommand<Unit, Unit> OpenStripCommand { get; }
+    public ReactiveCommand<Unit, Unit> CloseStripCommand { get; }
+
+    bool _resumeOffered;
+    /// Every check passed, so a click would resume: Resume is never shown to fail as the normal path.
+    public bool ResumeOffered {
+        get => _resumeOffered;
+        private set {
+            if (_resumeOffered == value) return;
+            this.RaiseAndSetIfChanged(ref _resumeOffered, value);
+            RaiseStrip();
+        }
+    }
+
+    bool _stripOpened;
+    /// Closed only while Resume is offered and the user has not asked for the hand-off's settings.
+    public bool IsStripOpen => !ResumeOffered || _stripOpened;
+    public bool ResumeVisible => ResumeOffered && !IsStripOpen;
+    /// Cancel closes a strip the user opened; with no Resume there is nothing to go back to.
+    public bool CanCloseStrip => ResumeOffered && _stripOpened;
+
+    public void OpenStrip() {
+        if (_stripOpened) return;
+        _stripOpened = true;
+        RaiseStrip();
+    }
+
+    public void CloseStrip() {
+        if (!_stripOpened) return;
+        _stripOpened = false;
+        RaiseStrip();
+    }
+
+    void RaiseStrip() {
+        this.RaisePropertyChanged(nameof(IsStripOpen));
+        this.RaisePropertyChanged(nameof(ResumeVisible));
+        this.RaisePropertyChanged(nameof(CanCloseStrip));
+        this.RaisePropertyChanged(nameof(StripNotice));
+        this.RaisePropertyChanged(nameof(StartVisible));
+        this.RaisePropertyChanged(nameof(Placeholder));
+    }
+
+    /// Why the hand-off cannot start, once its settings are open; Resume's own checks are never shown.
+    public string? StripNotice => IsStripOpen ? DisabledReason : null;
+    public bool StartVisible => IsStripOpen && DisabledReason is null;
+
+    public string Placeholder => ResumeVisible
+        ? "What should this session do next? Resume carries on here; Hand off starts a new session."
+        : "What should the new session do next?";
+
+    bool _isResuming;
+    /// A resume was accepted and is being judged; the view turns live on success, the draft comes back on failure.
+    public bool IsResuming {
+        get => _isResuming;
+        private set => this.RaiseAndSetIfChanged(ref _isResuming, value);
+    }
 
     string _text = "";
     public string Text {
@@ -233,7 +304,11 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
     string? _disabledReason;
     public string? DisabledReason {
         get => _disabledReason;
-        private set => this.RaiseAndSetIfChanged(ref _disabledReason, value);
+        private set {
+            this.RaiseAndSetIfChanged(ref _disabledReason, value);
+            this.RaisePropertyChanged(nameof(StripNotice));
+            this.RaisePropertyChanged(nameof(StartVisible));
+        }
     }
 
     string? _progress;
@@ -308,9 +383,12 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
         CompletenessNote = null;
         DisabledReason = null;
         IsProbing = true;
-        Progress = Checking;
+        Progress = IsResuming ? Resuming : Checking;
         Evaluation result;
         try {
+            var offered = await ResumeOfferedAsync(cts.Token);
+            if (_disposed || cts.IsCancellationRequested || !ReferenceEquals(cts, _evaluation)) return;
+            ResumeOffered = offered;
             result = await EvaluateAsync(cts.Token);
         } catch (OperationCanceledException) when (cts.IsCancellationRequested) {
             return;
@@ -320,7 +398,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
         }
         if (_disposed || cts.IsCancellationRequested || !ReferenceEquals(cts, _evaluation)) return;
         IsProbing = result.Waiting;
-        Progress = result.Waiting ? WaitingForDaemon : null;
+        Progress = IsResuming ? Resuming : result.Waiting ? WaitingForDaemon : null;
         DisabledReason = result.Reason;
         _checkout = result.Checkout;
         StripLabel = result.Label ?? "";
@@ -345,12 +423,9 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
             return new(NeedsFullAccess);
 
         if (!_serverConnected) return new(_signedOut ? SignInToHandOff : ServerUnreachable);
-        if (_features is not { Count: > 0 }) {
-            // Null is no answer at all, which says nothing about the server's version.
-            if (await _launch.GetLaunchFeaturesAsync(ct) is not { } read) return new(ServerUnreachable);
-            _features = read;
-        }
-        if (!_features.Contains(HandoffWire.Capability)) return new(ServerTooOld);
+        // Null is no answer at all, which says nothing about the server's version.
+        if (await FeaturesAsync(ct) is not { } features) return new(ServerUnreachable);
+        if (!features.Contains(HandoffWire.Capability)) return new(ServerTooOld);
 
         switch (_attach) {
             case null or { State: AttachState.Connecting }: return new(null, Waiting: true);
@@ -410,6 +485,90 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
     }
 
     static bool HasAvailableHarness(IReadOnlyList<HarnessOption> options) => options.Any(o => o.Available);
+
+    async Task<IReadOnlySet<string>?> FeaturesAsync(CancellationToken ct) {
+        if (_features is { Count: > 0 } known) return known;
+        if (await _launch.GetLaunchFeaturesAsync(ct) is not { } read) return null;
+        return _features = read;
+    }
+
+    /// The table's Resume row: the viewer's own session (the listing gives a recording to the owner only),
+    /// recorded on this machine under a known store, with both hops able to carry it and the daemon's probe
+    /// finding the vendor, the directory and that store still usable here.
+    async Task<bool> ResumeOfferedAsync(CancellationToken ct) {
+        if (_drafts.ResumeFailed(_session.SessionId)) return false;
+        if (_session is not {
+                Status: "ended", Cwd: { Length: > 0 } cwd, Vendor: { Length: > 0 } vendor,
+                Recording: { MachineId: { Length: > 0 } machine, ConfigDir: { Length: > 0 } store } recording,
+            }) return false;
+        if (_localMachineId?.Invoke() != machine || !_serverConnected) return false;
+        if (await FeaturesAsync(ct) is not { } features || !features.Contains(ResumeInPlaceWire.Capability)) return false;
+        if (_attach is not { } attach || !HasResume(attach)) return false;
+        if (_snapshot is not { } snapshot || !ServerIdentity.SameServer(snapshot.Daemon.ServerUrl, _appServerUrl)) return false;
+
+        var request = new ResumeProbeRequestDto(_session.SessionId, vendor, cwd, recording.AccountId, store);
+        try {
+            return await Task.Run(() => _ops.ProbeResumeAsync(request, ct), ct) is { Refusal: null };
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            return false;
+        }
+    }
+
+    /// Relaunches the session's own vendor in its own directory with the launcher's defaults. No placeholder:
+    /// the view stays on the session, which turns live when the daemon's row for it replaces the server's.
+    async Task ResumeAsync() {
+        if (!ResumeOffered || IsLaunching || IsResuming || _session is not { Cwd: { Length: > 0 } directory, Vendor: { Length: > 0 } vendor })
+            return;
+        if (Tray.Count > 0) {
+            Error = ResumeSendsTextOnly;
+            return;
+        }
+        var sourceId = _session.SessionId;
+        IsLaunching = true;
+        Progress = Resuming;
+        try {
+            var draft = _choices.Capture(Text, []);
+            var request = new LaunchRequest(
+                _daemon.DaemonName, directory, vendor, draft.Text,
+                PermissionMode: HomeViewModel.PermissionModeFor(vendor, HomeViewModel.DefaultPermissionMode),
+                CodexPosture: HomeViewModel.CodexPostureFor(vendor, HostedHarnessCatalog.DefaultCodexSandbox, HostedHarnessCatalog.DefaultCodexApproval),
+                Resume: new ResumeLaunchPayload(sourceId, directory));
+            var launchEpoch = _laneEpoch;
+            var outcome = await _launch.StartAsync(request, _shutdown);
+            if (!outcome.Started) {
+                if (outcome.Unauthorized) _onUnauthorized?.Invoke(launchEpoch);
+                var notice = outcome.Unauthorized ? SignInToHandOff : HandoffFailureText.ResumeFallback(outcome.Error);
+                _drafts.MarkResumeFailed(sourceId);
+                if (_disposed) _drafts.HoldFailed(sourceId, draft with { Error = notice });
+                else Error = notice;
+                _recheckAfterLaunch = true;
+                return;
+            }
+            if (!_disposed) {
+                Error = null;
+                ClearSent(draft);
+            }
+            if (HomeViewModel.NormalizeAgentId(outcome.AgentId) is not { } agentId) {
+                if (!_disposed) Error = HomeViewModel.UnusableIdMessage;
+                return;
+            }
+            if (_drafts.HoldResume(sourceId, agentId, draft) == HandoffHold.AlreadyFailed) {
+                if (!_disposed && _drafts.TakeFailed(sourceId) is { } failed) Apply(failed);
+                _recheckAfterLaunch = true;
+                return;
+            }
+            if (!_disposed) IsResuming = true;
+        } finally {
+            IsLaunching = false;
+            if (!_disposed) {
+                Progress = IsResuming ? Resuming : null;
+                if (_recheckAfterLaunch) {
+                    _recheckAfterLaunch = false;
+                    _ = ReevaluateAsync(CancellationToken.None);
+                }
+            }
+        }
+    }
 
     async Task StartAsync() {
         // Execute() does not gate on CanExecute.
@@ -562,6 +721,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
 
     void TakeBackFailedDraft() {
         if (_disposed || IsLaunching || _drafts.TakeFailed(_session.SessionId) is not { } failed) return;
+        IsResuming = false;
         Apply(failed);
         _ = ReevaluateAsync(CancellationToken.None);
     }
@@ -589,12 +749,16 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
         AccessLevel = row.AccessLevel ?? "", Vendor = row.Vendor, Title = row.Title, Cwd = row.RepoPath, Branch = row.Branch,
         Owner = row.OwnerUserId is { } owner ? new() { UserId = owner, DisplayName = row.OwnerName, AvatarUrl = row.OwnerAvatarUrl } : null,
         StartedAt = row.CreatedAt, LastActivityAt = row.LastActivityAt ?? row.CreatedAt, EndedAt = row.EndedAt,
+        Recording = row.Recording,
     };
 
     internal bool IsDisposedForTesting => _disposed;
 
     static bool HasHandoff(AttachStatus status) =>
         status.State == AttachState.Connected && status.Capabilities?.Contains(HandoffWire.Capability) == true;
+
+    static bool HasResume(AttachStatus status) =>
+        status.State == AttachState.Connected && status.Capabilities?.Contains(ResumeInPlaceWire.Capability) == true;
 
     /// A verified fork's head, or a head in the session's own repository; anything else, including a
     /// head the server could not classify, falls back to the recorded branch.
@@ -647,5 +811,8 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
         _evaluation = null;
         _disposables.Dispose();
         StartCommand.Dispose();
+        ResumeCommand.Dispose();
+        OpenStripCommand.Dispose();
+        CloseStripCommand.Dispose();
     }
 }

@@ -37,6 +37,26 @@ public static partial class HandoffFailureText {
         return detail.Length > 0 ? HomeViewModel.FriendlyLaunchFailure(detail) : Generic;
     }
 
+    /// A failed resume, worded as the fallback the composer then offers.
+    public static string ResumeFallback(string? reason) =>
+        $"Couldn't resume this session here ({ResumeReason(reason)}). Hand off starts a new session with its context.";
+
+    static string ResumeReason(string? reason) {
+        if (string.IsNullOrWhiteSpace(reason)) return "it didn't start";
+        var match = CodePrefix().Match(reason);
+        return (match.Success ? match.Groups["code"].Value : null) switch {
+            "resume_source_active"         => "it's active again",
+            "resume_source_reserved"       => "it's being resumed or handed off elsewhere",
+            "resume_unsupported_daemon"    => "your local kcap daemon can't resume sessions yet",
+            "resume_directory_missing"     => "its directory is gone",
+            "resume_directory_not_allowed" => "your local kcap daemon isn't allowed to work in its directory",
+            "resume_failed"                => "the agent couldn't pick it up",
+            "resume_other_machine" or "resume_not_resumable" or "resume_store_changed" or "resume_unsupported_vendor"
+             or "resume_invalid" or "resume_not_owner" or "resume_source_unavailable" => "what it ran under isn't available here",
+            _ => HomeViewModel.FriendlyLaunchFailure(reason).TrimEnd('.'),
+        };
+    }
+
     [GeneratedRegex(@"^(?<code>[a-z][a-z0-9]*(?:_[a-z0-9]+)+)(?::|$)")]
     private static partial Regex CodePrefix();
 }

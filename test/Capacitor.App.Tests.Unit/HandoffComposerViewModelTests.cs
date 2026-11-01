@@ -52,6 +52,8 @@ public class HandoffComposerViewModelTests {
         public List<string> Candidates { get; } = [];
         /// The app's server, which FakeDaemonClientService.Snap's daemon is connected to by default.
         public string? AppServerUrl = "http://localhost:9999";
+        /// This app's machine id; a session recorded under it can be resumed here.
+        public string? MachineId;
         /// The epochs ParkSignedOut was asked to park, which signs the lane out as the real one does.
         public List<int> Parked { get; } = [];
 
@@ -114,7 +116,7 @@ public class HandoffComposerViewModelTests {
                 _ => Task.FromResult<IReadOnlyList<string>>(Candidates),
                 Drafts, Lane, Uploader, Directory,
                 () => Generation, Open,
-                Close, Reopen, Notifier, AppServerUrl, onUnauthorized: Park, time: Time);
+                Close, Reopen, Notifier, AppServerUrl, onUnauthorized: Park, time: Time, localMachineId: () => MachineId);
             _built.Add(vm);
             return vm;
         }
@@ -1134,5 +1136,156 @@ public class HandoffComposerViewModelTests {
         await vm.StartCommand.Execute();
 
         await Assert.That(vm.Error).IsEqualTo($"the upload failed. 1 more files come back once this message is sent ({AttachmentTray.CapReason})");
+    });
+
+    // ---- resume ----
+
+    const string Machine = "machine-1";
+    const string Store = "/Users/me/.codex";
+
+    static void OfferResume(Rig rig) {
+        rig.Session = rig.Session with { Recording = new RepoSessionRecordingDto { MachineId = Machine, ConfigDir = Store, AccountId = "acct-1" } };
+        rig.MachineId = Machine;
+        rig.Launch.Features = FrozenSet.Create(HandoffWire.Capability, ResumeInPlaceWire.Capability);
+        rig.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null,
+            ["input/1", "input/2", HandoffWire.Capability, ResumeInPlaceWire.Capability]));
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Resume_is_offered_for_my_session_recorded_here_with_the_strip_closed() => Run(async rig => {
+        OfferResume(rig);
+        var vm = await rig.ReadyAsync();
+
+        await Assert.That(vm.ResumeOffered).IsTrue();
+        await Assert.That((vm.ResumeVisible, vm.IsStripOpen, vm.StartVisible)).IsEqualTo((true, false, false));
+        await Assert.That(rig.Ops.ResumeProbes.Single()).IsEqualTo(new ResumeProbeRequestDto(SessionId, "codex", Checkout, "acct-1", Store));
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments("other-machine")]
+    [Arguments("no-recording")]
+    [Arguments("unknown-store")]
+    [Arguments("active")]
+    [Arguments("old-server")]
+    [Arguments("old-daemon")]
+    [Arguments("daemon-refuses")]
+    [Arguments("daemon-silent")]
+    [Arguments("resume-failed-before")]
+    public Task Resume_is_not_offered_where_it_cannot_work(string gap) => Run(async rig => {
+        OfferResume(rig);
+        switch (gap) {
+            case "other-machine": rig.MachineId = "machine-2"; break;
+            case "no-recording": rig.Session = rig.Session with { Recording = null }; break;
+            case "unknown-store": rig.Session = rig.Session with { Recording = rig.Session.Recording! with { ConfigDir = null } }; break;
+            case "active": rig.Session = rig.Session with { Status = "active" }; break;
+            case "old-server": rig.Launch.Features = FrozenSet.Create(HandoffWire.Capability); break;
+            case "old-daemon":
+                rig.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["input/1", "input/2", HandoffWire.Capability]));
+                break;
+            case "daemon-refuses": rig.Ops.ResumeNext = new(ResumeInPlaceRefusals.DirectoryMissing); break;
+            case "daemon-silent": rig.Ops.ResumeNext = null; break;
+            case "resume-failed-before": rig.Drafts.MarkResumeFailed(SessionId); break;
+        }
+        var vm = await rig.ReadyAsync();
+
+        await Assert.That(vm.ResumeOffered).IsFalse();
+        await Assert.That((vm.ResumeVisible, vm.IsStripOpen)).IsEqualTo((false, true));
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Hand_off_opens_the_strip_hides_resume_and_cancel_closes_it() => Run(async rig => {
+        OfferResume(rig);
+        var vm = await rig.ReadyAsync();
+
+        vm.OpenStripCommand.Execute().Subscribe();
+        await Assert.That((vm.IsStripOpen, vm.ResumeVisible, vm.CanCloseStrip, vm.StartVisible)).IsEqualTo((true, false, true, true));
+
+        vm.CloseStripCommand.Execute().Subscribe();
+        await Assert.That((vm.IsStripOpen, vm.ResumeVisible, vm.CanCloseStrip)).IsEqualTo((false, true, false));
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Resume_sends_the_source_and_its_directory_under_the_sessions_vendor() => Run(async rig => {
+        OfferResume(rig);
+        var vm = await rig.ReadyAsync();
+        vm.Text = "carry on";
+
+        await vm.ResumeCommand.Execute().ToTask();
+
+        var request = rig.Launch.Requests.Single();
+        await Assert.That((request.Resume, request.RepoPath, request.Vendor, request.Prompt, request.Handoff))
+            .IsEqualTo((new ResumeLaunchPayload(SessionId, Checkout), Checkout, "codex", "carry on", (HandoffLaunchStart?)null));
+        await Assert.That((vm.Text, vm.IsResuming, vm.Progress)).IsEqualTo(("", true, HandoffComposerViewModel.Resuming));
+        await Assert.That(rig.Opened).IsEmpty();
+        await Assert.That(rig.Directory.Placeholders).IsEmpty();
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_resume_failure_keeps_the_text_says_why_and_opens_the_strip() => Run(async rig => {
+        OfferResume(rig);
+        var vm = await rig.ReadyAsync();
+        vm.Text = "carry on";
+        await vm.ResumeCommand.Execute().ToTask();
+
+        rig.Failures.OnNext(new LaunchFailure(LaunchedId, "resume_failed: acp_binding_unavailable"));
+        await vm.PendingEvaluationForTesting;
+
+        await Assert.That(vm.Text).IsEqualTo("carry on");
+        await Assert.That(vm.Error).IsEqualTo(
+            "Couldn't resume this session here (the agent couldn't pick it up). Hand off starts a new session with its context.");
+        await Assert.That((vm.ResumeOffered, vm.IsStripOpen, vm.IsResuming)).IsEqualTo((false, true, false));
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_failure_after_the_view_rebound_reaches_the_sources_next_composer() => Run(async rig => {
+        OfferResume(rig);
+        var first = await rig.ReadyAsync();
+        first.Text = "carry on";
+        await first.ResumeCommand.Execute().ToTask();
+        // The daemon's row for the session replaced the server's, so this composer went away.
+        first.Dispose();
+
+        rig.Failures.OnNext(new LaunchFailure(LaunchedId, "Process exited before establishing a session"));
+        var next = await rig.ReadyAsync();
+
+        await Assert.That(next.Text).IsEqualTo("carry on");
+        await Assert.That(next.Error!).StartsWith("Couldn't resume this session here");
+        await Assert.That((next.ResumeOffered, next.IsStripOpen)).IsEqualTo((false, true));
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task An_immediate_refusal_falls_back_too() => Run(async rig => {
+        OfferResume(rig);
+        rig.Launch.Next = new(false, null, "resume_source_active: The session is active again.");
+        var vm = await rig.ReadyAsync();
+        vm.Text = "carry on";
+
+        await vm.ResumeCommand.Execute().ToTask();
+        await vm.PendingEvaluationForTesting;
+
+        await Assert.That(vm.Text).IsEqualTo("carry on");
+        await Assert.That(vm.Error).IsEqualTo(
+            "Couldn't resume this session here (it's active again). Hand off starts a new session with its context.");
+        await Assert.That((vm.ResumeOffered, vm.IsStripOpen)).IsEqualTo((false, true));
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Resume_with_files_staged_asks_for_a_hand_off_instead() => Run(async rig => {
+        OfferResume(rig);
+        var vm = await rig.ReadyAsync();
+        vm.Tray.AddAll([Chip("a.png")]);
+
+        await vm.ResumeCommand.Execute().ToTask();
+
+        await Assert.That(rig.Launch.Requests).IsEmpty();
+        await Assert.That(vm.Error).IsEqualTo(HandoffComposerViewModel.ResumeSendsTextOnly);
     });
 }

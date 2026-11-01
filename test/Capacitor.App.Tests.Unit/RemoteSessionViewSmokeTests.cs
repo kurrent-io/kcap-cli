@@ -118,14 +118,25 @@ public class RemoteSessionViewSmokeTests {
         Repo = new() { Hash = "h", Owner = "acme", Name = "widgets" },
     }, hostedPresentation: false);
 
+    const string Machine = "machine-1";
+
+    static AgentRow ResumableServerRow() => AgentRow.FromServer(new RepoSessionDto {
+        SessionId = "s1", Status = "ended", AccessLevel = "full", Vendor = "claude", Title = "Widgets",
+        Owner = new() { UserId = "u1", DisplayName = "Alexey" }, Branch = "feature/x", Cwd = HandoffComposerFixture.Checkout,
+        StartedAt = DateTimeOffset.UnixEpoch, LastActivityAt = DateTimeOffset.UnixEpoch.AddHours(1),
+        EndedAt = DateTimeOffset.UnixEpoch.AddHours(1),
+        Repo = new() { Hash = "h", Owner = "acme", Name = "widgets" },
+        Recording = new() { MachineId = Machine, ConfigDir = "/Users/me/.claude" },
+    }, hostedPresentation: false);
+
     /// Runs the body over an ended server session whose composer is shown, settled until the
     /// composer has answered whether it can start.
     static Task WithHandoffAsync(Func<Host, HandoffComposerFixture, HandoffComposerView, Task> body,
-            Action<HandoffComposerFixture>? arrange = null) =>
+            Action<HandoffComposerFixture>? arrange = null, AgentRow? row = null) =>
         AvaloniaSession.DispatchAsync(async () => {
             using var fixture = new HandoffComposerFixture();
             arrange?.Invoke(fixture);
-            using var host = new Host(row: EndedServerRow(), handoff: fixture.Build);
+            using var host = new Host(row: row ?? EndedServerRow(), handoff: fixture.Build);
             try {
                 await host.SettleUntilAsync(() => host.Vm.Chat.Handoff is { } composer
                     && (composer is { IsProbing: false } && (composer.ProbedStart is not null || composer.DisabledReason is not null)
@@ -166,6 +177,37 @@ public class RemoteSessionViewSmokeTests {
         await Assert.That(request.RepoPath).IsEqualTo(HandoffComposerFixture.Checkout);
         await Assert.That(request.Handoff!.SourceSessionId).IsEqualTo("s1");
     });
+
+    [Test]
+    public Task Clicking_resume_launches_it_in_place() => WithHandoffAsync(async (host, fixture, view) => {
+        await host.SettleUntilAsync(() => host.Vm.Chat.Handoff!.ResumeOffered, "resume offered");
+        await Assert.That(Named<StackPanel>(view, "HandoffStrip").IsEffectivelyVisible).IsFalse();
+
+        Click(host, Named<Button>(view, "ResumeButton"));
+        await host.SettleUntilAsync(() => fixture.Launch.Requests.Count == 1, "the launch");
+
+        await Assert.That(fixture.Launch.Requests.Single().Resume).IsEqualTo(new ResumeLaunchPayload("s1", HandoffComposerFixture.Checkout));
+    }, fixture => fixture.OfferResume(Machine), ResumableServerRow());
+
+    [Test]
+    public Task Hand_off_opens_the_settings_and_Esc_closes_them() => WithHandoffAsync(async (host, fixture, view) => {
+        await host.SettleUntilAsync(() => host.Vm.Chat.Handoff!.ResumeOffered, "resume offered");
+
+        Click(host, Named<Button>(view, "HandoffButton"));
+        await Assert.That(Named<StackPanel>(view, "HandoffStrip").IsEffectivelyVisible).IsTrue();
+        await Assert.That(Named<Button>(view, "ResumeButton").IsEffectivelyVisible).IsFalse();
+        await Assert.That(Named<Button>(view, "CancelHandoffButton").IsEffectivelyVisible).IsTrue();
+
+        var input = Named<TextBox>(view, "HandoffInput");
+        input.Focus();
+        host.Settle();
+        host.Window.KeyPressQwerty(PhysicalKey.Escape, RawInputModifiers.None);
+        host.Settle();
+
+        await Assert.That(Named<StackPanel>(view, "HandoffStrip").IsEffectivelyVisible).IsFalse();
+        await Assert.That(Named<Button>(view, "ResumeButton").IsEffectivelyVisible).IsTrue();
+        await Assert.That(fixture.Launch.Requests).IsEmpty();
+    }, fixture => fixture.OfferResume(Machine), ResumableServerRow());
 
     [Test]
     public Task Dropping_a_file_adds_it_to_the_tray() => WithHandoffAsync(async (host, fixture, view) => {
