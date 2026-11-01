@@ -15,7 +15,7 @@ namespace Capacitor.App.ViewModels;
 /// The launcher's "local server is not running" banner. Whether the server is down is the server lane's
 /// word alone, so a stopped server behind a healthy daemon still shows; a cloud server never does. Whether
 /// Start is offered is the local root's files' and the port's word: never for an installation that is gone, that
-/// another kcap is changing, or whose port another program holds. While <c>busy</c> (the upgrade banner owns the
+/// another kcap is changing, whose port another program holds, or that its supervisor is already starting. While <c>busy</c> (the upgrade banner owns the
 /// stack) the banner stays hidden.
 public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
     const int MessageTailLines = 12;
@@ -129,6 +129,7 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
 
     public string Headline => Condition switch {
         LocalServerCondition.Changing                                   => "The local server is being changed",
+        LocalServerCondition.Restarting                                 => "The local server is starting again",
         LocalServerCondition.PortTaken                                  => "Another program holds the local server's port",
         LocalServerCondition.Uninstalled                                => "The local server was uninstalled",
         LocalServerCondition.Purged or LocalServerCondition.NotInstalled => "The local server was removed",
@@ -154,6 +155,21 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
     }
 
     bool StartPossible(LocalServerCondition? condition) => _canStart && condition == LocalServerCondition.Installed;
+
+    /// <summary>A <c>readCondition</c> that asks <paramref name="status"/>, the CLI's own status, first, and reads the
+    /// root's files and port through <paramref name="fallback"/> only when it has no answer.</summary>
+    public static Func<CancellationToken, Task<LocalServerReading>> PreferStatus(
+            Func<CancellationToken, Task<LocalServerReading?>> status, Func<CancellationToken, Task<LocalServerReading>> fallback) =>
+        async ct => {
+            LocalServerReading? reading = null;
+            try {
+                reading = await status(ct);
+            } catch (Exception ex) when (ex is not OperationCanceledException) {
+                Console.Error.WriteLine($"kcap app: kcap local status failed: {ex.Message}");
+            }
+
+            return reading ?? await fallback(ct);
+        };
 
     /// The server lane's own reading, whether or not Start is offered.
     public bool ServerDown => _serverDown.Value;

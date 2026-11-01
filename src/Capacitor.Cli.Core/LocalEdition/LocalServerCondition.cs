@@ -31,4 +31,8 @@ public enum LocalServerCondition {
     /// alone: it takes an answer on the port that the kcap server never gives, or a listener the OS names as another
     /// program.</summary>
     PortTaken,
+
+    /// <summary>Installed, and its supervisor is bringing the server up: relaunching it after an exit, or running a
+    /// process that does not answer yet. Only the supervisor can say so, through <c>kcap local status --json</c>.</summary>
+    Restarting,
 }

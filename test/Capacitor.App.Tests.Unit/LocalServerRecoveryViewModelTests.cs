@@ -282,6 +282,50 @@ public class LocalServerRecoveryViewModelTests {
         });
     }
 
+    /// <summary>A server its supervisor is already relaunching is no stopped server: a Start would only race the relaunch.</summary>
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_relaunch_under_way_says_so_and_is_never_offered_start() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var status = new BehaviorSubject<ServerLaneStatus>(new(ServerLaneState.Connecting));
+            var recorder = new Recorder();
+            using var vm = WithCondition(status, () => LocalServerCondition.Restarting, recorder);
+
+            status.OnNext(new(ServerLaneState.Retrying, "Connection refused"));
+
+            await Assert.That(vm.Visible).IsTrue();
+            await Assert.That(vm.StartOffered).IsFalse();
+            await Assert.That(vm.Headline).IsEqualTo("The local server is starting again");
+            await Assert.That(vm.Body).IsEqualTo(LocalServerCondition.Restarting.Explanation);
+            await Assert.That(await vm.StartAsync()).IsFalse();
+            await Assert.That(recorder.Starts).IsEqualTo(0);
+        });
+    }
+
+    [Test]
+    public async Task The_cli_status_wins_over_the_fallback_reading() {
+        var fallbacks = 0;
+        var read = LocalServerRecoveryViewModel.PreferStatus(
+            _ => Task.FromResult<LocalServerReading?>(new(LocalServerCondition.Restarting, 9473)),
+            _ => { fallbacks++; return Task.FromResult(new LocalServerReading(LocalServerCondition.Installed, 9473)); });
+
+        await Assert.That(await read(CancellationToken.None)).IsEqualTo(new LocalServerReading(LocalServerCondition.Restarting, 9473));
+        await Assert.That(fallbacks).IsEqualTo(0);
+    }
+
+    /// <summary>A CLI with no answer, or one that fails to run, leaves the root's files and port to say.</summary>
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task No_cli_status_falls_back_to_the_roots_own_reading(bool throws) {
+        var fallback = new LocalServerReading(LocalServerCondition.PortTaken, 9473, new PortHolder(4728, "powershell"));
+        var read = LocalServerRecoveryViewModel.PreferStatus(
+            _ => throws ? throw new InvalidOperationException("spawn failed") : Task.FromResult<LocalServerReading?>(null),
+            _ => Task.FromResult(fallback));
+
+        await Assert.That(await read(CancellationToken.None)).IsEqualTo(fallback);
+    }
+
     /// <summary>When the OS cannot name the holder, its own answer names it, and the banner gives the command
     /// <c>kcap local status</c> gives to find the process.</summary>
     [Test]

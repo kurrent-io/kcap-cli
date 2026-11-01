@@ -16,6 +16,8 @@ sealed class LocalCommand(
 
     const string QuickFlag = "--quick";
 
+    const string JsonFlag = "--json";
+
     /// <summary>What <c>--quick</c> gives the whole uninstall, lock waits included, before the server's unit goes
     /// regardless. With the unit's removal after it, the app uninstaller's 15-second step still covers it.</summary>
     static readonly TimeSpan QuickGrace = TimeSpan.FromSeconds(8);
@@ -26,6 +28,7 @@ sealed class LocalCommand(
         return sub switch {
             null or "help" => await PrintUsage(sub is null ? 1 : 0),
             "logs"         => await WithStack(s => LogsAsync(s, args)),
+            "status" when args is [_, _, JsonFlag] => await WithStack(StatusJsonAsync),
             "status" or "start" or "stop" or "restart" or "open" when args.Length > 2
                            => await FailAsync($"kcap local {sub} takes no arguments: {string.Join(' ', args[2..])}"),
             "status"       => await WithStack(StatusAsync),
@@ -55,6 +58,15 @@ sealed class LocalCommand(
 
     static Task<LocalStatusReport> ReadStatusAsync(LocalStack stack) =>
         new LocalStatusReader(stack, CapacitorVersion.CurrentDisplay(), PortHolder.Find).ReadAsync(CancellationToken.None);
+
+    /// <summary>One <see cref="LocalStatusJson"/> line, for the desktop app; the exit code is the plain command's.</summary>
+    static async Task<int> StatusJsonAsync(LocalStack stack) {
+        var report = await ReadStatusAsync(stack);
+
+        await Console.Out.WriteLineAsync(LocalStatusJson.From(report.Ready, report.Headline, report.Notes, report.Reading).Render());
+
+        return report.Ready ? 0 : 1;
+    }
 
     static async Task<int> StatusAsync(LocalStack stack) {
         var report = await ReadStatusAsync(stack);

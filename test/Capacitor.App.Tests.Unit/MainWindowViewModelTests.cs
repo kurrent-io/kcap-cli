@@ -442,6 +442,7 @@ public class MainWindowViewModelTests {
     [Arguments(LocalServerCondition.FilesMissing, MainWindowViewModel.LocalNeedsAttentionText)]
     [Arguments(LocalServerCondition.Interrupted, MainWindowViewModel.LocalNeedsAttentionText)]
     [Arguments(LocalServerCondition.PortTaken, MainWindowViewModel.LocalPortTakenText)]
+    [Arguments(LocalServerCondition.Restarting, MainWindowViewModel.LocalRestartingText)]
     public async Task LocalServerAlertFor_names_a_gone_or_changing_installation_without_start(LocalServerCondition condition, string text) {
         var alert = MainWindowViewModel.LocalServerAlertFor(updateFailed: false, starting: false, stopped: true, canStart: true, condition);
 

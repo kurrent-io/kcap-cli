@@ -4,6 +4,7 @@ using Capacitor.App.Services.LocalSetup;
 using Capacitor.App.Services.Mutation;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.App.Services;
 
@@ -120,6 +121,10 @@ public interface IKcapCli {
 
     /// `local start`, bounded above the CLI's own readiness budget.
     Task<ProcessResult> LocalStartAsync(CancellationToken ct);
+
+    /// <c>local status --json</c>: the local server's condition as the CLI's own status reads it, supervisor included.
+    /// Null when the CLI is missing, timed out, or printed no status it knows, as a CLI that predates the flag does.
+    Task<LocalServerReading?> LocalStatusAsync(CancellationToken ct);
 
     /// `import --discover --json` for these vendors, or every harness when none is named; null when the
     /// run failed or printed no report.
@@ -403,6 +408,16 @@ public sealed class KcapCli : IKcapCli {
 
         return await _runner.RunAsync(cliPath, ["local", "start"],
             new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: LocalStartTimeout), ct).ConfigureAwait(false);
+    }
+
+    // Exits 1 whenever the server is not ready, so stdout, not the exit code, carries the answer.
+    public async Task<LocalServerReading?> LocalStatusAsync(CancellationToken ct) {
+        if (CliPath is not { } cliPath) return null;
+
+        var result = await Run(cliPath, ["local", "status", "--json"],
+            new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: StatusTimeout), ct).ConfigureAwait(false);
+
+        return result.TimedOut ? null : LocalStatusJson.Parse(result.Stdout);
     }
 
     public async Task<ImportDiscoveryReport?> ImportDiscoverAsync(IReadOnlyList<string> vendorFlags, CancellationToken ct) {
