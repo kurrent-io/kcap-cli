@@ -252,6 +252,11 @@
         <Setter Property="Background" Value="{StaticResource OnboardingAccentWashBrush}" />
         <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentBrush}" />
     </Style>
+    <!-- The card shows no focus adorner, and selection already took the accent border, so keyboard focus thickens it. -->
+    <Style Selector="Button.onboardingEditionCard.preselected:focus-visible">
+        <Setter Property="BorderThickness" Value="3" />
+        <Setter Property="Padding" Value="18,16" />
+    </Style>
     <Style Selector="Border.onboardingRecommended">
         <Setter Property="CornerRadius" Value="10" />
         <Setter Property="Padding" Value="8,2" />
