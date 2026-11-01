@@ -17,13 +17,16 @@ record ClaudeCliResult(
     );
 
 /// <summary>Outcome of a headless runner: exactly one of <see cref="Result"/> and <see cref="Failure"/>
-/// is set. <see cref="Usage"/> is what a failed run reported before it stopped, null when it reported
-/// nothing. <see cref="Subtype"/> is the result envelope's <c>subtype</c> when the run failed with one.</summary>
+/// is set. <see cref="Usage"/> is what the run reported, a failed one included, and null when it reported
+/// nothing. <see cref="Subtype"/> is the result envelope's <c>subtype</c> when the run failed with one, and
+/// <see cref="Error"/> its <c>result</c> text when the envelope says <c>is_error</c>. A signed-out or rate-limited
+/// run reports subtype <c>success</c>, so only <see cref="Error"/> says what went wrong.</summary>
 readonly record struct ClaudeCliOutcome(
         ClaudeCliResult?  Result,
         ClaudeCliFailure? Failure,
         ClaudeCliUsage?   Usage   = null,
-        string?           Subtype = null
+        string?           Subtype = null,
+        string?           Error   = null
     );
 
 enum ClaudeCliFailure {
@@ -152,7 +155,7 @@ static class ClaudeCliRunner {
             CancellationToken ct             = default
         ) =>
         (await RunDetailedAsync(prompt, timeout, time, log, profile, harnesses, model, maxTurns, promptViaStdin,
-            jsonSchema, mcpConfigJson, allowedTools, maxBudgetUsd, systemPrompt, ct)).Result;
+            jsonSchema, mcpConfigJson, allowedTools, maxBudgetUsd, systemPrompt, ct: ct)).Result;
 
     public static async Task<ClaudeCliOutcome> RunDetailedAsync(
             string            prompt,
@@ -169,6 +172,7 @@ static class ClaudeCliRunner {
             string[]?         allowedTools   = null,
             double?           maxBudgetUsd   = null,
             string?           systemPrompt   = null,
+            string?           executable     = null,
             CancellationToken ct             = default
         ) {
         // MCP mode without an allowlist would hand the model every tool the
@@ -200,7 +204,7 @@ static class ClaudeCliRunner {
         }
 
         try {
-            return await RunCoreAsync(prompt, timeout, time, log, profile, harnesses, workingDir, sessionId, model, maxTurns, promptViaStdin, jsonSchema, mcpConfigJson, allowedTools, maxBudgetUsd, systemPrompt, ct);
+            return await RunCoreAsync(prompt, timeout, time, log, profile, harnesses, workingDir, sessionId, model, maxTurns, promptViaStdin, jsonSchema, mcpConfigJson, allowedTools, maxBudgetUsd, systemPrompt, executable, ct);
         } finally {
             if (createdWorkingDir) {
                 try {
@@ -230,13 +234,14 @@ static class ClaudeCliRunner {
             string[]?         allowedTools,
             double?           maxBudgetUsd,
             string?           systemPrompt,
+            string?           executable,
             CancellationToken ct
         ) {
         // Resolve rather than pass "claude" verbatim: CreateProcess appends only .exe, so the
         // npm-installed claude.cmd shim on Windows would never be found.
-        var exePath = harnesses.ResolveLaunchable(HarnessId.Claude);
+        var exePath = executable ?? harnesses.ResolveLaunchable(HarnessId.Claude);
 
-        if (exePath is null) {
+        if (string.IsNullOrEmpty(exePath)) {
             log("claude not found on PATH or in the desktop app");
 
             return new(null, ClaudeCliFailure.ProcessFailure);
@@ -292,7 +297,7 @@ static class ClaudeCliRunner {
                 // External cancel while writing stdin: kill the subprocess so
                 // we don't leave claude running after the caller has given up,
                 // then propagate so the daemon's cancellation path sees it.
-                try { process.Kill(entireProcessTree: true); } catch {
+                try { ProcessTree.Kill(process); } catch {
                     /* ignore */
                 }
 
@@ -302,7 +307,7 @@ static class ClaudeCliRunner {
                 // not a stdin I/O failure, so it must not fall into the generic catch below.
                 log($"Claude process timed out ({timeout.TotalSeconds:0}s) while streaming stdin, killing");
 
-                try { process.Kill(entireProcessTree: true); } catch {
+                try { ProcessTree.Kill(process); } catch {
                     /* ignore */
                 }
 
@@ -310,7 +315,7 @@ static class ClaudeCliRunner {
             } catch (Exception ex) {
                 log($"Failed to stream prompt to claude stdin: {ex.Message}");
 
-                try { process.Kill(entireProcessTree: true); } catch {
+                try { ProcessTree.Kill(process); } catch {
                     /* ignore */
                 }
 
@@ -344,13 +349,13 @@ static class ClaudeCliRunner {
                 if (errorResult is not null) {
                     log("Recovered result from stdout despite non-zero exit code");
 
-                    return new(errorResult, null);
+                    return new(errorResult, null, ReportedUsage(stdout));
                 }
             } else {
                 var result = ParseResponse(stdout);
 
                 if (result is not null) {
-                    return new(result, null);
+                    return new(result, null, ReportedUsage(stdout));
                 }
             }
 
@@ -369,7 +374,7 @@ static class ClaudeCliRunner {
                 if (fallback is not null) {
                     log("Recovered result from session transcript (fallback)");
 
-                    return new(fallback, null);
+                    return new(fallback, null, ReportedUsage(stdout));
                 }
             } else {
                 log("Skipping transcript fallback: --json-schema was required and not satisfied");
@@ -381,7 +386,7 @@ static class ClaudeCliRunner {
             // subprocess (otherwise the await unblocks but claude keeps
             // running) and rethrow so the caller's cancellation path fires.
             try {
-                process.Kill(entireProcessTree: true);
+                ProcessTree.Kill(process);
             } catch {
                 /* ignore */
             }
@@ -391,7 +396,7 @@ static class ClaudeCliRunner {
             log($"Claude process timed out ({timeout.TotalSeconds:0}s), killing");
 
             try {
-                process.Kill(entireProcessTree: true);
+                ProcessTree.Kill(process);
             } catch {
                 /* ignore */
             }
@@ -402,15 +407,42 @@ static class ClaudeCliRunner {
 
     /// <summary>An unrecovered run's failure. The envelope's subtype is kept: an <c>is_error</c> envelope is otherwise dropped
     /// whole, and the subtype is the only thing that tells a spend or turn cap from any other process failure.</summary>
-    internal static ClaudeCliOutcome ClassifyFailure(string stdout, bool nonZeroExit) {
-        string? subtype = null;
+    /// <summary>The envelope's summed <c>modelUsage</c>, null when it has none: a run that never reached the model
+    /// reports an empty object, which is not a run that cost nothing.</summary>
+    internal static ClaudeCliUsage? ReportedUsage(string stdout) {
         try {
             using var doc = JsonDocument.Parse(stdout);
-            subtype = doc.RootElement.Str("subtype");
+            return UsageOf(doc.RootElement);
+        } catch (JsonException) {
+            return null;
+        }
+    }
+
+    internal static ClaudeCliOutcome ClassifyFailure(string stdout, bool nonZeroExit) {
+        string? subtype   = null;
+        string? error     = null;
+        long?   apiStatus = null;
+        try {
+            using var doc = JsonDocument.Parse(stdout);
+            var root = doc.RootElement;
+            subtype = root.Str("subtype");
+            if (root.IsObject && root.TryGetProperty("is_error", out var isErr) && isErr.IsTrue) {
+                error     = root.Str("result");
+                apiStatus = root.Num("api_error_status");
+            }
         } catch (JsonException) { }
 
-        if (subtype == "error_max_budget_usd") return new(null, ClaudeCliFailure.SpendBudget, Subtype: subtype);
-        return new(null, nonZeroExit ? ClaudeCliFailure.ProcessFailure : ClaudeCliFailure.OutputUnparseable, Subtype: subtype);
+        var usage = ReportedUsage(stdout);
+
+        if (subtype == "error_max_budget_usd"
+         || error is not null && (error.Contains("usage limit", StringComparison.OrdinalIgnoreCase)
+                               || error.Contains("hit your limit", StringComparison.OrdinalIgnoreCase)))
+            return new(null, ClaudeCliFailure.SpendBudget, usage, subtype, error);
+
+        if (apiStatus == 401 || error?.Contains("/login", StringComparison.Ordinal) == true)
+            return new(null, ClaudeCliFailure.NotSignedIn, usage, subtype, error);
+
+        return new(null, nonZeroExit ? ClaudeCliFailure.ProcessFailure : ClaudeCliFailure.OutputUnparseable, usage, subtype, error);
     }
 
     /// <summary>
@@ -707,28 +739,32 @@ static class ClaudeCliRunner {
     /// Extracts model and token metadata from the <c>modelUsage</c> field.
     /// </summary>
     static ClaudeCliResult BuildResult(JsonElement root, string result) {
-        var costUsd = root.TryGetProperty("total_cost_usd", out var c) && c.ValueKind == JsonValueKind.Number
-            ? c.GetDouble()
-            : (double?)null;
+        var usage    = UsageOf(root);
         var numTurns = (int)(root.Num("num_turns") ?? 0);
+        var model    = root.Obj("modelUsage") is { } modelUsage ? modelUsage.EnumerateObject().Select(p => p.Name).FirstOrDefault() : null;
 
-        string? model            = null;
-        long    inputTokens      = 0;
-        long    outputTokens     = 0;
-        long    cacheReadTokens  = 0;
-        long    cacheWriteTokens = 0;
+        return new(result, model, usage?.InputTokens ?? 0, usage?.OutputTokens ?? 0, usage?.CacheReadTokens ?? 0,
+            usage?.CacheWriteTokens ?? 0, TotalCost(root), numTurns);
+    }
 
-        if (root.Obj("modelUsage") is { } modelUsage) {
-            foreach (var prop in modelUsage.EnumerateObject()) {
-                model ??= prop.Name; // Use first model as the primary model name
-                var mu = prop.Value;
-                inputTokens      += mu.Num("inputTokens")              ?? 0;
-                outputTokens     += mu.Num("outputTokens")             ?? 0;
-                cacheReadTokens  += mu.Num("cacheReadInputTokens")     ?? 0;
-                cacheWriteTokens += mu.Num("cacheCreationInputTokens") ?? 0;
-            }
+    static double? TotalCost(JsonElement root) =>
+        root.TryGetProperty("total_cost_usd", out var c) && c.ValueKind == JsonValueKind.Number ? c.GetDouble() : null;
+
+    static ClaudeCliUsage? UsageOf(JsonElement root) {
+        if (root.Obj("modelUsage") is not { } modelUsage) return null;
+
+        var  any = false;
+        long input = 0, output = 0, cacheRead = 0, cacheWrite = 0;
+
+        foreach (var prop in modelUsage.EnumerateObject()) {
+            any = true;
+            var mu = prop.Value;
+            input      += mu.Num("inputTokens")              ?? 0;
+            output     += mu.Num("outputTokens")             ?? 0;
+            cacheRead  += mu.Num("cacheReadInputTokens")     ?? 0;
+            cacheWrite += mu.Num("cacheCreationInputTokens") ?? 0;
         }
 
-        return new(result, model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd, numTurns);
+        return any ? new(input, output, cacheRead, cacheWrite, TotalCost(root)) : null;
     }
 }

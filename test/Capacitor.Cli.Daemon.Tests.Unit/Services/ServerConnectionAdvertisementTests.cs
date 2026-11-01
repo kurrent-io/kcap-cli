@@ -32,6 +32,30 @@ public class ServerConnectionAdvertisementTests {
     }
 
     [Test]
+    public async Task DaemonConnect_without_a_headless_handler_advertises_none() {
+        var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1", ConfigRoot = Config.Root };
+        await using var conn = new ServerConnection(config, new FixedCredentialSource(), NullLoggerFactory.Instance,
+            NullLogger<ServerConnection>.Instance, TimeProvider.System);
+        conn.GetHeadlessVendors = () => ["claude"];
+
+        var vendors = conn.BuildDaemonConnect("mac", [], [], null, config.Advertisement).HeadlessVendors;
+
+        await Assert.That(vendors).IsNotNull();
+        await Assert.That(vendors!).IsEmpty();
+    }
+
+    [Test]
+    public async Task DaemonConnect_advertises_the_headless_harnesses_once_wired() {
+        var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1", ConfigRoot = Config.Root };
+        await using var conn = new ServerConnection(config, new FixedCredentialSource(), NullLoggerFactory.Instance,
+            NullLogger<ServerConnection>.Instance, TimeProvider.System);
+        conn.RunHeadlessPromptHandler = _ => Task.FromResult(default(HeadlessPromptResponse));
+        conn.GetHeadlessVendors       = () => ["claude", "codex"];
+
+        await Assert.That(conn.BuildDaemonConnect("mac", [], [], null, config.Advertisement).HeadlessVendors).IsEquivalentTo(["claude", "codex"]);
+    }
+
+    [Test]
     public async Task DaemonConnect_advertises_raw_input_once_a_handler_is_wired() {
         var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1", ConfigRoot = Config.Root };
         await using var conn = new ServerConnection(config, new FixedCredentialSource(), NullLoggerFactory.Instance,

@@ -614,6 +614,16 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton<AgentOrchestrator>();
         builder.Services.AddSingleton<EvalContextCache>();
         builder.Services.AddSingleton<EvalRunner>();
+        builder.Services.AddSingleton<IHeadlessHarness>(sp => new Harness.Claude.ClaudeHeadlessHarness(
+            sp.GetRequiredService<HarnessRegistry>(), sp.GetRequiredService<DaemonConfig>(),
+            sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<Harness.Claude.ClaudeHeadlessHarness>>()));
+        builder.Services.AddSingleton<IHeadlessHarness>(sp => new Harness.Codex.CodexHeadlessHarness(
+            sp.GetRequiredService<HarnessRegistry>(), sp.GetRequiredService<DaemonConfig>(),
+            sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<Harness.Codex.CodexHeadlessHarness>>()));
+        builder.Services.AddSingleton(sp => new HeadlessPromptRunner(
+            sp.GetServices<IHeadlessHarness>(), sp.GetRequiredService<TimeProvider>(),
+            sp.GetRequiredService<ILogger<HeadlessPromptRunner>>(),
+            sp.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping));
 
         // Restart-after-update: a coordinator polls the on-disk binary and, when idle,
         // applies a queued restart via the strategy chosen by supervision detection.
@@ -853,6 +863,12 @@ public static partial class DaemonRunner {
                 // the sweep does not know is live.
                 var worktreeManager = host.Services.GetRequiredService<WorktreeManager>();
                 if (ledgerReadable) await worktreeManager.CleanupOrphanedAsync(orchestrator.LedgerWorktreePaths());
+
+                // Before connecting: the first DaemonConnect advertises HeadlessVendors only once the handler is wired.
+                var headless = host.Services.GetRequiredService<HeadlessPromptRunner>();
+                connection.GetHeadlessVendors          = headless.AdvertisedHarnesses;
+                connection.CancelHeadlessPromptHandler = headless.CancelAsync;
+                connection.RunHeadlessPromptHandler    = headless.RunAsync;
 
                 try {
                     await connection.ConnectAsync(lifetime.ApplicationStopping);

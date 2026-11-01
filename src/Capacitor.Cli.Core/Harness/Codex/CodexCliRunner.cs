@@ -28,7 +28,7 @@ static class CodexCliRunner {
             string?           systemPrompt = null,
             CancellationToken ct           = default
         ) =>
-        (await RunDetailedAsync(prompt, timeout, time, log, profile, harnesses, model, reasoning, jsonSchema, systemPrompt, ct)).Result;
+        (await RunDetailedAsync(prompt, timeout, time, log, profile, harnesses, model, reasoning, jsonSchema, systemPrompt, ct: ct)).Result;
 
     /// <summary>
     /// Runs the prompt once in a read-only sandbox inside a fresh empty directory, which is removed
@@ -47,6 +47,7 @@ static class CodexCliRunner {
             string            reasoning    = "low",
             string?           jsonSchema   = null,
             string?           systemPrompt = null,
+            string?           executable   = null,
             CancellationToken ct           = default
         ) {
         var workingDir = Path.Combine(Path.GetTempPath(), $"kcap-codex-{Guid.NewGuid():N}");
@@ -61,7 +62,7 @@ static class CodexCliRunner {
         }
 
         try {
-            return await RunCoreAsync(prompt, timeout, time, log, profile, harnesses, workingDir, model, reasoning, jsonSchema, systemPrompt, ct);
+            return await RunCoreAsync(prompt, timeout, time, log, profile, harnesses, workingDir, model, reasoning, jsonSchema, systemPrompt, executable, ct);
         } finally {
             try { Directory.Delete(workingDir, recursive: true); } catch {
                 /* best effort */
@@ -81,13 +82,14 @@ static class CodexCliRunner {
             string            reasoning,
             string?           jsonSchema,
             string?           systemPrompt,
+            string?           executable,
             CancellationToken ct
         ) {
         // Resolve rather than pass "codex" verbatim: CreateProcess appends only .exe, so the
         // npm-installed codex.cmd shim on Windows would never be found.
-        var exePath = harnesses.ResolveLaunchable(HarnessId.Codex);
+        var exePath = executable ?? harnesses.ResolveLaunchable(HarnessId.Codex);
 
-        if (exePath is null) {
+        if (string.IsNullOrEmpty(exePath)) {
             log("codex not found on PATH or in the desktop app");
 
             return new(null, ClaudeCliFailure.ProcessFailure);
@@ -214,7 +216,8 @@ static class CodexCliRunner {
                 CostUsd: null,
                 NumTurns: Math.Max(1, events.CompletedTurns)
             ),
-            null
+            null,
+            usage
         );
     }
 

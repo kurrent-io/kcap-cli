@@ -1155,6 +1155,9 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(RunQuestionCommand))]
 [JsonSerializable(typeof(FinalizeEvalCommand))]
 [JsonSerializable(typeof(CancelEvalCommand))]
+[JsonSerializable(typeof(RunHeadlessPromptArgs))]
+[JsonSerializable(typeof(HeadlessPromptResponse))]
+[JsonSerializable(typeof(CancelHeadlessPromptArgs))]
 [JsonSerializable(typeof(PrepareResult))]
 [JsonSerializable(typeof(QuestionResult))]
 [JsonSerializable(typeof(FinalizeResult))]
@@ -2310,6 +2313,9 @@ public readonly record struct DaemonConnect(
         Capacitor.Cli.Core.Accounts.AccountsSnapshotDto? Accounts = null,
         // Per-account launchable models, keyed by registry id.
         Dictionary<string, VendorModelOption[]>?    VendorModelsByAccount = null,
+        // Harness tokens this daemon runs RunHeadlessPrompt on. Null from a daemon predating the field;
+        // empty when it can run none.
+        string[]?                                   HeadlessVendors = null,
         // Accepts a LaunchAgentCommand.ScratchWorkspace launch. False from a daemon predating it, which
         // would try to create a worktree from an empty repository path.
         bool                                        SupportsScratchWorkspace = false,
@@ -2464,6 +2470,39 @@ public readonly record struct FinalizeEvalCommand(
 
 /// <summary>Server → daemon: discard any cached context for this run (e.g. dashboard aborted).</summary>
 public readonly record struct CancelEvalCommand(string EvalRunId);
+
+// ── Headless prompts for a local-edition server ──────────────────────────────
+
+/// <summary>Server → daemon: one headless model call, abandoned at <see cref="Deadline"/>.</summary>
+public readonly record struct RunHeadlessPromptArgs(
+        string         RequestId,
+        string         Harness,
+        string         Model,
+        string?        ReasoningEffort,
+        string?        SystemPrompt,
+        string         Prompt,
+        string?        JsonSchema,
+        int            MaxTurns,
+        double?        MaxBudgetUsd,
+        DateTimeOffset Deadline
+    );
+
+/// <summary>Daemon → server: whether the run started, and its answer or failure kind. A token count is null when the
+/// harness reported none, which is not the same as zero.</summary>
+public readonly record struct HeadlessPromptResponse(
+        bool    Started,
+        string? NotStartedReason,
+        string? Text,
+        string? StructuredJson,
+        long?   InputTokens,
+        long?   OutputTokens,
+        double? CostUsd     = null,
+        string? FailureKind = null,
+        string? Error       = null
+    );
+
+/// <summary>Server → daemon, one-way: stop the headless run with this request id, queued or running.</summary>
+public readonly record struct CancelHeadlessPromptArgs(string RequestId);
 
 /// <summary>Daemon → server: prepare-phase result. The trailing fields are set on the evidence route;
 /// Route is legacy, evidence_one_shot or evidence_retrieval.</summary>

@@ -35,6 +35,37 @@ public class CodexCliRunnerTests {
         await Assert.That(outcome.Result.OutputTokens).IsEqualTo(2);
     }
 
+    /// <summary>A success carries the usage codex reported, and none when it reported none, so a caller can tell an
+    /// unreported count from zero.</summary>
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task A_success_carries_the_usage_codex_reported(bool reported) {
+        Skip.When(OperatingSystem.IsWindows(), "the fake codex is a POSIX shell script");
+
+        using var bin = new TempDir();
+        var usage = reported
+            ? """echo '{"type":"turn.completed","usage":{"input_tokens":9,"cached_input_tokens":4,"cache_write_input_tokens":0,"output_tokens":2}}'"""
+            : "";
+        bin.CreateExecutable("codex", $$"""
+            #!/bin/sh
+            while [ $# -gt 0 ]; do
+              if [ "$1" = "--output-last-message" ]; then out="$2"; fi
+              shift
+            done
+            cat > /dev/null
+            printf 'ok' > "$out"
+            {{usage}}
+            exit 0
+            """);
+
+        var outcome = await CodexCliRunner.RunDetailedAsync("irrelevant", TimeSpan.FromSeconds(10), TimeProvider.System, _ => { }, null,
+            TestHarnesses.Under(Home, BinaryProbe.Searching(bin.Path)));
+
+        await Assert.That(outcome.Result!.Result).IsEqualTo("ok");
+        await Assert.That(outcome.Usage).IsEqualTo(reported ? new Capacitor.Cli.Core.Harness.Claude.ClaudeCliUsage(5, 2, 4, 0, null) : null);
+    }
+
     [Test]
     public async Task BuildCodexArgs_locks_the_run_down_and_reads_the_prompt_from_stdin() {
         var args = CodexCliRunner.BuildCodexArgs("/w/last.txt", null, null, "low");
