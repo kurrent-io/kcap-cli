@@ -251,6 +251,10 @@ internal record AgentInstance(
     /// Null when no provider was wired, or when the build failed.</summary>
     public PolicySnapshot?      PolicySnapshot    { get; init; }
 
+    /// <summary>The policy could not be built, so a null <see cref="PolicySnapshot"/> does not mean the run
+    /// has none: what it would have decided is unknown.</summary>
+    public bool                 PolicyUnavailable { get; init; }
+
     /// <summary>Launched fresh by this daemon process, so every permission it raised passed through this
     /// daemon's bridges; never for a resume or an adopted agent, whose earlier refusals this process never saw.</summary>
     public bool                 BridgedSinceStart { get; init; }
@@ -1174,7 +1178,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <summary>Only the session a fresh agent reported as its own started under this daemon: a request naming another
     /// one, such as an older session resumed inside the agent, may carry refusals this daemon never saw.</summary>
     AttributedAgent Attributed(AgentInstance agent, string canonicalSession) =>
-        new(agent.Id, agent.PolicySnapshot, agent.ApprovalsReviewer, PersonDeadlineOf(agent), FreshIn(agent, canonicalSession));
+        new(agent.Id, agent.PolicySnapshot, agent.ApprovalsReviewer, PersonDeadlineOf(agent),
+            PolicyUnavailable: agent.PolicyUnavailable, BridgedSinceStart: FreshIn(agent, canonicalSession));
 
     /// <summary>An app-server Codex on auto-review raises its person-lane prompts through the bridge rather
     /// than its own approval bridge, so they keep that bridge's fail-closed deadline.</summary>
@@ -2943,10 +2948,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // one set of documents. A policy that cannot be built is not a launch failure: the launch
             // proceeds with no snapshot, and the permission seam falls back to prompting.
             PolicySnapshot? policySnapshot = null;
+            var policyUnavailable = false;
             try {
                 policySnapshot = _policySnapshots?.BuildFor(worktree.Path);
             } catch (Exception ex) {
                 LogPolicySnapshotBuildFailed(ex, agentId);
+                policyUnavailable = true;
             }
 
             // The documents this run is judged against, enqueued BEFORE the runtime starts: the ACP
@@ -3272,6 +3279,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // interactive ACP launch (the policy above rejects any other shape).
                 PermissionPreset    = cmd.AcpPermissionPreset,
                 PolicySnapshot      = policySnapshot,
+                PolicyUnavailable   = policyUnavailable,
                 BridgedSinceStart   = resume is null && cmd.ResumeSessionId is null,
                 ReviewerBridgeToken = reviewerToken,
                 BorrowedSnapshotSource = borrowedSnapshotSource,

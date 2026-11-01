@@ -38,10 +38,11 @@ public class LocalPermissionBridgePolicyTests {
         public PermissionDecisionLog  Log    { get; }
         public LocalPermissionBridge  Bridge { get; }
 
-        public Harness(PolicySnapshot? snapshot, string? approvalsReviewer = null, TimeSpan? personDeadline = null) {
+        public Harness(
+                PolicySnapshot? snapshot, string? approvalsReviewer = null, TimeSpan? personDeadline = null, bool policyUnavailable = false) {
             Log    = new PermissionDecisionLog(Tmp.Path, NullLogger.Instance);
             Bridge = new LocalPermissionBridge(Server, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance, TimeProvider.System, Broker, Log) {
-                AttributeHandler = _ => new AttributedAgent("agent-1", snapshot, approvalsReviewer, personDeadline),
+                AttributeHandler = _ => new AttributedAgent("agent-1", snapshot, approvalsReviewer, personDeadline, policyUnavailable),
             };
         }
 
@@ -256,6 +257,19 @@ public class LocalPermissionBridgePolicyTests {
 
         var denied = await h.PostAsync("git push --force", vendor: "codex");
         await Assert.That(await Harness.BehaviorOf(denied)).IsEqualTo("deny");
+
+        var response = h.PostAsync("cargo build", vendor: "codex");
+        var pending  = await h.WaitPendingAsync();
+        h.Broker.TrySettle(pending.RequestId, Allow, "allow", "app");
+
+        await Assert.That(await Harness.BehaviorOf(await response)).IsEqualTo("allow");
+    }
+
+    /// A launch whose policy failed to build has no snapshot, but its calls are not policy-free: they reach a person.
+    [Test, NotInParallel(nameof(LocalPermissionBridgePolicyTests))]
+    public async Task An_auto_review_codex_call_whose_policy_failed_to_build_still_reaches_a_person() {
+        await using var h = new Harness(null, "auto_review", policyUnavailable: true);
+        await h.StartAsync();
 
         var response = h.PostAsync("cargo build", vendor: "codex");
         var pending  = await h.WaitPendingAsync();

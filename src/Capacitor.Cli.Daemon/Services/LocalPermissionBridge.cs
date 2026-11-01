@@ -22,6 +22,8 @@ internal readonly record struct AttributedAgent(
     string? ApprovalsReviewer = null,
     // How long a request raised for a person waits before the bridge denies it; null waits for an answer.
     TimeSpan? PersonDeadline = null,
+    // The launch could not build its policy, so a missing snapshot is not a missing policy.
+    bool PolicyUnavailable = false,
     bool BridgedSinceStart = false
 );
 
@@ -682,9 +684,10 @@ internal sealed partial class LocalPermissionBridge(
 
                 // The launched agent's own policy, and the judge for a call no rule decided, answer
                 // before a human is asked. Anything the evaluation throws leaves the request on the human lane.
-                // An ask rule, or a policy that could not be applied in full (a dropped document, a failed
-                // evaluation, a judge that errored rather than judged), keeps the request for a person.
-                var keepForPerson = false;
+                // An ask rule, or a policy that could not be applied in full (one that failed to build, a
+                // dropped document, a failed evaluation, a judge that errored rather than judged), keeps the
+                // request for a person.
+                var keepForPerson = attributed is { PolicyUnavailable: true };
                 if (vendor is "claude" or "codex" && attributed is { PolicySnapshot: { IsEmpty: false } snapshot } governed) {
                     keepForPerson = snapshot.Degraded;
                     ClaudeHostedPolicyResult? policy = null;
