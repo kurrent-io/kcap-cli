@@ -680,7 +680,8 @@ internal sealed partial class LocalPermissionBridge(
 
                 // The launched agent's own policy, and the judge for a call no rule decided, answer
                 // before a human is asked. Anything the evaluation throws leaves the request on the human lane.
-                var policyAsks = false;
+                // An ask rule, or an evaluation that failed, keeps the request for a person.
+                var keepForPerson = false;
                 if (vendor is "claude" or "codex" && attributed is { PolicySnapshot: { IsEmpty: false } snapshot } governed) {
                     ClaudeHostedPolicyResult? policy = null;
                     try {
@@ -691,6 +692,7 @@ internal sealed partial class LocalPermissionBridge(
                             : await ClaudeHostedPolicySeam.EvaluateAsync(call, snapshot, time, policyJudge, judgeState, JudgeBudget, logger, _refusals, ct);
                     } catch (Exception ex) {
                         LogPolicyEvaluationFailed(logger, ex, governed.AgentId);
+                        keepForPerson = true;
                     }
 
                     if (policy is { } decided) {
@@ -712,14 +714,14 @@ internal sealed partial class LocalPermissionBridge(
                         }
 
                         _ = server.AppendAgentRunEventAsync(governed.AgentId, decided.Event);
-                        policyAsks = decided.Outcome == PolicyOutcome.Ask;
+                        keepForPerson = decided.Outcome == PolicyOutcome.Ask;
                     }
                 }
 
-                // Codex's own reviewer takes whatever kcap policy left undecided; an ask rule still
-                // reaches a person. An empty answer is "no decision" to the Codex hook. Its refusals
-                // never pass through here, so the judge can no longer be told the list is complete.
-                if (vendor == "codex" && !policyAsks
+                // Codex's own reviewer takes whatever kcap policy left undecided. An empty answer is "no
+                // decision" to the Codex hook. Its refusals never pass through here, so the judge can no
+                // longer be told the list is complete.
+                if (vendor == "codex" && !keepForPerson
                  && attributed is { ApprovalsReviewer: CodexApprovalsReviewers.AutoReview } autoReviewed) {
                     _refusals.MarkIncomplete(canonicalSessionId!);
                     LogYieldedToCodexAutoReview(logger, autoReviewed.AgentId, toolName);

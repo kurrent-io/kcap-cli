@@ -231,6 +231,21 @@ public class LocalPermissionBridgePolicyTests {
         await Assert.That(await Harness.BehaviorOf(await response)).IsEqualTo("allow");
     }
 
+    /// A policy that cannot be evaluated is not an undecided one: the call reaches a person, never Codex's reviewer.
+    [Test, NotInParallel(nameof(LocalPermissionBridgePolicyTests))]
+    public async Task An_auto_review_codex_call_whose_policy_evaluation_fails_still_reaches_a_person() {
+        var unevaluable = new PolicySnapshot("snap-broken", [
+            new PolicyScopeDocument(PolicyScope.Repo, "/wt/.kcap/approvals.yaml", Rules, null!)], false, []);
+        await using var h = new Harness(unevaluable, "auto_review");
+        await h.StartAsync();
+
+        var response = h.PostAsync("cargo build", vendor: "codex");
+        var pending  = await h.WaitPendingAsync();
+        h.Broker.TrySettle(pending.RequestId, Allow, "allow", "app");
+
+        await Assert.That(await Harness.BehaviorOf(await response)).IsEqualTo("allow");
+    }
+
     /// Auto-review is Codex's; a Claude call attributed to such an agent takes the normal lane.
     [Test, NotInParallel(nameof(LocalPermissionBridgePolicyTests))]
     public async Task Auto_review_never_yields_a_claude_call() {
