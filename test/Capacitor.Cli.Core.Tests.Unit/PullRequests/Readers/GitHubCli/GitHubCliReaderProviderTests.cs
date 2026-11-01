@@ -119,6 +119,7 @@ public class GitHubCliReaderProviderTests {
         var subject = h.Provider.ParseLink("https://ghe.example/example/repo/pull/3")!;
         await Assert.That(subject.Host).IsEqualTo("ghe.example");
         await Assert.That(h.Provider.PrLink("https://ghe.example/example/repo/pull/3", subject)).IsEqualTo("https://ghe.example/example/repo/pull/3");
+        await Assert.That(h.Provider.PrLink("https://ghe.example/example/renamed/pull/3", subject)).IsEqualTo("https://ghe.example/example/renamed/pull/3");
         await Assert.That(h.Provider.PrLink("https://ghe.example/example/repo/pull/4", subject)).IsNull();
         await Assert.That(h.Provider.PrLink("https://github.com/example/repo/pull/3", subject)).IsNull();
     }

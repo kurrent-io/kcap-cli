@@ -1269,8 +1269,9 @@ public class PullRequestContextViewModelTests {
     [Test]
     [Arguments("https://example.com/example/repo/pull/1", false)]
     [Arguments("https://github.com/example/repo/pull/99", false)]
-    [Arguments("https://github.com/example/other/pull/1", false)]
+    [Arguments("https://github.com/example/repo/issues/1", false)]
     [Arguments("https://github.com/example/repo/pull/1", true)]
+    [Arguments("https://github.com/example/renamed/pull/1", true)]
     public Task The_main_GitHub_action_opens_only_the_selected_PR(string url, bool accepted) => RunOnUiAsync(async () => {
         var h = new Harness();
         h.Source.Links = [h.Source.Links[0] with { Url = url }];
