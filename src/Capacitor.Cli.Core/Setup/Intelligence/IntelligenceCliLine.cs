@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Capacitor.Cli.Core.Setup.Intelligence;
 
 /// <summary>The one line <c>kcap local intelligence --json</c> prints, which the desktop app reads; null members are
@@ -9,6 +11,7 @@ public sealed record IntelligenceCliLine(
         new(true, r.Mode, r.Harness, r.Vendor, r.ImportOutcomes, r.BacklogSessionTouchesPerDay, r.Resolving);
 
     /// <summary>The applied answer, or null for a refusal or a line missing what an applied one carries.</summary>
+    [JsonIgnore]
     public IntelligenceSetupResponse? Applied =>
         Ok && Mode is not null && ImportOutcomes is { } outcomes && BacklogSessionTouchesPerDay is { } perDay && Resolving is not null
             ? new(Mode, Harness, Vendor, outcomes, perDay, Resolving)

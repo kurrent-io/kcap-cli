@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Capacitor.Cli.Core.Setup.Intelligence;
 
 /// <summary>The answer as the server applied it.</summary>
@@ -6,6 +8,7 @@ namespace Capacitor.Cli.Core.Setup.Intelligence;
 /// <c>policy_judge</c> now have a model.</param>
 public sealed record IntelligenceSetupResponse(
     string Mode, string? Harness, string? Vendor, bool ImportOutcomes, int BacklogSessionTouchesPerDay, IReadOnlyList<string> Resolving) {
+    [JsonIgnore]
     public bool ResolvesTitles => Resolving.Contains("titles");
 
     /// <summary>Whole days the background work on <paramref name="sessions"/> imported sessions takes at the daily
