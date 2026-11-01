@@ -17,6 +17,14 @@ public class ClaudeCliRunnerEnvelopeTests {
 
         await Assert.That(outcome.Failure).IsEqualTo(ClaudeCliFailure.NotSignedIn);
         await Assert.That(outcome.Usage).IsNull();
+        await Assert.That(outcome.Error).IsEqualTo("Not logged in · Please run /login");
+    }
+
+    [Test]
+    public async Task A_run_that_is_not_an_error_carries_no_error_text() {
+        const string envelope = """{"type":"result","subtype":"success","is_error":false,"result":"not json"}""";
+
+        await Assert.That(ClaudeCliRunner.ClassifyFailure(envelope, nonZeroExit: false).Error).IsNull();
     }
 
     [Test]

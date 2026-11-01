@@ -41,6 +41,8 @@ static class HeadlessPromptResponses {
             _                                  => ProcessFailure
         };
 
-        return new(true, null, null, null, input, usage?.OutputTokens, cost, kind, outcome.Subtype ?? kind);
+        var subtype = outcome.Subtype is "success" ? null : outcome.Subtype;
+
+        return new(true, null, null, null, input, usage?.OutputTokens, cost, kind, outcome.Error ?? subtype ?? kind);
     }
 }

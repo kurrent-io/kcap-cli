@@ -24,6 +24,28 @@ public class HeadlessPromptResponsesTests {
     }
 
     [Test]
+    public async Task A_failure_reports_the_runs_own_error_text() {
+        var response = HeadlessPromptResponses.From(
+            new(null, ClaudeCliFailure.NotSignedIn, null, "success", "Not logged in · Please run /login"), structured: false);
+
+        await Assert.That(response.Error).IsEqualTo("Not logged in · Please run /login");
+    }
+
+    [Test]
+    public async Task A_success_subtype_is_never_the_error_text() {
+        var response = HeadlessPromptResponses.From(new(null, ClaudeCliFailure.OutputUnparseable, null, "success"), structured: false);
+
+        await Assert.That(response.Error).IsEqualTo("unparseable_output");
+    }
+
+    [Test]
+    public async Task A_failure_subtype_is_the_error_text_when_the_run_gave_none() {
+        var response = HeadlessPromptResponses.From(new(null, ClaudeCliFailure.ProcessFailure, null, "error_max_turns"), structured: false);
+
+        await Assert.That(response.Error).IsEqualTo("error_max_turns");
+    }
+
+    [Test]
     public async Task A_failure_keeps_the_usage_it_reported() {
         var response = HeadlessPromptResponses.From(new(null, ClaudeCliFailure.Timeout, new ClaudeCliUsage(10, 5, 3, 2, 0.4)), structured: false);
 

@@ -18,12 +18,15 @@ record ClaudeCliResult(
 
 /// <summary>Outcome of a headless runner: exactly one of <see cref="Result"/> and <see cref="Failure"/>
 /// is set. <see cref="Usage"/> is what the run reported, a failed one included, and null when it reported
-/// nothing. <see cref="Subtype"/> is the result envelope's <c>subtype</c> when the run failed with one.</summary>
+/// nothing. <see cref="Subtype"/> is the result envelope's <c>subtype</c> when the run failed with one, and
+/// <see cref="Error"/> its <c>result</c> text when the envelope says <c>is_error</c>. A signed-out or rate-limited
+/// run reports subtype <c>success</c>, so only <see cref="Error"/> says what went wrong.</summary>
 readonly record struct ClaudeCliOutcome(
         ClaudeCliResult?  Result,
         ClaudeCliFailure? Failure,
         ClaudeCliUsage?   Usage   = null,
-        string?           Subtype = null
+        string?           Subtype = null,
+        string?           Error   = null
     );
 
 enum ClaudeCliFailure {
@@ -432,12 +435,12 @@ static class ClaudeCliRunner {
         if (subtype == "error_max_budget_usd"
          || error is not null && (error.Contains("usage limit", StringComparison.OrdinalIgnoreCase)
                                || error.Contains("hit your limit", StringComparison.OrdinalIgnoreCase)))
-            return new(null, ClaudeCliFailure.SpendBudget, usage, subtype);
+            return new(null, ClaudeCliFailure.SpendBudget, usage, subtype, error);
 
         if (apiStatus == 401 || error?.Contains("/login", StringComparison.Ordinal) == true)
-            return new(null, ClaudeCliFailure.NotSignedIn, usage, subtype);
+            return new(null, ClaudeCliFailure.NotSignedIn, usage, subtype, error);
 
-        return new(null, nonZeroExit ? ClaudeCliFailure.ProcessFailure : ClaudeCliFailure.OutputUnparseable, usage, subtype);
+        return new(null, nonZeroExit ? ClaudeCliFailure.ProcessFailure : ClaudeCliFailure.OutputUnparseable, usage, subtype, error);
     }
 
     /// <summary>
