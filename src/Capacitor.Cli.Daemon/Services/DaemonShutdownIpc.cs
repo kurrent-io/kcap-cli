@@ -12,7 +12,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// </summary>
 internal sealed partial class DaemonShutdownIpc(
         AgentOrchestrator orchestrator, RestartCoordinator restart, IHostApplicationLifetime lifetime,
-        ILogger<DaemonShutdownIpc> logger) {
+        ILogger<DaemonShutdownIpc> logger, StopCause? stopCause = null) {
 
     public async Task HandleAsync(string text, Stream stream, CancellationToken ct) {
         var request = ShutdownIpc.Parse(text);
@@ -33,6 +33,7 @@ internal sealed partial class DaemonShutdownIpc(
 
         if (request.Exit == "final") {
             await FrameCodec.WriteAsync(stream, LocalFrame.ShutdownAck("stopping"), ct);
+            stopCause?.Note($"a local stop request (agents={request.Agents})");
             lifetime.StopApplication();
 
             return;

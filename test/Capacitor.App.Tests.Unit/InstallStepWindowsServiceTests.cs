@@ -61,17 +61,22 @@ public class InstallStepWindowsServiceTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Unticking_the_service_installs_without_it() {
+    public async Task Unticking_the_service_installs_without_it_and_is_remembered_as_declined() {
         var cli = new FakeKcapCli { SetupLocalBehavior = LocalSetupScript.Prints(0, LocalSetupScript.Committed) };
+        var remembered = 0;
 
         await AvaloniaSession.DispatchAsync(async () => {
-            var install = Step(Controller(cli), WindowsServiceOffer.On);
+            var install = Step(Controller(cli, () => {
+                remembered++;
+                return Task.CompletedTask;
+            }), WindowsServiceOffer.On);
             await install.OnEnterAsync(CancellationToken.None);
             install.RunAsWindowsService = false;
             return await install.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
         });
 
         await Assert.That(cli.SetupLocalWindowsService).IsEquivalentTo([false]);
+        await Assert.That(remembered).IsEqualTo(1);
     }
 
     /// The decline is remembered, so the app's own service offer does not ask again, and a retry of the same

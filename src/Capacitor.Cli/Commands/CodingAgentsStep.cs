@@ -80,7 +80,7 @@ internal static class CodingAgentsStep {
             Func<string /*hooksPath*/, bool>                          InstallCopilotHooks,
             Func<string /*settingsPath*/, bool>                       InstallGeminiHooks,
             Func<bool>                                                CapacitorOnPath,
-            Func<string /*srcDir*/, string /*dstDir*/, bool>          InstallAgentSkills,
+            Func<string /*srcDir*/, string /*dstDir*/, SkillsInstallFailure?> InstallAgentSkills,
             Func<string /*legacyDir*/, bool>                          CleanLegacyCodexSkills,
             Func<string /*agentJsonPath*/, bool>?                     InstallKiroHooks = null,
             Func<string /*extensionPath*/, bool>?                     InstallPiExtension = null,
@@ -491,8 +491,8 @@ internal static class CodingAgentsStep {
             return false;
         }
 
-        if (!installers.InstallAgentSkills(Path.Combine(paths.PluginDir, "skills"), dst)) {
-            writeLine($"  [yellow]⚠[/] Kiro Crew skills could not be copied to {Markup.Escape(dst)}");
+        if (installers.InstallAgentSkills(Path.Combine(paths.PluginDir, "skills"), dst) is { } failure) {
+            SkillsCopyFailed("Kiro Crew skills", dst, failure, writeLine);
 
             return false;
         }
@@ -534,8 +534,8 @@ internal static class CodingAgentsStep {
 
         var src = Path.Combine(paths.PluginDir, "skills");
 
-        if (!installers.InstallAgentSkills(src, dst)) {
-            writeLine($"  [yellow]⚠[/] Kiro skills could not be copied to {Markup.Escape(dst)}");
+        if (installers.InstallAgentSkills(src, dst) is { } failure) {
+            SkillsCopyFailed("Kiro skills", dst, failure, writeLine);
 
             return false;
         }
@@ -1239,8 +1239,8 @@ internal static class CodingAgentsStep {
 
         var src = Path.Combine(paths.PluginDir, "skills");
 
-        if (!installers.InstallAgentSkills(src, dst)) {
-            writeLine($"  [yellow]⚠[/] Antigravity skills could not be copied to {Markup.Escape(dst)}");
+        if (installers.InstallAgentSkills(src, dst) is { } failure) {
+            SkillsCopyFailed("Antigravity skills", dst, failure, writeLine);
 
             return false;
         }
@@ -1320,6 +1320,12 @@ internal static class CodingAgentsStep {
         return installed.Value;
     }
 
+    static void SkillsCopyFailed(string what, string dst, SkillsInstallFailure failure, Action<string> writeLine) {
+        writeLine($"  [yellow]⚠[/] {what} could not be copied to {Markup.Escape(dst)}: {Markup.Escape(failure.Reason)}");
+
+        if (failure.PluginIncomplete) writeLine("    [dim]" + Markup.Escape(InstallProvenance.ReinstallHint()) + "[/]");
+    }
+
     /// <summary>True when this run copied the skills, false when they were already current, null when
     /// they could not be put in place.</summary>
     static bool? PlaceSharedSkills(
@@ -1345,10 +1351,9 @@ internal static class CodingAgentsStep {
         }
 
         var src = Path.Combine(paths.PluginDir, "skills");
-        var ok  = installers.InstallAgentSkills(src, paths.AgentsSkillsDir);
 
-        if (!ok) {
-            writeLine($"  [yellow]⚠[/] Agent skills could not be copied to {Markup.Escape(paths.AgentsSkillsDir)}");
+        if (installers.InstallAgentSkills(src, paths.AgentsSkillsDir) is { } failure) {
+            SkillsCopyFailed("Agent skills", paths.AgentsSkillsDir, failure, writeLine);
 
             return null;
         }

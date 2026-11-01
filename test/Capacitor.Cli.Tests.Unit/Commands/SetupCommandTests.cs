@@ -672,6 +672,14 @@ public class SetupCommandTests {
         await Assert.That(line).Contains("background service");
     }
 
+    [Test]
+    public async Task DaemonClosingLine_names_the_unit_the_daemon_runs_under() {
+        var line = SetupCommand.DaemonClosingLine(
+            new FirstRunMachineActionResult(FirstRunMachineActionOutcomes.Enabled, null), "Windows service kcap-service");
+
+        await Assert.That(line).Contains("background service, the Windows service kcap-service.");
+    }
+
     /// <summary>A failed ensure is retried as a service; only a platform without one gets the plain start.</summary>
     [Test]
     public async Task DaemonClosingLine_offers_a_plain_start_only_without_a_service_manager() {

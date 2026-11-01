@@ -26,6 +26,7 @@ public class PollingServiceVerifyTests {
         public bool OldUninstallFails;
         public bool InstallEndsOldDaemon;
         public bool InstallEndsReplacedDaemon { get; init; }
+        public bool ExitsAtOnce;
         public bool Unanswered;
         public bool OldUnanswered;
         public IReadOnlyDictionary<string, string>? OldEnv;
@@ -84,7 +85,7 @@ public class PollingServiceVerifyTests {
         }
 
         void Launch() {
-            Running = true;
+            Running = !ExitsAtOnce;
             JobPid = JobPidOnStart;
         }
     }
@@ -133,6 +134,14 @@ public class PollingServiceVerifyTests {
             }
         }
     }
+
+    static readonly HelloProbeResult NoAnswer = new(false, null, null, null);
+
+    PollingServiceVerify SlowBootVerify(FakeManager manager, Func<HelloProbeResult> hello, TimeSpan bootBudget, string? notePath = null) =>
+        new(Daemons.Store, manager,
+            id => manager.Running ? DaemonPid : null,
+            (_, _) => Task.FromResult(manager.Running ? hello() : NoAnswer),
+            TimeProvider.System, () => true, ShortBudget, bootBudget: bootBudget, endNotePath: _ => notePath);
 
     static ServiceSpec Spec() => new(Id, @"C:\kcap\kcap-daemon.exe", @"C:\kcap\daemon.log",
         new Dictionary<string, string> { ["KCAP_PROFILE"] = "work" }, []);
@@ -502,5 +511,77 @@ public class PollingServiceVerifyTests {
 
         await Assert.That(exit).IsEqualTo(VerifyExit.RetireRefused);
         await Assert.That(manager.Calls).IsEmpty();
+    }
+
+    /// A task whose daemon is still probing vendor CLIs has not bound its socket yet; ending it at the
+    /// forward budget kills a boot that was about to answer.
+    [Test]
+    public async Task A_daemon_still_starting_under_a_running_task_is_waited_on_past_the_forward_budget() {
+        var manager = new FakeManager();
+        var clock   = System.Diagnostics.Stopwatch.StartNew();
+
+        var exit = await SlowBootVerify(manager, () => clock.Elapsed > TimeSpan.FromMilliseconds(1500) ? Hello() : NoAnswer, TimeSpan.FromSeconds(30))
+            .InstallVerifiedAsync(Spec(), replace: false, expectedVersion: "1.0.0");
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.Ok);
+        await Assert.That(manager.Calls).IsEquivalentTo(["install"]);
+    }
+
+    /// The wait ends once the task stops running: a daemon that exited is not starting.
+    [Test]
+    public async Task A_daemon_that_exited_gets_no_boot_extension() {
+        var manager = new FakeManager { ExitsAtOnce = true };
+        var clock   = System.Diagnostics.Stopwatch.StartNew();
+
+        var exit = await SlowBootVerify(manager, () => Hello(), TimeSpan.FromSeconds(60))
+            .InstallVerifiedAsync(Spec(), replace: false, expectedVersion: null);
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.ReadinessTimeout);
+        await Assert.That(clock.Elapsed).IsLessThan(TimeSpan.FromSeconds(30));
+    }
+
+    /// A daemon that answers is up, so a wrong answer gets no extra time.
+    [Test]
+    public async Task A_daemon_that_answers_wrongly_gets_no_boot_extension() {
+        var manager = new FakeManager();
+        var clock   = System.Diagnostics.Stopwatch.StartNew();
+
+        var exit = await SlowBootVerify(manager, () => Hello(version: "0.9.0"), TimeSpan.FromSeconds(60))
+            .InstallVerifiedAsync(Spec(), replace: false, expectedVersion: "1.0.0");
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.ReadinessTimeout);
+        await Assert.That(clock.Elapsed).IsLessThan(TimeSpan.FromSeconds(30));
+    }
+
+    /// Ended from outside, the daemon cannot say why its log stops; the verify that ended it does, beside it.
+    [Test]
+    public async Task A_rolled_back_install_records_why_it_ended_the_daemon() {
+        using var tmp = new TempDir();
+        var note    = tmp.PathTo("daemon-svc.stderr.log");
+        var manager = new FakeManager();
+        var clock   = System.Diagnostics.Stopwatch.StartNew();
+
+        var exit = await SlowBootVerify(manager, () => NoAnswer, TimeSpan.FromMilliseconds(1500), note)
+            .InstallVerifiedAsync(Spec(), replace: false, expectedVersion: null);
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.ReadinessTimeout);
+        await Assert.That(clock.Elapsed).IsGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(1500));
+        await Assert.That(manager.Calls).IsEquivalentTo(["install", $"uninstall:{Id}"], TUnit.Assertions.Enums.CollectionOrdering.Matching);
+        var text = await File.ReadAllTextAsync(note);
+        await Assert.That(text).Contains("`kcap daemon service install --verify` ended this daemon");
+        await Assert.That(text).Contains("never answered on its control socket");
+    }
+
+    [Test]
+    public async Task A_stopped_start_records_why_it_ended_the_daemon() {
+        using var tmp = new TempDir();
+        var note    = tmp.PathTo("daemon-svc.stderr.log");
+        var manager = new FakeManager { Registered = true, UnitPresent = true };
+
+        var exit = await SlowBootVerify(manager, () => Hello(name: "someone-else"), TimeSpan.FromSeconds(60), note)
+            .StartVerifiedAsync(Id);
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.ReadinessTimeout);
+        await Assert.That(await File.ReadAllTextAsync(note)).Contains("`kcap daemon service start --verify` ended this daemon");
     }
 }

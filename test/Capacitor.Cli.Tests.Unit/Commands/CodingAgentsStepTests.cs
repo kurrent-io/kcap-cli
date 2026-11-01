@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Instructions;
@@ -222,7 +223,7 @@ public class CodingAgentsStepTests {
         // Skills install and Codex hooks are independent steps — a skills-copy
         // failure must not suppress the Codex trust hint.
         var sink     = new Sink();
-        var calls    = new InstallerCalls { AgentSkillsReturns = false };
+        var calls    = new InstallerCalls { AgentSkillsFailure = new("Access to the path is denied.", PluginIncomplete: false) };
         var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
         var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
 
@@ -1616,7 +1617,7 @@ public class CodingAgentsStepTests {
     [Test]
     public async Task Legacy_cleanup_not_invoked_when_codex_skills_install_fails() {
         var sink     = new Sink();
-        var calls    = new InstallerCalls { AgentSkillsReturns = false };
+        var calls    = new InstallerCalls { AgentSkillsFailure = new("Access to the path is denied.", PluginIncomplete: false) };
         var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
         var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
 
@@ -2603,6 +2604,33 @@ public class CodingAgentsStepTests {
     }
 
     [Test]
+    public async Task A_skills_copy_failure_says_why() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { AgentSkillsFailure = new("Access to the path is denied.", PluginIncomplete: false) };
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
+
+        await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Agent skills could not be copied to /fake/.agents/skills: Access to the path is denied."));
+        await Assert.That(sink.Lines).DoesNotContain(l => l.Contains("Re-install"));
+    }
+
+    /// <summary>The skills ship inside kcap's own plugin, so a plugin missing them is fixed by reinstalling kcap.</summary>
+    [Test]
+    public async Task A_plugin_without_its_skills_says_to_reinstall_kcap() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { AgentSkillsFailure = new("kcap's plugin has no skills folder (/fake/plugin/skills)", PluginIncomplete: true) };
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
+
+        await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(sink.Lines).Contains(l => l.Contains("no skills folder"));
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Re-install"));
+    }
+
+    [Test]
     public async Task Shared_skills_installed_when_only_codex_detected() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
@@ -2723,7 +2751,7 @@ public class CodingAgentsStepTests {
 
         public bool                      AgentSkillsCalled  { get; private set; }
         public (string Src, string Dst)? AgentSkillsArgs    { get; private set; }
-        public bool                      AgentSkillsReturns { get; set; } = true;
+        public SkillsInstallFailure?     AgentSkillsFailure { get; set; }
 
         public bool    AgentSkillsCurrentCalled  { get; private set; }
         public string? AgentSkillsCurrentArg     { get; private set; }
@@ -2844,7 +2872,7 @@ public class CodingAgentsStepTests {
                 AgentSkillsArgs   = (s, d);
                 AgentSkillsInstalls.Add((s, d));
 
-                return AgentSkillsReturns;
+                return AgentSkillsFailure;
             },
             CleanLegacyCodexSkills: d => {
                 LegacyCleanupCalled = true;

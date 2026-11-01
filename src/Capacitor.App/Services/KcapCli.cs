@@ -4,6 +4,7 @@ using Capacitor.App.Services.LocalSetup;
 using Capacitor.App.Services.Mutation;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.App.Services;
 
@@ -121,6 +122,10 @@ public interface IKcapCli {
     /// `local start`, bounded above the CLI's own readiness budget.
     Task<ProcessResult> LocalStartAsync(CancellationToken ct);
 
+    /// <c>local status --json</c>: the local server's condition as the CLI's own status reads it, supervisor included.
+    /// Null when the CLI is missing, timed out, or printed no status it knows, as a CLI that predates the flag does.
+    Task<LocalServerReading?> LocalStatusAsync(CancellationToken ct);
+
     /// `import --discover --json` for these vendors, or every harness when none is named; null when the
     /// run failed or printed no report.
     Task<ImportDiscoveryReport?> ImportDiscoverAsync(IReadOnlyList<string> vendorFlags, CancellationToken ct);
@@ -129,6 +134,12 @@ public interface IKcapCli {
 public sealed class KcapCli : IKcapCli {
     // Covers forward/rollback budgets, lock wait, crash recovery and the manual-owner kill wait.
     static readonly TimeSpan MutationTimeout = TimeSpan.FromSeconds(60);
+
+    // On Windows the CLI's readiness wait stretches from its 20 s forward budget to a 90 s boot budget
+    // while the task's daemon is still probing vendor CLIs; cut short, the app abandons a verify that
+    // would have succeeded.
+    static readonly TimeSpan BootExtension = OperatingSystem.IsWindows() ? TimeSpan.FromSeconds(70) : TimeSpan.Zero;
+    static readonly TimeSpan ServiceVerifyTimeout = MutationTimeout + BootExtension;
 
     /// The UAC prompt waits on a person; past this the install is reported unconfirmed, not failed.
     static readonly TimeSpan ElevationTimeout = TimeSpan.FromMinutes(10);
@@ -139,8 +150,8 @@ public sealed class KcapCli : IKcapCli {
     // A rename adds, on top of the install's own budgets: the old id's 10s lock wait, its 5s label
     // query, the 5s target probe, the old daemon's fence (two connects and exchanges of 3s each to
     // acquire, then a 3s commit or abort), the old daemon's 10s end-agents wait and the retire's own 20s
-    // forward budget — about 128s in all.
-    static readonly TimeSpan RenameTimeout = TimeSpan.FromSeconds(150);
+    // forward budget — about 128s in all, plus the boot extension.
+    static readonly TimeSpan RenameTimeout = TimeSpan.FromSeconds(150) + BootExtension;
     static readonly TimeSpan VersionTimeout = TimeSpan.FromSeconds(10);
     // Same tier as VersionTimeout — also a read-only query — so a hung `launchctl print` can
     // never block the per-mutation gate forever once the lifecycle controller polls this.
@@ -230,7 +241,7 @@ public sealed class KcapCli : IKcapCli {
         var env = MutationEnv(); // throws before any spawn if the instance carries no server
         if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);
         return await Run(cliPath, ["daemon", "service", "start", "--name", _daemonName, "--verify"],
-            new RunOptions(EnvOverlay: await EnvWithTerminalPathAsync(env, ct).ConfigureAwait(false), Timeout: MutationTimeout), ct).ConfigureAwait(false);
+            new RunOptions(EnvOverlay: await EnvWithTerminalPathAsync(env, ct).ConfigureAwait(false), Timeout: ServiceVerifyTimeout), ct).ConfigureAwait(false);
     }
 
     public async Task<ProcessResult> ServiceReloadAsync(CancellationToken ct) {
@@ -256,7 +267,7 @@ public sealed class KcapCli : IKcapCli {
 
         var env = await EnvWithTerminalPathAsync(mutation, ct).ConfigureAwait(false);
         return await Run(cliPath, args.ToArray(), new RunOptions(EnvOverlay: env,
-            Timeout: retireServiceId is null ? MutationTimeout : RenameTimeout), ct).ConfigureAwait(false);
+            Timeout: retireServiceId is null ? ServiceVerifyTimeout : RenameTimeout), ct).ConfigureAwait(false);
     }
 
     public async Task<ProcessResult> ServiceInstallWindowsServiceAsync(CancellationToken ct) {
@@ -403,6 +414,16 @@ public sealed class KcapCli : IKcapCli {
 
         return await _runner.RunAsync(cliPath, ["local", "start"],
             new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: LocalStartTimeout), ct).ConfigureAwait(false);
+    }
+
+    // Exits 1 whenever the server is not ready, so stdout, not the exit code, carries the answer.
+    public async Task<LocalServerReading?> LocalStatusAsync(CancellationToken ct) {
+        if (CliPath is not { } cliPath) return null;
+
+        var result = await Run(cliPath, ["local", "status", "--json"],
+            new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: StatusTimeout), ct).ConfigureAwait(false);
+
+        return result.TimedOut ? null : LocalStatusJson.Parse(result.Stdout);
     }
 
     public async Task<ImportDiscoveryReport?> ImportDiscoverAsync(IReadOnlyList<string> vendorFlags, CancellationToken ct) {

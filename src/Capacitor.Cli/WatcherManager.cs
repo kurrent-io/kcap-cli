@@ -84,13 +84,19 @@ public sealed partial class WatcherManager(
             return false;
         }
 
-        if (await KillProcess(key, pidFile, stderr ?? Console.Error) is not { } killed) return false;
+        var (outcome, pid) = await KillProcess(key, pidFile, stderr ?? Console.Error);
+        if (outcome is not { } killed) return false;
 
-        try { File.Delete(pidFile); } catch {
-            /* ignore */
+        // A watcher asked to stop can arm a successor under the same key before it exits; its files stay.
+        if (pid is { } stopped) {
+            RemoveOwnPidFile(key, stopped);
+        } else {
+            try { File.Delete(pidFile); } catch {
+                /* ignore */
+            }
+
+            DeleteHeartbeatFiles(key);
         }
-
-        DeleteHeartbeatFiles(key);
 
         return killed;
     }
@@ -103,8 +109,9 @@ public sealed partial class WatcherManager(
         return !File.Exists(paths.PidFile(key));
     }
 
-    /// <summary>True when killed, false when the watcher is conclusively gone, null when it may still be running.</summary>
-    async Task<bool?> KillProcess(string key, string pidFile, TextWriter stderr) {
+    /// <summary>True when killed, false when the watcher is conclusively gone, null when it may still be running;
+    /// with the pid the file named, when it named one.</summary>
+    async Task<(bool? Killed, int? Pid)> KillProcess(string key, string pidFile, TextWriter stderr) {
         int? pid   = null;
         var  token = "";
 
@@ -114,7 +121,7 @@ public sealed partial class WatcherManager(
             var lines = await File.ReadAllLinesAsync(pidFile);
 
             if (lines.Length == 0 || !int.TryParse(lines[0].Trim(), out var parsed)) {
-                return false;
+                return (false, null);
             }
 
             pid   = parsed;
@@ -126,16 +133,15 @@ public sealed partial class WatcherManager(
             if (token.Length > 0 && ProcessStartToken.Matches(parsed, token) == false) {
                 await stderr.WriteLineAsync($"Watcher {key} (PID {parsed}) was recycled by another process; sweeping stale pid file");
 
-                return false;
+                return (false, parsed);
             }
 
             try {
                 using var process = Process.GetProcessById(parsed);
 
-                // SIGTERM-first on Unix so the watcher runs its shutdown path (final drain +
-                // undelivered-tail spool) — Process.Kill is SIGKILL there. Windows has no
-                // SIGTERM; the stop is hard and recovery is left to the spool/import paths.
-                if (!TrySignalTerm(parsed)) {
+                // Ask first so the watcher runs its shutdown path (final drain, tail spool): SIGTERM
+                // on Unix, the stop event on Windows. Process.Kill skips all of it.
+                if (!TrySignalTerm(parsed) && !WatcherStopSignal.TryRequest(parsed)) {
                     process.Kill(entireProcessTree: false);
                 }
 
@@ -151,22 +157,22 @@ public sealed partial class WatcherManager(
                     await stderr.WriteLineAsync($"Watcher {key} (PID {parsed}) force-killed after timeout");
                 }
 
-                return true;
+                return (true, parsed);
             } catch (ArgumentException) {
                 await stderr.WriteLineAsync($"Watcher {key} (PID {parsed}) already exited");
 
-                return false;
+                return (false, parsed);
             }
         } catch (Exception ex) {
             if (pid is { } known && IsGone(known, token)) {
                 await stderr.WriteLineAsync($"Watcher {key} (PID {known}) exited while being killed");
 
-                return false;
+                return (false, known);
             }
 
             await stderr.WriteLineAsync($"Error killing watcher {key}: {ex.Message}; keeping its pid file");
 
-            return null;
+            return (null, pid);
         }
     }
 

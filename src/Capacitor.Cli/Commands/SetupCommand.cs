@@ -844,7 +844,9 @@ sealed class SetupCommand(
             if (!await WaitForWorkspaceAsync(serverUrl, NewWorkspaceWait)) return 1;
         } else if (local is not null) {
             var (exit, committed) = await new LocalSetupTerminal(localInstallers, local, _json,
-                local.WindowsService ? WindowsServiceStepAsync : null).RunAsync();
+                local.WindowsService
+                    ? progress => WindowsServiceStepAsync(progress, line => AnsiConsole.MarkupLine($"  {Markup.Escape(line)}"))
+                    : null).RunAsync();
 
             if (committed is null) return exit;
 
@@ -1127,7 +1129,7 @@ sealed class SetupCommand(
             InstallCopilotHooks:    PluginCommand.InstallCopilotHooks,
             InstallGeminiHooks:     PluginCommand.InstallGeminiHooks,
             CapacitorOnPath:        () => binaries.Finds("kcap"),
-            InstallAgentSkills:     AgentsSkillsInstaller.Install,
+            InstallAgentSkills:     AgentsSkillsInstaller.TryInstall,
             CleanLegacyCodexSkills: legacyDir => AgentsSkillsInstaller.CleanLegacyCodexSkills(legacyDir).RemovedAny,
             // Read when it runs: a reported run swaps stderr for the writer its failure line comes from.
             InstallKiroHooks:       agentPath => PluginCommand.InstallKiroHooks(agentPath, harnesses, Console.Error),
@@ -1466,7 +1468,7 @@ sealed class SetupCommand(
         }
 
         if (machineSignedIn) AnsiConsole.MarkupLine($"\n{MachineDaemonLine}");
-        else if (!museAssistant) AnsiConsole.MarkupLine($"\n{DaemonClosingLine(daemonService)}");
+        else if (!museAssistant) AnsiConsole.MarkupLine($"\n{DaemonClosingLine(daemonService, DaemonServiceUnit())}");
 
         WriteNextSteps(
             ShouldOfferGuidedTour(detectedSummary is not null, claudeSettingsPath, stepPaths),
@@ -2860,7 +2862,7 @@ sealed class SetupCommand(
             }
 
             if (args.WindowsService) {
-                await WindowsServiceStepAsync(progress);
+                await WindowsServiceStepAsync(progress, line => Console.Error.WriteLine($"  {line}"));
 
                 // An installer built before would still pick the supervisor the machine had then.
                 installer = localInstallers.Create();
@@ -2885,12 +2887,13 @@ sealed class SetupCommand(
     /// <summary>Replaces the real <c>--windows-service</c> step, which raises an administrator prompt.</summary>
     internal LocalWindowsServiceStep? WindowsServiceStep { get; init; }
 
-    /// <summary>Narrates on stderr: under <c>--local --json</c> stdout carries only the JSON lines.</summary>
-    Task WindowsServiceStepAsync(IProgress<LocalInstallEvent> progress) {
+    /// <param name="say">Prints a line about the move; under <c>--local --json</c> it goes to stderr, because stdout
+    /// carries only the JSON lines there.</param>
+    Task WindowsServiceStepAsync(IProgress<LocalInstallEvent> progress, Action<string> say) {
         var step = WindowsServiceStep;
         if (step is null && OperatingSystem.IsWindows()) step = LocalWindowsServiceStep.ForCurrentProcess(localRoot, home, time);
 
-        return step is null ? Task.CompletedTask : step.RunAsync(progress, line => Console.Error.WriteLine($"  {line}"));
+        return step is null ? Task.CompletedTask : step.RunAsync(progress, say);
     }
 
     static void WriteJsonLine(string line) {
@@ -3181,11 +3184,12 @@ sealed class SetupCommand(
     /// <summary>The closing daemon line. Only a platform with no service manager is pointed at a plain
     /// background start; anywhere else that would run a second daemon beside the service. A retry is
     /// suggested only where one can change the answer.</summary>
-    internal static string DaemonClosingLine(FirstRunMachineActionResult? service) => (service?.Outcome, service?.Reason) switch {
+    /// <param name="unit">The service manager's name for the unit, when it is known.</param>
+    internal static string DaemonClosingLine(FirstRunMachineActionResult? service, string? unit = null) => (service?.Outcome, service?.Reason) switch {
         (FirstRunMachineActionOutcomes.Enabled or FirstRunMachineActionOutcomes.AlreadyEnabled, _) =>
-            "  [green]✓[/] The agent daemon runs as a background service.",
+            $"  [green]✓[/] The agent daemon runs as a background service{UnitSuffix(unit)}.",
         (FirstRunMachineActionOutcomes.EnabledUnverified, _) =>
-            "  [green]✓[/] The agent daemon is installed as a background service [dim](check with[/] [cyan]kcap daemon status[/][dim])[/].",
+            $"  [green]✓[/] The agent daemon is installed as a background service{UnitSuffix(unit)} [dim](check with[/] [cyan]kcap daemon status[/][dim])[/].",
         (FirstRunMachineActionOutcomes.Refused, FirstRunMachineActionReasons.UnsupportedPlatform) =>
             "  [dim]This platform has no service manager kcap supports:[/] start the daemon with [cyan]kcap daemon start -d[/]",
         (FirstRunMachineActionOutcomes.Refused, FirstRunMachineActionReasons.NotConfigured) =>
@@ -3194,6 +3198,17 @@ sealed class SetupCommand(
             "  [yellow]![/] The existing agent daemon service needs attention, so setup left it alone: see [cyan]kcap daemon service status[/]",
         _ => "  [yellow]![/] The agent daemon service is not running yet: retry with [cyan]kcap daemon service ensure[/]"
     };
+
+    static string UnitSuffix(string? unit) => unit is null ? "" : $", the {Markup.Escape(unit)}";
+
+    /// <summary>The name of the unit the daemon service runs under here; null on a platform with none.</summary>
+    string? DaemonServiceUnit() {
+        try {
+            return Services.ServiceManagerFactory.ForCurrentOs(config, home, time).Describe();
+        } catch (PlatformNotSupportedException) {
+            return null;
+        }
+    }
 
     /// <summary>
     /// The git hook's line. An older git ignores the entry silently, so setup says so rather than

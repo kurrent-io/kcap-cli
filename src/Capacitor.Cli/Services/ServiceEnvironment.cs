@@ -158,7 +158,7 @@ static class ServiceEnvironment {
             ? [.. Keys, .. ReviewerConsentKeys, .. GoogleConfigKeys]
             : [.. Keys, .. ReviewerConsentKeys, TokenCommandKey, .. GoogleConfigKeys, .. GoogleSecretCapableKeys];
         foreach (var key in keys) {
-            if (!source.TryGetValue(key, out var v)) continue;
+            if (!TryRead(source, key, isWindows, out var v)) continue;
             if (!string.IsNullOrEmpty(v) || BakeEvenEmptyKeys.Contains(key)) env[key] = v;
         }
         if (!string.IsNullOrEmpty(profileName)) env[ProfileOverrides.ProfileVar] = profileName; // explicit pin wins
@@ -177,10 +177,30 @@ static class ServiceEnvironment {
         // scheduled task starts without the installing shell's HOME (Git Bash, MSYS or a redirected
         // corporate home). Without it the daemon and the CLI that installed it look in two different
         // places for each other and for the repo list.
-        if (isWindows && source.TryGetValue("HOME", out var home) && Path.IsPathFullyQualified(home))
+        if (isWindows && TryRead(source, "HOME", isWindows, out var home) && Path.IsPathFullyQualified(home))
             env["HOME"] = home;
 
         return env;
+    }
+
+    /// <summary>Windows names are case-insensitive and the snapshot keeps each one as the process block spells it,
+    /// which for the search path is usually <c>Path</c>: an exact lookup would never capture it.</summary>
+    static bool TryRead(IReadOnlyDictionary<string, string> source, string key, bool isWindows, out string value) {
+        if (source.TryGetValue(key, out var exact)) {
+            value = exact;
+            return true;
+        }
+
+        if (isWindows) {
+            foreach (var (name, v) in source) {
+                if (!string.Equals(name, key, StringComparison.OrdinalIgnoreCase)) continue;
+                value = v;
+                return true;
+            }
+        }
+
+        value = "";
+        return false;
     }
 
     /// <summary>

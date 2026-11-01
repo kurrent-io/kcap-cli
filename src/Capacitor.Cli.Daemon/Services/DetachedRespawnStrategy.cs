@@ -12,7 +12,8 @@ namespace Capacitor.Cli.Daemon.Services;
 /// The successor's flock acquire succeeds once our cleanup releases it.
 /// </summary>
 internal sealed partial class DetachedRespawnStrategy(
-        DaemonConfig config, IHostApplicationLifetime lifetime, ILogger<DetachedRespawnStrategy> logger
+        DaemonConfig config, IHostApplicationLifetime lifetime, ILogger<DetachedRespawnStrategy> logger,
+        StopCause? stopCause = null
     ) : IRestartStrategy {
 
     /// <summary>Pure: original argv + "--await-lock" (idempotent).</summary>
@@ -65,6 +66,7 @@ internal sealed partial class DetachedRespawnStrategy(
             return RestartOutcome.Retry;
         }
 
+        stopCause?.Note("restarting after an update; a successor daemon takes over");
         lifetime.StopApplication();
 
         return RestartOutcome.Initiated;

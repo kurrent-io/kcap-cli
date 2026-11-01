@@ -164,6 +164,63 @@ sealed class WindowsScheduledTaskServiceManager(
         return error is null;
     }
 
+    /// <summary>
+    /// Sets one variable in the task's wrapper. The wrapper sets its environment once, ahead of the loop that
+    /// relaunches the daemon, and cmd reads a running batch file by byte offset: a running task is therefore
+    /// stopped through <paramref name="stopDaemon"/> and ended before the wrapper is rewritten, then run again.
+    /// A daemon that does not accept the stop leaves the wrapper as it was.
+    /// </summary>
+    public UnitRefresh SetEnvironment(string serviceId, string key, string value, Func<bool> stopDaemon, out string? error) {
+        error = null;
+
+        var (code, stdout, err) = _schtasks(WindowsTaskUnit.QueryArgs(serviceId));
+        if (code != 0) {
+            if (ConfirmedAbsent(serviceId)) return UnitRefresh.UnitMissing;
+            error = $"Could not read the state of scheduled task {WindowsTaskUnit.TaskName(serviceId)} (exit {code}): {err.Trim()}";
+            return UnitRefresh.Failed;
+        }
+
+        var wrapper = WrapperOf(serviceId, taskExists: true);
+        if (!File.Exists(wrapper)) return UnitRefresh.UnitMissing;
+
+        var previous = File.ReadAllText(wrapper);
+        if (WindowsTaskUnit.EnvFromWrapper(previous).TryGetValue(key, out var current) && current == value) return UnitRefresh.Current;
+
+        var rewritten = WindowsTaskUnit.WithEnvironmentValue(previous, key, value)
+            ?? throw new InvalidOperationException($"{wrapper} is not a wrapper kcap wrote, so it was left unchanged");
+
+        if (WindowsTaskUnit.StatusFromQuery(code, stdout) != ServiceState.Running) {
+            _writeUnit(wrapper, rewritten, WrapperEncoding);
+            return UnitRefresh.NotLoaded;
+        }
+
+        if (!stopDaemon()) return UnitRefresh.Deferred;
+
+        var (endCode, _, endErr) = _schtasks(WindowsTaskUnit.EndArgs(serviceId));
+        if (endCode != 0) {
+            var (stateCode, state, _) = _schtasks(WindowsTaskUnit.QueryArgs(serviceId));
+            if (stateCode != 0 || WindowsTaskUnit.StatusFromQuery(stateCode, state) == ServiceState.Running) {
+                error = $"schtasks /End failed (exit {endCode}): {endErr.Trim()}";
+                return UnitRefresh.Failed;
+            }
+        }
+
+        // A daemon still exiting has accepted the stop and kept its agents for the next one to resume.
+        if (_daemonPid(serviceId) is { } pid && pid != Environment.ProcessId && _killTree(pid) is { } killError) {
+            error = killError;
+            return UnitRefresh.Failed;
+        }
+
+        _writeUnit(wrapper, rewritten, WrapperEncoding);
+
+        if (Schtasks(WindowsTaskUnit.RunArgs(serviceId)) is { } runError) {
+            error = $"the daemon stopped to take the change but did not start again ({runError}); start it with `kcap daemon service start --name {serviceId}`";
+            return UnitRefresh.Failed;
+        }
+
+        return UnitRefresh.Reloaded;
+    }
+
     /// <summary>No distinct verify path for scheduled tasks yet — delegate mechanically to <see cref="Install"/>.</summary>
     public void WriteAndBootstrap(ServiceSpec spec) {
         if (!Install(spec, startNow: true, out var error)) throw new InvalidOperationException(error);

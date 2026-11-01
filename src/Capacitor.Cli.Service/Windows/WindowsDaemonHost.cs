@@ -42,23 +42,34 @@ sealed class WindowsDaemonHost : IDaemonHost<Enrollment> {
 
     public bool HasEnrollment(SessionUser user) => EnrollmentKey.Exists(user, ServiceIdentity.EnrollmentKey);
 
+    /// <summary>The daemon in the user's job when there is one: the user may also run a daemon of another name from
+    /// the same binary, which only a daemon outside the job could be</summary>
     public IRunningDaemon? FindRunning(SessionUser user, Enrollment enrollment) {
+        Win32RunningDaemon? outsideJob = null;
         foreach (var process in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(Enrollment.DaemonFileName))) {
             using (process) {
                 string? path;
+                int session;
                 try {
                     path = process.MainModule?.FileName;
-                } catch (Win32Exception) {
+                    session = process.SessionId;
+                } catch (Exception ex) when (ex is Win32Exception or InvalidOperationException) {
                     continue;
                 }
-                if (process.SessionId != user.SessionId || !string.Equals(path, enrollment.DaemonPath, StringComparison.OrdinalIgnoreCase)) continue;
+                if (session != user.SessionId || !string.Equals(path, enrollment.DaemonPath, StringComparison.OrdinalIgnoreCase)) continue;
 
                 var handle = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE, false, process.Id);
                 if (handle == IntPtr.Zero) continue;
-                return UserProcess.Adopt(process.Id, handle, ServiceIdentity.JobName(user.Sid));
+                var daemon = UserProcess.Adopt(process.Id, handle, ServiceIdentity.JobName(user.Sid));
+                if (daemon.HasJob) {
+                    outsideJob?.Dispose();
+                    return daemon;
+                }
+                if (outsideJob is null) outsideJob = daemon;
+                else daemon.Dispose();
             }
         }
-        return null;
+        return outsideJob;
     }
 
     public IRunningDaemon Launch(SessionUser user, Enrollment enrollment) {

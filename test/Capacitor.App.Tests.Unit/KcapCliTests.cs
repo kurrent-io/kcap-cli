@@ -134,8 +134,11 @@ public class KcapCliTests {
 
         await Assert.That(runner.SeenArgs).IsEquivalentTo(
             ["daemon", "service", "start", "--name", "daemon-a", "--verify"], CollectionOrdering.Matching);
-        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(60));
+        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(60) + BootExtension);
     }
+
+    /// <summary>A Windows verify waits out a daemon still probing vendor CLIs, so the app must outlast it.</summary>
+    static readonly TimeSpan BootExtension = OperatingSystem.IsWindows() ? TimeSpan.FromSeconds(70) : TimeSpan.Zero;
 
     [Test]
     public async Task ServiceInstallVerifiedAsync_argv_includes_profile_verify_and_replace() {
@@ -147,7 +150,7 @@ public class KcapCliTests {
         await Assert.That(runner.SeenArgs).IsEquivalentTo(
             ["daemon", "service", "install", "--name", "daemon-a", "--profile", "work", "--verify", "--replace"],
             CollectionOrdering.Matching);
-        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(60));
+        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(60) + BootExtension);
     }
 
     [Test]
@@ -157,7 +160,7 @@ public class KcapCliTests {
         await Assert.That(runner.SeenArgs).IsEquivalentTo(
             ["daemon", "service", "install", "--name", "daemon-a", "--profile", "work", "--verify", "--replace", "--retire", "old-name"],
             CollectionOrdering.Matching);
-        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(150));
+        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(150) + BootExtension);
     }
 
     [Test]
@@ -839,6 +842,32 @@ public class KcapCliTests {
         await Assert.That(runner.SeenArgs).IsEquivalentTo(["local", "start"], CollectionOrdering.Matching);
         await Assert.That(runner.SeenOptions!.EnvOverlay!["KCAP_PROFILE"]).IsEqualTo("work");
         await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromMinutes(11));
+    }
+
+    /// <summary>Status exits 1 whenever the server is not ready, which is exactly when the banner asks, so the answer is
+    /// read from stdout whatever the exit code.</summary>
+    [Test]
+    public async Task LocalStatusAsync_reads_a_not_ready_status_from_stdout() {
+        var line = Capacitor.Cli.Core.LocalEdition.LocalStatusJson.From(false, "Not running.", [],
+            new(Capacitor.Cli.Core.LocalEdition.LocalServerCondition.Restarting, 9473)).Render();
+        var runner = new FakeProcessRunner { Behavior = _ => Task.FromResult(new ProcessResult(1, line + "\n", "", false)) };
+        var cli = MakeCli(runner);
+
+        var reading = await cli.LocalStatusAsync(CancellationToken.None);
+
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(["local", "status", "--json"], CollectionOrdering.Matching);
+        await Assert.That(runner.SeenOptions!.EnvOverlay!["KCAP_PROFILE"]).IsEqualTo("work");
+        await Assert.That(reading!.Condition).IsEqualTo(Capacitor.Cli.Core.LocalEdition.LocalServerCondition.Restarting);
+    }
+
+    /// <summary>A CLI that predates the flag prints usage, and a timed-out one may print half a line: neither is a status.</summary>
+    [Test]
+    [Arguments(1, "kcap local status takes no arguments: --json\n", false)]
+    [Arguments(0, "{\"ready\":false,\"headline\":\"x\",\"condition\":\"restarting\",\"notes\":[]}", true)]
+    public async Task LocalStatusAsync_is_null_without_a_status_it_can_trust(int exitCode, string stdout, bool timedOut) {
+        var runner = new FakeProcessRunner { Behavior = _ => Task.FromResult(new ProcessResult(exitCode, stdout, "", timedOut)) };
+
+        await Assert.That(await MakeCli(runner).LocalStatusAsync(CancellationToken.None)).IsNull();
     }
 
     [Test]

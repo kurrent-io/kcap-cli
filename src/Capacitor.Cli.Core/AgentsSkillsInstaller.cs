@@ -64,20 +64,50 @@ public static class AgentsSkillsInstaller {
     ];
 
     public static bool Install(string sourceDir, string targetDir) {
-        if (!Directory.Exists(sourceDir)) return false;
+        if (TryInstall(sourceDir, targetDir) is not { } failure) return true;
+
+        Console.Error.WriteLine($"Could not install agent skills: {failure.Reason}");
+
+        return false;
+    }
+
+    /// <summary>Why a path <c>Exists</c> reported absent cannot be read, or null when it really is absent: <c>Exists</c>
+    /// answers false for a path it is denied as well, and a reinstall does not fix access.</summary>
+    static string? Unreadable(string path, bool directory) {
+        try {
+            if (directory) {
+                using var entries = Directory.EnumerateFileSystemEntries(path).GetEnumerator();
+                entries.MoveNext();
+            } else {
+                // Windows refuses to open a directory as a file with an access error; one where a file belongs is missing.
+                if (Directory.Exists(path)) return null;
+                using (File.OpenRead(path)) { }
+            }
+
+            return null;
+        } catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) {
+            return null;
+        } catch (Exception ex) when (ex is UnauthorizedAccessException or IOException) {
+            return ex.Message;
+        }
+    }
+
+    /// <summary>Copies the skills, returning why it could not, or null once they are in place.</summary>
+    public static SkillsInstallFailure? TryInstall(string sourceDir, string targetDir) {
+        if (!Directory.Exists(sourceDir))
+            return Unreadable(sourceDir, directory: true) is { } denied
+                ? new($"kcap's skills folder cannot be read: {denied}", PluginIncomplete: false)
+                : new($"kcap's plugin has no skills folder ({sourceDir})", PluginIncomplete: true);
 
         var missing = SourceNames
             .Where(n => !File.Exists(Path.Combine(sourceDir, n, "SKILL.md")))
             .ToList();
 
-        if (missing.Count > 0) {
-            Console.Error.WriteLine(
-                $"Cannot install agent skills: missing SKILL.md for skill(s) under {sourceDir}: "
-              + string.Join(", ", missing)
-            );
+        if (missing.Select(n => Unreadable(Path.Combine(sourceDir, n, "SKILL.md"), directory: false)).FirstOrDefault(r => r is not null) is { } unreadable)
+            return new($"kcap's skills cannot be read: {unreadable}", PluginIncomplete: false);
 
-            return false;
-        }
+        if (missing.Count > 0)
+            return new($"kcap's plugin is missing SKILL.md for {string.Join(", ", missing)} ({sourceDir})", PluginIncomplete: true);
 
         try {
             Directory.CreateDirectory(targetDir);
@@ -99,11 +129,9 @@ public static class AgentsSkillsInstaller {
             SkillsFileManifest.Write(targetDir, SourceNames.Select(n => "kcap-" + n));
             WriteMarker(targetDir);
 
-            return true;
+            return null;
         } catch (Exception ex) {
-            Console.Error.WriteLine($"Could not install agent skills: {ex.Message}");
-
-            return false;
+            return new(ex.Message, PluginIncomplete: false);
         }
     }
 

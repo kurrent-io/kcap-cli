@@ -267,6 +267,8 @@ public class LocalStatusReaderTests {
         await Assert.That((await Read()).Headline).IsEqualTo("Stopped.");
     }
 
+    /// <summary>A start from this root cannot bring up a unit that runs another, so the reading a client acts on is not
+    /// one it would offer Start for.</summary>
     [Test]
     public async Task A_unit_serving_another_root_names_it() {
         Publish();
@@ -277,6 +279,7 @@ public class LocalStatusReaderTests {
 
         await Assert.That(report.Headline).Contains("serves another installation");
         await Assert.That(Text(report)).Contains($"KCAP_LOCAL_ROOT={other}");
+        await Assert.That(report.Reading.Condition).IsEqualTo(LocalServerCondition.ServesAnother);
     }
 
     [Test]
@@ -489,6 +492,46 @@ public class LocalStatusReaderTests {
 
         await Assert.That(report.Headline).Contains("exited with code 1 and the fake unit is starting it again");
         await Assert.That(Text(report)).Contains("taken by nginx");
+    }
+
+    /// <summary>The reading <c>--json</c> carries: a relaunch under way is no stopped server, and a stranger on the port
+    /// outranks it, named as the OS names it.</summary>
+    [Test]
+    public async Task A_relaunch_reads_as_restarting_unless_another_process_holds_the_port() {
+        Running();
+        Service.ActivityOverride = new UnitActivity.Restarting(1);
+
+        await Assert.That((await Read()).Reading).IsEqualTo(new LocalServerReading(LocalServerCondition.Restarting, 9473));
+
+        _holders.Add(new(4728, "powershell"));
+
+        await Assert.That((await Read()).Reading).IsEqualTo(new LocalServerReading(LocalServerCondition.PortTaken, 9473, new PortHolder(4728, "powershell")));
+    }
+
+    [Test]
+    public async Task A_running_server_that_does_not_answer_yet_reads_as_restarting() {
+        Running();
+        Server.Override = _ => throw new HttpRequestException("Connection refused");
+
+        await Assert.That((await Read()).Reading.Condition).IsEqualTo(LocalServerCondition.Restarting);
+    }
+
+    [Test]
+    public async Task A_stopped_server_reads_as_one_a_start_can_bring_up() {
+        Running();
+        await Service.StopAsync(Unit, CancellationToken.None);
+
+        await Assert.That((await Read()).Reading).IsEqualTo(new LocalServerReading(LocalServerCondition.Installed, 9473));
+    }
+
+    [Test]
+    public async Task A_stopped_server_behind_a_foreign_answer_reads_as_taken_by_that_answer() {
+        Running();
+        await Service.StopAsync(Unit, CancellationToken.None);
+        Foreign();
+
+        await Assert.That((await Read()).Reading)
+            .IsEqualTo(new LocalServerReading(LocalServerCondition.PortTaken, 9473, Answer: "a web server that calls itself nginx/1.25.3"));
     }
 
     [Test]

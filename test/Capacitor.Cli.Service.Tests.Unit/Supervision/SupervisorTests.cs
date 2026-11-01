@@ -212,6 +212,51 @@ public class SupervisorTests {
         await Assert.That(status.HasJob).IsFalse();
     }
 
+    /// A service restart detaches one supervisor and starts another, which finds the daemon still running: it has to
+    /// supervise it as one it launched, not only report it
+    [Test]
+    public async Task A_daemon_adopted_across_a_service_restart_is_relaunched_when_it_crashes() {
+        _host.SignIn(1, Alice);
+        var before = NewSupervisor();
+        before.Start();
+        var survivor = _host.Launched[0];
+        before.Detach();
+        _host.Running = survivor;
+        var after = NewSupervisor();
+
+        after.Start();
+        var adopted = after.Status(Alice);
+        survivor.Exit(-1);
+        await WaitUntilAsync(() => after.Status(Alice).State == DaemonState.Relaunching, "the relaunching state");
+        _time.Advance(DaemonSupervisor.RelaunchPause);
+
+        await WaitUntilAsync(() => _host.LaunchCount == 2, "the relaunch");
+        await Assert.That(adopted.Adopted).IsTrue();
+        await Assert.That(adopted.Pid).IsEqualTo(survivor.Pid);
+        await Assert.That(after.Status(Alice).State).IsEqualTo(DaemonState.Running);
+    }
+
+    [Test]
+    public async Task A_stop_asks_an_adopted_daemon_to_stop_and_ends_it_once_the_wait_runs_out() {
+        _host.SignIn(1, Alice);
+        var adopted = new FakeRunningDaemon(777);
+        _host.Running = adopted;
+        var supervisor = NewSupervisor();
+        supervisor.Start();
+
+        var stopping = supervisor.StopAsync(Alice);
+        await WaitUntilAsync(() => _host.StopRequests.Count == 1, "the stop request");
+        _time.Advance(StopWait);
+        var status = await stopping;
+        _time.Advance(DaemonSupervisor.RelaunchPause * 4);
+        await Task.Delay(50);
+
+        await Assert.That(_host.StopPids).IsEquivalentTo([777]);
+        await Assert.That(adopted.Terminations).IsEqualTo(1);
+        await Assert.That(status.State).IsEqualTo(DaemonState.Stopped);
+        await Assert.That(_host.LaunchCount).IsEqualTo(0);
+    }
+
     [Test]
     public async Task A_detached_supervisor_leaves_exits_alone() {
         _host.SignIn(1, Alice);

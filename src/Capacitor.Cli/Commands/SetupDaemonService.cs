@@ -85,7 +85,7 @@ static class SetupDaemonService {
         _ =>
             "  [yellow]![/] The daemon service could not be given your current PATH, so it may not find every harness setup found"
           + (refresh.Error is { } error ? $" ({Markup.Escape(error)})" : "")
-          + ". Reinstall it with [cyan]kcap daemon service install --replace --verify[/]",
+          + $". Reinstall it with [cyan]{Markup.Escape(refresh.Reinstall ?? "kcap daemon service install --replace --verify")}[/]",
     };
 
     static string? RenameLine(FlowEnsure outcome) => outcome switch {

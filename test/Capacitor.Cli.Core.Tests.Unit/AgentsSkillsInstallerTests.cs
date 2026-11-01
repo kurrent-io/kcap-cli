@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using TUnit.Core.Enums;
 
 namespace Capacitor.Cli.Core.Tests.Unit;
 
@@ -180,6 +181,86 @@ public class AgentsSkillsInstallerTests {
 
         await Assert.That(ok).IsFalse();
         await Assert.That(Directory.Exists(dst.PathTo("kcap-recap"))).IsFalse();
+    }
+
+    /// <summary>A plugin directory copied without its subfolders has no skills folder at all, which must say so
+    /// and point at the plugin rather than at the target.</summary>
+    [Test]
+    public async Task TryInstall_names_a_missing_skills_folder_as_the_plugin_being_incomplete() {
+        using var plugin = new TempDir();
+        using var dst    = new TempDir();
+        var src = plugin.PathTo("skills");
+
+        var failure = AgentsSkillsInstaller.TryInstall(src, dst.Path);
+
+        await Assert.That(failure).IsNotNull();
+        await Assert.That(failure!.PluginIncomplete).IsTrue();
+        await Assert.That(failure.Reason).Contains("no skills folder");
+        await Assert.That(failure.Reason).Contains(src);
+    }
+
+    [Test]
+    public async Task TryInstall_names_the_skills_missing_from_the_plugin() {
+        using var src = new TempDir();
+        using var dst = new TempDir();
+
+        foreach (var name in SourceNames.Where(n => n != "pages")) src.CreateFile([name, "SKILL.md"], $"---\nname: {name}\n---\nbody");
+
+        var failure = AgentsSkillsInstaller.TryInstall(src.Path, dst.Path);
+
+        await Assert.That(failure!.PluginIncomplete).IsTrue();
+        await Assert.That(failure.Reason).Contains("pages");
+    }
+
+    /// <summary>A folder where a SKILL.md belongs is a missing file, though Windows refuses to open it with an access error.</summary>
+    [Test]
+    public async Task TryInstall_names_a_folder_in_place_of_a_SKILL_md_as_the_plugin_being_incomplete() {
+        using var src = new TempDir();
+        using var dst = new TempDir();
+
+        foreach (var name in SourceNames.Where(n => n != "pages")) src.CreateFile([name, "SKILL.md"], $"---\nname: {name}\n---\nbody");
+        src.CreateDir("pages", "SKILL.md");
+
+        var failure = AgentsSkillsInstaller.TryInstall(src.Path, dst.Path);
+
+        await Assert.That(failure!.PluginIncomplete).IsTrue();
+        await Assert.That(failure.Reason).Contains("pages");
+    }
+
+    /// <summary>A skill the process may not read reads as absent to <c>File.Exists</c>; a reinstall would not fix that,
+    /// so it is not reported as kcap's plugin being incomplete. Root reads through the mode, so the test needs another user.</summary>
+    [Test, ExcludeOn(OS.Windows)]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public async Task TryInstall_reports_an_unreadable_skill_as_access_not_a_broken_plugin() {
+        Skip.When(Environment.UserName == "root", "root reads through the file mode");
+        using var src = new TempDir();
+        using var dst = new TempDir();
+
+        foreach (var name in SourceNames) src.CreateFile([name, "SKILL.md"], $"---\nname: {name}\n---\nbody");
+        var locked = src.PathTo("pages");
+        File.SetUnixFileMode(locked, UnixFileMode.None);
+
+        SkillsInstallFailure? failure;
+        try {
+            failure = AgentsSkillsInstaller.TryInstall(src.Path, dst.Path);
+        } finally {
+            File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        await Assert.That(failure).IsNotNull();
+        await Assert.That(failure!.PluginIncomplete).IsFalse();
+        await Assert.That(failure.Reason).Contains("cannot be read");
+    }
+
+    [Test]
+    public async Task TryInstall_returns_null_once_the_skills_are_in_place() {
+        using var src = new TempDir();
+        using var dst = new TempDir();
+
+        foreach (var name in SourceNames) src.CreateFile([name, "SKILL.md"], $"---\nname: {name}\n---\nbody");
+
+        await Assert.That(AgentsSkillsInstaller.TryInstall(src.Path, dst.PathTo(".agents", "skills"))).IsNull();
+        await Assert.That(AgentsSkillsInstaller.IsCurrent(dst.PathTo(".agents", "skills"))).IsTrue();
     }
 
     [Test]

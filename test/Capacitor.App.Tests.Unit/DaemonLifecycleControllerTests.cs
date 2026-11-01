@@ -2499,6 +2499,9 @@ sealed class FakeKcapCli : IKcapCli {
 
     public Task<ProcessResult> LocalStartAsync(CancellationToken ct) =>
         Task.FromResult(new ProcessResult(0, "", "", false));
+
+    public Task<Capacitor.Cli.Core.LocalEdition.LocalServerReading?> LocalStatusAsync(CancellationToken ct) =>
+        Task.FromResult<Capacitor.Cli.Core.LocalEdition.LocalServerReading?>(null);
 }
 
 // FakeLoginShellProbe is shared via Capacitor.Tests.Helpers (the controller only ever calls
