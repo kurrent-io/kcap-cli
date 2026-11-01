@@ -30,22 +30,28 @@ public sealed class AgentLinkLabels : IDisposable {
     /// Null for any link that is not to an agent page on the app's server.
     public AgentLinkLabel? For(string url) {
         if (AgentLinkOpener.AgentIdOf(url, _serverUrl) is not { } raw || AgentIds.Normalize(raw) is not { } id) return null;
-        var title = TitleOf(raw) ?? TitleOf(id);
+        var title = TitleOf(raw) ?? TitleOf(id) ?? TitleOfAnySpelling(id);
         return new AgentLinkLabel(id, title ?? $"agent {(id.Length > 8 ? id[..8] : id)}", title is not null);
     }
 
     string? TitleOf(string agentId) {
         foreach (var lane in Lanes)
-            if (_rows.Lookup($"{lane}:{agentId}") is { HasValue: true, Value.Title: { } title } && !string.IsNullOrWhiteSpace(title))
-                return title;
+            if (_rows.Lookup($"{lane}:{agentId}") is { HasValue: true, Value: var row } && HasTitle(row))
+                return row.Title;
         return null;
     }
+
+    // A row keeps the spelling its source used, so a dashed GUID key never matches an undashed link.
+    string? TitleOfAnySpelling(string normalizedId) =>
+        _rows.Items.FirstOrDefault(row => IsAgentLane(row) && HasTitle(row) && AgentIds.Normalize(row.Id) == normalizedId)?.Title;
+
+    static bool IsAgentLane(AgentRow row) => row.Origin is AgentOrigin.Local or AgentOrigin.Pending or AgentOrigin.Remote;
 
     // Server rows are keyed by session id, which an agent link does not carry.
     static readonly string[] Lanes = ["local", "pending", "remote"];
 
     static bool BecameTitled(Change<AgentRow, string> change) =>
-        change.Current.Origin is AgentOrigin.Local or AgentOrigin.Pending or AgentOrigin.Remote
+        IsAgentLane(change.Current)
         && HasTitle(change.Current)
         && change.Reason switch {
             ChangeReason.Add => true,

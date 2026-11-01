@@ -44,6 +44,17 @@ public class AgentLinkLabelsTests {
     }
 
     [Test]
+    [Arguments("0f8fad5b-d9cb-469f-a165-70867728950e", "0f8fad5bd9cb469fa16570867728950e")]
+    [Arguments("0f8fad5bd9cb469fa16570867728950e", "0F8FAD5B-D9CB-469F-A165-70867728950E")]
+    public async Task A_guid_reads_as_its_title_whichever_way_the_row_and_link_spell_it(string rowId, string linkId) {
+        var (rows, labels) = Build();
+        using var _ = labels;
+        rows.AddOrUpdate(Row(AgentOrigin.Remote, rowId, "Remote agent"));
+
+        await Assert.That(labels.For($"{Server}/agents/{linkId}")?.Text).IsEqualTo("Remote agent");
+    }
+
+    [Test]
     public async Task A_row_without_a_title_still_reads_as_the_short_id() {
         var (rows, labels) = Build();
         using var _ = labels;
