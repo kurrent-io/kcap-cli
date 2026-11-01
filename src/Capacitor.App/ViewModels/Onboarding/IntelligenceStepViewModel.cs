@@ -12,7 +12,7 @@ namespace Capacitor.App.ViewModels.Onboarding;
 /// probe of this machine. Next posts the answer through the CLI and holds the page on a refusal or an unreachable
 /// server; not now stores nothing, so coming back through setup never clears an earlier answer.
 /// </summary>
-public sealed class IntelligenceStepViewModel : ReactiveObject, IWizardStep {
+public sealed class IntelligenceStepViewModel : ReactiveObject, IWizardStep, IImportIntelligence {
     public const string Explanation =
         "kcap titles your sessions, says what each one achieved and runs evals in the background. Choose what runs those " +
         "model calls: your own coding agent on this machine, or a provider with your API key.";
@@ -188,8 +188,6 @@ public sealed class IntelligenceStepViewModel : ReactiveObject, IWizardStep {
         return await SendAsync(answer, model, key, null, ct).ConfigureAwait(true);
     }
 
-    /// <summary>Re-posts the answer this page sent with the Import page's choice of outcomes; null when the page sent
-    /// none.</summary>
     public async Task<IntelligenceSetupOutcome?> ApplyImportOutcomesAsync(bool importOutcomes, CancellationToken ct) {
         if (_sent is not { } sent) return null;
 

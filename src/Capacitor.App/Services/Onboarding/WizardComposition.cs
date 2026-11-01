@@ -336,7 +336,7 @@ internal static class WizardComposition {
             ct => options.HeadlessHarnesses is { } read
                 ? read(options.ResolveIdentity()?.DaemonName ?? options.DefaultDaemonName ?? "daemon", ct)
                 : Task.FromResult<string[]>([]));
-        var history = new HistoryStepViewModel(cli, options.Bridges.Post, machine, options.Time, OnLocalPath);
+        var history = new HistoryStepViewModel(cli, options.Bridges.Post, machine, options.Time, OnLocalPath, intelligence);
         var daemon = new DaemonEnabler(
             cli, options.RunMutation,
             // Gated on a committed sign-in or local install and resolved fresh per call, never the startup-cached profile.

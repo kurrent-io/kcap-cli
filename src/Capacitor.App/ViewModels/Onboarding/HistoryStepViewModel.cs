@@ -4,6 +4,7 @@ using System.Reactive;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core.FirstRun;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Setup.Intelligence;
 using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels.Onboarding;
@@ -24,6 +25,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     readonly Action<Action> _post;
     readonly TimeProvider   _time;
     readonly Func<bool>     _onLocalPath;
+    readonly IImportIntelligence? _intelligence;
 
     readonly Dictionary<string, HistoryRepoRow> _lastRows = new(StringComparer.OrdinalIgnoreCase);
 
@@ -31,6 +33,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     bool                     _discoveredLocal;
     HistoryState             _state = HistoryState.Looking;
     bool                     _titleLocally;
+    bool                     _summariseOutcomes = true;
     bool                     _customizing;
     int                      _unmatched;
     ImportDiscoveryReport?   _report;
@@ -38,11 +41,13 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     CancellationTokenSource? _discovery;
 
     public HistoryStepViewModel(
-            IKcapCli cli, Action<Action> post, string machineName, TimeProvider time, Func<bool>? onLocalPath = null) {
-        _cli         = cli;
-        _post        = post;
-        _time        = time;
-        _onLocalPath = onLocalPath ?? (() => false);
+            IKcapCli cli, Action<Action> post, string machineName, TimeProvider time, Func<bool>? onLocalPath = null,
+            IImportIntelligence? intelligence = null) {
+        _cli          = cli;
+        _post         = post;
+        _time         = time;
+        _onLocalPath  = onLocalPath ?? (() => false);
+        _intelligence = intelligence;
         MachineName = machineName;
 
         ToggleCustomizeCommand = ReactiveCommand.Create(() => { Customizing = !Customizing; });
@@ -54,12 +59,18 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     public bool         Applicable => true;
     public string       SkipLabel  => "Not now";
 
-    /// The local promise holds only while naming is off: a named import sends excerpts to a model provider.
+    /// The local promise holds only while nothing names or summarises the imports: each sends excerpts to a model provider.
     public string Lede => _onLocalPath()
         ? "kcap imports the sessions your harnesses have already written, so your past work is searchable " +
-          (Naming
-              ? "from day one. Naming sends excerpts to your agent's model provider; everything else stays on this machine."
-              : "from day one. Everything stays on this machine.")
+          (Model switch {
+              { Mode: IntelligenceModes.Provider, Vendor: var vendor } =>
+                  $"from day one. Titles and outcomes send excerpts to {VendorLabel(vendor)}; everything else stays on this machine.",
+              { Mode: IntelligenceModes.LocalAgent } =>
+                  "from day one. Titles and outcomes run on your own agent, which sends excerpts to its model provider; everything else stays on this machine.",
+              _ when Naming =>
+                  "from day one. Naming sends excerpts to your agent's model provider; everything else stays on this machine.",
+              _ => "from day one. Everything stays on this machine.",
+          })
         : "kcap uploads the sessions your harnesses have already written, so your past work is searchable " +
           "from day one. Nothing leaves this machine until you choose.";
 
@@ -77,6 +88,8 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
             this.RaisePropertyChanged(nameof(Skippable));
             this.RaisePropertyChanged(nameof(CanContinue));
             this.RaisePropertyChanged(nameof(TitlingOffered));
+            this.RaisePropertyChanged(nameof(SummariseOffered));
+            this.RaisePropertyChanged(nameof(PaceLine));
             this.RaisePropertyChanged(nameof(DeclineVisible));
             this.RaisePropertyChanged(nameof(DeclineNote));
             this.RaisePropertyChanged(nameof(CloudDeclineVisible));
@@ -217,9 +230,39 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         : ImportStarted ? "Shared imports follow your recording privacy setting"
         :                 "Shared imports follow your recording privacy setting. Use Customize to keep a repository to Only me";
 
-    /// Titling runs your own agent, so it is a choice only where a harness that titles is imported from.
-    public bool TitlingOffered => HasRepos
+    /// Titling runs your own agent, so it is a choice only where a harness that titles is imported from, and only while
+    /// the server does not title them itself.
+    public bool TitlingOffered => HasRepos && _intelligence?.Applied?.ResolvesTitles != true
         && (Sources.Count == 0 || Sources.Any(s => s is { IsSelected: true, Id: HarnessId.Claude or HarnessId.Codex }));
+
+    /// The answer the background intelligence page got, when a model now runs on the server.
+    IntelligenceSetupResponse? Model => _intelligence?.Applied is { Mode: not IntelligenceModes.None } applied ? applied : null;
+
+    public bool SummariseOffered => HasRepos && Model is not null;
+
+    /// On until the user turns it off: the server's own default for the local edition.
+    public bool SummariseOutcomes {
+        get => _summariseOutcomes;
+        set => this.RaiseAndSetIfChanged(ref _summariseOutcomes, value);
+    }
+
+    /// How long the server's background work on the selected sessions takes at its daily pace.
+    public string? PaceLine {
+        get {
+            if (Model is not { } model || !HasRepos || _windows.Count == 0) return null;
+
+            var counts = SelectedCounts(SelectedWindow.Since);
+            if (counts.Count == 0 || counts.Any(c => c is null)) return null;
+
+            var sessions = counts.Sum(c => c!.Value);
+
+            return model.DaysFor(sessions) is { } days and > 0
+                ? $"The server works through {SessionCount(sessions)} at up to {model.BacklogSessionTouchesPerDay.ToString("N0", CultureInfo.CurrentCulture)} a day: about {days} day{(days == 1 ? "" : "s")}"
+                : null;
+        }
+    }
+
+    static string VendorLabel(string? vendor) => IntelligenceVendor.All.FirstOrDefault(v => v.Id == vendor)?.Label ?? vendor ?? "your provider";
 
     /// Off until the user turns it on: naming sends each session's opening excerpts to whichever model
     /// provider their claude or codex uses, which nothing else on this page does.
@@ -290,8 +333,12 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     public Task OnEnterAsync(CancellationToken ct) {
         // The list the user may already have adjusted stands. A discovery that could not read the disk
         // is asked again.
-        if (_discovered && _discoveredLocal == _onLocalPath() && State != HistoryState.Unreadable)
+        if (_discovered && _discoveredLocal == _onLocalPath() && State != HistoryState.Unreadable) {
+            // The intelligence page's answer may have changed since.
+            Restate();
+
             return Task.CompletedTask;
+        }
 
         _discovery?.Cancel();
         _discovery?.Dispose();
@@ -479,13 +526,28 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         Restate();
     }
 
-    public Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) {
-        if (direction == WizardNavigation.Next && Looking) return Task.FromResult(false);
+    public async Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) {
+        if (direction == WizardNavigation.Next && Looking) return false;
         // One import at a time; one that failed or was stopped can be started again.
         if (direction == WizardNavigation.Next && HasRepos && SelectedCount + SelectedFolderCount > 0
-            && Run is not { State: ImportRunState.Running or ImportRunState.Finished }) StartImport();
+            && Run is not { State: ImportRunState.Running or ImportRunState.Finished }) {
+            // Before the first session lands, so the server applies the choice to all of them.
+            if (Model is { } model && model.ImportOutcomes != SummariseOutcomes) await SendSummariseAsync(ct).ConfigureAwait(true);
 
-        return Task.FromResult(true);
+            StartImport();
+        }
+
+        return true;
+    }
+
+    /// A failed send leaves the server's own choice in place; the import goes ahead either way.
+    async Task SendSummariseAsync(CancellationToken ct) {
+        try {
+            if (await _intelligence!.ApplyImportOutcomesAsync(SummariseOutcomes, ct).ConfigureAwait(true) is not IntelligenceSetupOutcome.Applied)
+                Console.Error.WriteLine("kcap: the server did not take the import-outcome choice");
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            Console.Error.WriteLine($"kcap: could not send the import-outcome choice: {ex.Message}");
+        }
     }
 
     void StartImport() {
@@ -528,6 +590,8 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         this.RaisePropertyChanged(nameof(ImportLine));
         this.RaisePropertyChanged(nameof(SharingLine));
         this.RaisePropertyChanged(nameof(TitlingOffered));
+        this.RaisePropertyChanged(nameof(SummariseOffered));
+        this.RaisePropertyChanged(nameof(PaceLine));
         this.RaisePropertyChanged(nameof(Lede));
     }
 

@@ -203,6 +203,21 @@
                     </Grid>
                 </Border>
 
+                <!-- Outcomes run on the model the background intelligence page chose, at the server's daily pace. -->
+                <Border Classes="onboardingCallout" IsVisible="{Binding SummariseOffered}" Margin="0,4,0,0">
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="11">
+                        <CheckBox x:Name="SummariseOutcomesCheckBox" Classes="onboardingCheck" VerticalAlignment="Top" Margin="0,1,0,0"
+                                  IsChecked="{Binding SummariseOutcomes, Mode=TwoWay}" IsEnabled="{Binding !ImportStarted}"
+                                  AutomationProperties.Name="Also summarise what each session achieved" />
+                        <StackPanel Grid.Column="1" Spacing="3">
+                            <TextBlock Classes="onboardingLabel" FontSize="13" Text="Also summarise what each session achieved" />
+                            <TextBlock x:Name="ImportPaceText" Classes="onboardingDetail" Foreground="{StaticResource OnboardingMutedBrush}"
+                                       TextWrapping="Wrap" Text="{Binding PaceLine}"
+                                       IsVisible="{Binding PaceLine, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
                 <!-- Import is all this page decides; which repositories record from now on is a setting. -->
                 <TextBlock Classes="onboardingNote" IsVisible="{Binding DetailsVisible}">
                     <Run Text="To record only some repositories from now on, set " /><Run Text="allowed_repos" FontFamily="{StaticResource OnboardingMonoFont}"
