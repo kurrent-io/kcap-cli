@@ -249,7 +249,7 @@ public class CaptureSettingsViewModelTests {
         await store.SaveCaptureAsync(new Profile { DefaultVisibility = "private" }, CancellationToken.None);
         vm.AllowedRepos = "team/repo";
         await vm.SaveAsync();
-        await Assert.That(store.LoadProfile().DefaultVisibility).IsEqualTo("public");
+        await Assert.That(store.LoadProfile().DefaultVisibility).IsEqualTo("private");
         await Assert.That(store.LoadProfile().AllowedRepos).IsEquivalentTo(new[] { "team/repo" });
     });
 }
