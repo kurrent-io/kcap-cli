@@ -79,7 +79,7 @@ sealed class DaemonServiceCommands(
 
         return action switch {
             "install"   => await verbs.Install(rest, startNow: !noStart),
-            "uninstall" when system && OperatingSystem.IsWindows() => await verbs.UninstallSystem(),
+            "uninstall" when system && OperatingSystem.IsWindows() => await verbs.UninstallSystem(rest),
             "uninstall" => UnderArg(rest) switch {
                 null    => await verbs.Uninstall(),
                 ""      => Usage(),
@@ -102,10 +102,16 @@ sealed class DaemonServiceCommands(
         return exit;
     }
 
-    /// <summary>Unenrolls this user, then removes the machine's service behind the UAC prompt. The service's
-    /// other users keep their daemons running, unsupervised, until they install again</summary>
+    /// <summary>Moves this user's local server and daemon back to their Scheduled Tasks, then removes the machine's
+    /// service behind the UAC prompt. Both move first, so a declined prompt leaves them on their tasks rather than
+    /// with no supervisor. The service's other users keep their daemons running, unsupervised, until they install again</summary>
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-    internal async Task<int> UninstallSystem() {
+    internal async Task<int> UninstallSystem(string[] args) {
+        if (manager is WindowsServiceManager { Enrollment.Name: var enrolled } && (HostsCaller ?? HostsCallerOf(store))(enrolled)) {
+            await Console.Error.WriteLineAsync(HostedCaller.Refusal(enrolled, $"`kcap daemon service uninstall {string.Join(' ', args)}`"));
+            return 1;
+        }
+
         // Before anything else: the service is not removed from under a server it still runs.
         try {
             if (await LocalEdition.LocalServerMigration.ToTaskAsync(home, time) is { } moved) await Console.Out.WriteLineAsync(moved);
@@ -114,15 +120,55 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
-        if (manager is WindowsServiceManager) {
-            var unenrolled = await Uninstall();
-            if (unenrolled != 0) return unenrolled;
+        if (manager is WindowsServiceManager windows) {
+            var exit = await MoveDaemonToTaskAsync(windows);
+            if (exit != 0) return exit;
         }
         var elevated = WindowsServiceElevation.Run("uninstall");
         if (elevated != 0) return await ElevationFailedAsync(elevated, "uninstall");
         await Console.Out.WriteLineAsync("The Windows service kcap-service is uninstalled.");
         return 0;
     }
+
+    /// <summary>Gives the daemon kcap-service runs for this user back its Scheduled Task, written as <see cref="Install"/>
+    /// writes one, with the enrollment's profile and agent cap. 0 when nothing is enrolled</summary>
+    internal async Task<int> MoveDaemonToTaskAsync(WindowsServiceManager windows) {
+        if (windows.Enrollment is not { } enrollment) return 0;
+        var name = enrollment.Name;
+
+        using var txn = await ServiceTxnLock.TryAcquireAsync(store, name, TimeSpan.FromSeconds(10), time);
+        if (txn is null) {
+            await Console.Error.WriteLineAsync($"Another service operation is in progress for '{name}'. Try again shortly. The Windows service was not changed.");
+            return 1;
+        }
+
+        var daemonPath = File.Exists(enrollment.DaemonPath) ? enrollment.DaemonPath : UnitIdentity.ResolveDaemonBinary();
+        if (daemonPath is null) {
+            await Console.Error.WriteLineAsync(DaemonCommands.DaemonNotFoundMessage());
+            return 1;
+        }
+
+        var cap  = enrollment.MaxAgents is { } n && n >= 0 ? n.ToString(System.Globalization.CultureInfo.InvariantCulture) : null;
+        var spec = new ServiceSpec(name, daemonPath, root.Path($"daemon-{name}.log"), CaptureUnitEnvironment(name, enrollment.Profile), ExtraArgs(cap));
+
+        if (!windows.MoveToTask(spec, out var started, out var error)) {
+            await Console.Error.WriteLineAsync($"The daemon '{name}' could not be moved off kcap-service: {error}. The Windows service was not changed.");
+            return 1;
+        }
+
+        var moved = $"Moved the daemon '{name}' from kcap-service to a Scheduled Task";
+        var start = $"`kcap daemon service start --name {name}`";
+        await Console.Out.WriteLineAsync(started ? $"{moved}, which runs it while you are signed in."
+            : error is null ? $"{moved}; it stays stopped until your next sign-in or {start}."
+            : $"{moved}, but it did not start ({error}); it starts at your next sign-in, or run {start}.");
+        return 0;
+    }
+
+    /// <summary>The environment a unit for <paramref name="serviceId"/> carries: the shell's, with the profile pinned</summary>
+    Dictionary<string, string> CaptureUnitEnvironment(string serviceId, string? profileName) =>
+        new(ServiceEnvironment.Capture(profileName, root, home)) {
+            ["KCAP_DAEMON_SUPERVISED"] = serviceId,   // name-specific; daemon honors it only when == its sanitized --name
+        };
 
     /// <summary>
     /// Runs the ensure ladder for the browser flow, or <b>null on a platform with no service
@@ -577,9 +623,7 @@ sealed class DaemonServiceCommands(
         if (daemonPath is null) { await Console.Error.WriteLineAsync(DaemonCommands.DaemonNotFoundMessage()); return 1; }
 
         var profileName = DaemonCommands.ExtractFlagValue(args, "--profile") ?? profiles.Resolution.ProfileName;
-        var env = new Dictionary<string, string>(ServiceEnvironment.Capture(profileName, root, home)) {
-            ["KCAP_DAEMON_SUPERVISED"] = id,   // name-specific; daemon honors it only when == its sanitized --name
-        };
+        var env = CaptureUnitEnvironment(id, profileName);
 
         List<string> extra;
         try {
@@ -1280,7 +1324,7 @@ sealed class DaemonServiceCommands(
         Console.Error.WriteLine("                          --no-start is incompatible with --verify");
         Console.Error.WriteLine("  install --system [...] Windows: install or update kcap-service (one administrator prompt), then hand the daemon to it");
         Console.Error.WriteLine("  uninstall [--name N]   Stop and remove the service unit");
-        Console.Error.WriteLine("  uninstall --system     Windows: hand the daemon back, then remove kcap-service (one administrator prompt)");
+        Console.Error.WriteLine("  uninstall --system     Windows: move the local server and daemon back to Scheduled Tasks, then remove kcap-service (one administrator prompt)");
         Console.Error.WriteLine("  uninstall --under DIR  Remove every unit whose daemon binary is inside DIR");
         Console.Error.WriteLine("  start [--name N] [--verify]   Start the installed service now");
         Console.Error.WriteLine("                          --verify polls readiness/ownership and rolls back on failure");

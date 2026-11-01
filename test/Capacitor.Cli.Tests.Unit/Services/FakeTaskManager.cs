@@ -7,7 +7,9 @@ sealed class FakeTaskManager : IServiceManager {
     public readonly HashSet<string> Installed = [];
     public readonly HashSet<string> Running = [];
     public readonly List<string> Calls = [];
+    public readonly List<ServiceSpec> Specs = [];
     public bool RefuseUninstall;
+    public bool RefuseInstall;
     public bool DaemonStopFails;
 
     public string Describe() => "fake task";
@@ -21,6 +23,11 @@ sealed class FakeTaskManager : IServiceManager {
 
     public bool Install(ServiceSpec spec, bool startNow, out string? error) {
         Calls.Add(startNow ? $"install {spec.ServiceId}" : $"install {spec.ServiceId} stopped");
+        Specs.Add(spec);
+        if (RefuseInstall) {
+            error = "access is denied";
+            return false;
+        }
         Installed.Add(spec.ServiceId);
         error = null;
         return true;

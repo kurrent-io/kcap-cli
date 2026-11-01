@@ -195,6 +195,91 @@ public class WindowsServiceManagerTests {
         await Assert.That(_pipe.Verbs).IsEmpty();
     }
 
+    /// The reverse of retiring a task: the daemon stops keeping its agents for the task's daemon to resume, and the
+    /// task is registered only once the service has let go of the name
+    [Test]
+    public async Task Moving_to_a_task_stops_the_daemon_then_unenrolls_then_registers_and_starts_the_task() {
+        var file = Config.CreateFile("daemon-service-laptop.env.json", "{}");
+        _store.Current = new ServiceEnrollment("laptop", Daemon, "work", null, file);
+        _pipe.Answer = verb => {
+            _tasks.Calls.Add(verb);
+            return new ServicePipeResponse(true, Status: new ServicePipeStatus("running", Pid: 4242));
+        };
+
+        var ok = Manager().MoveToTask(Spec(), out var started, out var error);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(started).IsTrue();
+        await Assert.That(error).IsNull();
+        await Assert.That(_tasks.Calls).IsEquivalentTo(
+            ["status", "stop laptop", "unenroll", "install laptop stopped", "start laptop"], CollectionOrdering.Matching);
+        await Assert.That(_store.Current).IsNull();
+        await Assert.That(File.Exists(file)).IsFalse();
+    }
+
+    [Test]
+    public async Task A_daemon_the_service_holds_stopped_gets_its_task_without_a_start() {
+        _store.Current = new ServiceEnrollment("laptop", Daemon, "work", null, null);
+        _pipe.Answer = _ => new ServicePipeResponse(true, Status: new ServicePipeStatus("stopped"));
+
+        var ok = Manager().MoveToTask(Spec(), out var started, out var error);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(started).IsFalse();
+        await Assert.That(error).IsNull();
+        await Assert.That(_tasks.Calls).IsEquivalentTo(["install laptop stopped"]);
+        await Assert.That(_store.Current).IsNull();
+    }
+
+    /// Unenrolling now would have the service stop it with its agents ended
+    [Test]
+    public async Task A_daemon_that_does_not_stop_gracefully_stays_with_the_service() {
+        var enrollment = new ServiceEnrollment("laptop", Daemon, "work", null, null);
+        _store.Current = enrollment;
+        _tasks.DaemonStopFails = true;
+
+        var ok = Manager().MoveToTask(Spec(), out _, out var error);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(error).Contains("did not stop gracefully");
+        await Assert.That(_pipe.Verbs).IsEquivalentTo(["status"]);
+        await Assert.That(_store.Current).IsEqualTo(enrollment);
+        await Assert.That(_tasks.Installed).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_service_that_does_not_answer_keeps_the_daemon_and_no_task_is_written() {
+        var enrollment = new ServiceEnrollment("laptop", Daemon, "work", null, null);
+        _store.Current = enrollment;
+        _pipe.Answer = _ => null;
+
+        var ok = Manager().MoveToTask(Spec(), out _, out var error);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(error).IsEqualTo("kcap-service did not answer");
+        await Assert.That(_store.Current).IsEqualTo(enrollment);
+        await Assert.That(_tasks.Calls).IsEmpty();
+    }
+
+    /// With no task to run it, the daemon goes back to the service with the environment it was enrolled with
+    [Test]
+    public async Task A_refused_task_registration_enrolls_the_daemon_with_the_service_again() {
+        var file = Config.CreateFile("daemon-service-laptop.env.json", """{"KCAP_PROFILE":"work"}""");
+        var enrollment = new ServiceEnrollment("laptop", Daemon, "work", null, file);
+        _store.Current = enrollment;
+        _tasks.RefuseInstall = true;
+
+        var ok = Manager().MoveToTask(Spec(), out var started, out var error);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(started).IsFalse();
+        await Assert.That(error).Contains("access is denied");
+        await Assert.That(_store.Current).IsEqualTo(enrollment);
+        await Assert.That(_written[file]).IsEqualTo("""{"KCAP_PROFILE":"work"}""");
+        await Assert.That(_pipe.Verbs).IsEquivalentTo(["status", "unenroll", "enroll"], CollectionOrdering.Matching);
+        await Assert.That(_tasks.Installed).IsEmpty();
+    }
+
     /// An invalid cap must reach the install that reports it, not match an uncapped enrollment as current
     [Test]
     public async Task EnrolledAs_refuses_an_agent_cap_an_install_would_refuse() {

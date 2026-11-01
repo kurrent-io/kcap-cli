@@ -13,7 +13,8 @@ namespace Capacitor.Cli.Services;
 /// installing another name replaces the enrollment.
 ///
 /// <para>A Scheduled Task left for the same name is retired once the service's daemon has taken over,
-/// and restored if the service refuses, so the user is never left with no supervisor.</para>
+/// and restored if the service refuses, so the user is never left with no supervisor. <see cref="MoveToTask"/>
+/// is the same hand-over the other way.</para>
 /// </summary>
 sealed class WindowsServiceManager(
         ConfigRoot config, IServicePipe pipe, IServiceEnrollmentStore enrollments, IServiceManager? tasks,
@@ -44,6 +45,9 @@ sealed class WindowsServiceManager(
         enrollments.Read() is { } e && string.Equals(e.Name, serviceId, StringComparison.Ordinal) ? e : null;
 
     public IReadOnlyList<string> ListInstalled() => enrollments.Read() is { } e ? [e.Name] : [];
+
+    /// <summary>This user's enrollment, under whatever name</summary>
+    internal ServiceEnrollment? Enrollment => enrollments.Read();
 
     /// <summary>Whether the enrollment under <paramref name="serviceId"/> already pins this profile and agent cap,
     /// as an install with these values would write them</summary>
@@ -236,6 +240,74 @@ sealed class WindowsServiceManager(
         if (enrollment.EnvironmentFile is { } file) File.Delete(file);
         error = null;
         return true;
+    }
+
+    /// <summary>
+    /// Hands the enrolled daemon back to a Scheduled Task written from <paramref name="spec"/>: stopped keeping its
+    /// agents, so the task's daemon resumes them, then unenrolled, then given its task, started only when the
+    /// service was running it. A step that fails gives the daemon back to the service, so it always has exactly one
+    /// supervisor.
+    /// </summary>
+    /// <param name="started">Whether the task was started</param>
+    /// <param name="error">Why the move failed; after a move, why a task that should have started did not</param>
+    public bool MoveToTask(ServiceSpec spec, out bool started, out string? error) {
+        var id = spec.ServiceId;
+        started = false;
+        if (tasks is not { } taskManager || Enrolled(id) is not { } enrollment) {
+            error = $"'{id}' is not enrolled with kcap-service";
+            return false;
+        }
+
+        if (pipe.Send("status", Quick)?.Status is not { } status) {
+            error = "kcap-service did not answer";
+            return false;
+        }
+
+        // Unenrolling alone has the service stop it with its agents ended
+        if (status.Running && !_stopDaemon(id)) {
+            error = $"the daemon '{id}' did not stop gracefully, so kcap-service was left running it";
+            return false;
+        }
+
+        var environment = enrollment.EnvironmentFile is { } file ? ReadExisting(file) : null;
+        if (!Uninstall(id, out var unenrollError)) {
+            error = unenrollError;
+            if (status.Running && !Start(id, out var startError)) error += $"; starting it again also failed: {startError}";
+            return false;
+        }
+
+        // Registered stopped, so a failed start below cannot read as a failed registration and put a second
+        // supervisor on the name
+        if (RegisterTask(taskManager, spec) is { } taskError) {
+            error = $"could not install its Scheduled Task: {taskError}{Reenroll(enrollment, environment, status.Running)}";
+            return false;
+        }
+
+        error = null;
+        if (!status.Running) return true;
+        try {
+            started = taskManager.Start(id, out error);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) {
+            error = ex.Message;
+        }
+        return true;
+    }
+
+    static string? RegisterTask(IServiceManager taskManager, ServiceSpec spec) {
+        try {
+            return taskManager.Install(spec, startNow: false, out var error) ? null : error ?? "schtasks refused it";
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) {
+            return ex.Message;
+        }
+    }
+
+    /// <summary>Empty once the service has the daemon back; otherwise what went wrong, to append to the error</summary>
+    string Reenroll(ServiceEnrollment enrollment, string? environment, bool running) {
+        if (enrollment.EnvironmentFile is { } file && environment is not null) _write(file, environment);
+        enrollments.Write(enrollment);
+        if (pipe.Send("enroll", Slow) is not { Ok: true }) return "; enrolling it with kcap-service again also failed";
+        if (!running) pipe.Send("stop", Slow);
+        return "";
     }
 
     public bool Start(string serviceId, out string? error) => Ask(serviceId, "start", Quick, out error);

@@ -113,8 +113,14 @@ Subcommands for service (per-user; restarts the daemon if it crashes, starts it 
                           which carries kcap-service.exe. A declined prompt
                           exits 1223 and changes nothing.
   uninstall [--name N]    Stop and remove the service unit.
-  uninstall --system      Windows: hand this daemon back, then remove the
-                          machine's kcap-service (one administrator prompt).
+  uninstall --system      Windows: move the local server and this daemon back
+                          to their Scheduled Tasks, then remove the machine's
+                          kcap-service (one administrator prompt). The daemon
+                          stops with its agents kept for its task's daemon to
+                          resume; the task starts it when the service was
+                          running it. A move that fails leaves kcap-service
+                          installed; a declined prompt leaves both on their
+                          tasks.
   uninstall --under DIR   Stop and remove every unit whose daemon binary is
                           inside DIR, and no other. The desktop app's
                           uninstaller runs this for its own folder.
