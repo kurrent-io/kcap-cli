@@ -79,11 +79,15 @@ public class LocalServerTaskLiveTests {
         using var sender = Process.Start(KcapProcess.StartInfo(Daemons.Store, Config.Root,
             "local", "console-break", pid.ToString(CultureInfo.InvariantCulture)))!;
         sender.StandardInput.Close();
-        var error = sender.StandardError.ReadToEnd();
-        sender.StandardOutput.ReadToEnd();
-        if (!sender.WaitForExit(budget)) return $"the sender did not finish within {budget.TotalSeconds:0}s";
+        var error = sender.StandardError.ReadToEndAsync();
+        var output = sender.StandardOutput.ReadToEndAsync();
+        if (!sender.WaitForExit(budget)) {
+            sender.Kill(entireProcessTree: true);
+            return $"the sender did not finish within {budget.TotalSeconds:0}s";
+        }
+        Task.WaitAll(error, output);
 
-        return sender.ExitCode == 0 ? null : $"exit {sender.ExitCode}: {error.Trim()}";
+        return sender.ExitCode == 0 ? null : $"exit {sender.ExitCode}: {error.Result.Trim()}";
     }
 
     static int FreePort() {
