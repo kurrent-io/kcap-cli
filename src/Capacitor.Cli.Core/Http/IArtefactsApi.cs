@@ -20,4 +20,8 @@ public interface IArtefactsApi {
     /// <summary>A page's record and content, under the same audience check as opening it in a
     /// browser. Readable by anyone the page is shared with, not only its owner.</summary>
     Task<ArtefactReadResult> ReadAsync(string artefactId, int? version, CancellationToken ct = default);
+
+    /// <summary>Pages this profile may open whose title, description or text match
+    /// <paramref name="query"/>, best first. The server clamps <paramref name="limit"/>.</summary>
+    Task<ArtefactSearchResult> SearchAsync(string query, int limit, CancellationToken ct = default);
 }

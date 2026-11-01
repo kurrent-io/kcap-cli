@@ -87,6 +87,7 @@ Publish a self-contained HTML page — a plan, a report, a comparison, the artif
 | `get_page_results` | Tallies and each person's current answer, without waiting |
 | `close_page_responses` | Freeze a version's answers; `closed: false` reopens and clears any deadline |
 | `list_my_pages` | The pages you can see — id, title, audience, latest version, URL |
+| `search_pages` | Find pages you can see by their title, description or text, best match first, with an excerpt of the matching text (`query`, optional `limit`) |
 | `get_page` | Read a page you can see — yours or one shared with you — by id or link: its record plus its text (`format: "html"` for the source), cut at `max_chars` |
 | `set_page_visibility` | Replace a page's audience (`none` / `org` / `scoped` + grants) |
 

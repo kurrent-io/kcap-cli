@@ -63,6 +63,7 @@ public class KcapToolCatalogueTests {
     [Arguments("declare_work_item", ToolCategory.Work, "Attached work item", "issue_key", ToolCardKind.None)]
     [Arguments("save_memory", ToolCategory.Memory, "Saved memory", "slug", ToolCardKind.None)]
     [Arguments("search_sessions", ToolCategory.Session, "Searched sessions", "query", ToolCardKind.None)]
+    [Arguments("mcp__plugin_kcap_kcap-pages__search_pages", ToolCategory.Artefact, "Searched pages", "query", ToolCardKind.None)]
     [Arguments("start_agent", ToolCategory.Flow, "Started hosted agent", "prompt", ToolCardKind.Agent)]
     [Arguments("start_review_flow", ToolCategory.Flow, "Started review flow", "kind", ToolCardKind.Flow)]
     [Arguments("await_artefact_responses", ToolCategory.Artefact, "Waiting for answers", null, ToolCardKind.None)]

@@ -210,16 +210,29 @@ public class McpArtefactsServerTests {
     // ── the advertised surface ────────────────────────────────────────────────────────
 
     [Test]
-    public async Task The_tool_list_is_exactly_these_seven() {
+    public async Task The_tool_list_is_exactly_these_eight() {
         // Deliberate and worth keeping deliberate: an agent's context pays for every schema it
         // carries whether or not it ever publishes. Widening this is a decision, not a drive-by.
         var names = McpArtefactsServer.BuildToolsList().Select(t => t.Name).ToArray();
 
         await Assert.That(names).IsEquivalentTo(new[] {
             "publish_page", "await_page_responses", "get_page_results",
-            "close_page_responses", "list_my_pages", "get_page", "set_page_visibility"
+            "close_page_responses", "list_my_pages", "search_pages", "get_page", "set_page_visibility"
         });
     }
+
+    [Test]
+    public async Task Search_pages_requires_a_query_and_only_reads() {
+        var tool = McpArtefactsServer.BuildToolsList().Single(t => t.Name == "search_pages");
+
+        await Assert.That(tool.InputSchema.Required).IsEquivalentTo(new[] { "query" });
+        await Assert.That(tool.InputSchema.Properties["limit"].Type).IsEqualTo("integer");
+        await Assert.That(tool.Annotations).IsEqualTo(McpToolAnnotations.Read);
+    }
+
+    [Test]
+    public async Task Server_instructions_point_at_search_pages() =>
+        await Assert.That(McpArtefactsServer.ServerInstructions).Contains("search_pages");
 
     // ── reading a page ────────────────────────────────────────────────────────────────
 
@@ -227,10 +240,11 @@ public class McpArtefactsServerTests {
         new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root),
             new FixedCapacitorHttpClient(), NoTelemetry.Startup, TimeProvider.System);
 
-    static async Task<(bool IsError, string Text)> CallAsync(McpArtefactsServer server, string baseUrl, JsonObject arguments) {
+    static async Task<(bool IsError, string Text)> CallAsync(McpArtefactsServer server, string baseUrl, JsonObject arguments,
+                                                             string tool = "get_page") {
         using var client = new HttpClient();
 
-        var request = new JsonObject { ["params"] = new JsonObject { ["name"] = "get_page", ["arguments"] = arguments } };
+        var request = new JsonObject { ["params"] = new JsonObject { ["name"] = tool, ["arguments"] = arguments } };
         var result  = JsonNode.Parse(await server.HandleToolCallAsync(JsonNode.Parse("1")!, request, client, baseUrl))!["result"]!;
 
         return (result["isError"]?.GetValue<bool>() ?? false, result["content"]![0]!["text"]!.GetValue<string>());
@@ -481,6 +495,92 @@ public class McpArtefactsServerTests {
     public async Task The_follow_up_asks_for_the_link_in_the_reply_and_the_harness_browser_tool() {
         await Assert.That(McpArtefactsServer.PublishFollowUp).Contains("link");
         await Assert.That(McpArtefactsServer.PublishFollowUp).Contains("browser tool");
+    }
+
+    // ── searching pages ───────────────────────────────────────────────────────────────
+
+    static WireMockServer SearchStub(string body) {
+        var stub = WireMockServer.Start();
+        stub.Given(Request.Create().WithPath("/api/search").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(body));
+
+        return stub;
+    }
+
+    [Test]
+    public async Task Search_pages_returns_only_pages_with_page_ids_behind_the_untrusted_notice() {
+        using var stub = SearchStub("""
+            {"sessions":null,"transcripts":null,"took_ms":4,"work_items":null,
+             "pages":[{"artefact_id":"p1","title":"Ferry timetable","owner_user_id":"github:42","owner_display_name":"Ada",
+                       "visibility":"org","latest_version":2,"updated_at":"2026-09-16T10:00:00+00:00","is_owner":false,
+                       "url":"https://kcap.test/pages/p1","excerpt":"harbour departures","matched_in":"body"}]}
+            """);
+
+        var (isError, text) = await CallAsync(Server(), stub.Url!, Args("""{"query":"ferry & timetable#"}"""), "search_pages");
+
+        await Assert.That(isError).IsFalse();
+
+        var result = JsonNode.Parse(text)!.AsObject();
+        await Assert.That(string.Join(",", result.Select(p => p.Key))).IsEqualTo("notice,pages");
+        await Assert.That(result["notice"]!.GetValue<string>()).IsEqualTo(McpArtefactsServer.UntrustedNotice);
+        await Assert.That(result["pages"]![0]!["page_id"]!.GetValue<string>()).IsEqualTo("p1");
+        await Assert.That(result["pages"]![0]!.AsObject().ContainsKey("artefact_id")).IsFalse();
+
+        var query = stub.LogEntries.Single().RequestMessage.Query!;
+        await Assert.That(query["q"].Single()).IsEqualTo("ferry & timetable#");
+        await Assert.That(query["mode"].Single()).IsEqualTo("pages");
+        await Assert.That(query["limit"].Single()).IsEqualTo("10");
+    }
+
+    /// <summary>An older server answers this mode as a session search with no pages lane. An agent
+    /// told "nothing matched" there would conclude the page does not exist.</summary>
+    [Test]
+    [Arguments("""{"sessions":[],"transcripts":null,"took_ms":1}""")]
+    [Arguments("""{"sessions":null,"transcripts":null,"took_ms":1,"pages":null}""")]
+    public async Task Search_pages_reports_an_older_server(string body) {
+        using var stub = SearchStub(body);
+
+        var (isError, text) = await CallAsync(Server(), stub.Url!, Args("""{"query":"ferry"}"""), "search_pages");
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).Contains("does not support page search");
+    }
+
+    [Test]
+    public async Task Search_pages_with_an_empty_answer_succeeds() {
+        using var stub = SearchStub("""{"sessions":null,"transcripts":null,"took_ms":0,"pages":[]}""");
+
+        var (isError, text) = await CallAsync(Server(), stub.Url!, Args("""{"query":"ferry","limit":80}"""), "search_pages");
+
+        await Assert.That(isError).IsFalse();
+        await Assert.That(JsonNode.Parse(text)!["pages"]!.AsArray()).IsEmpty();
+        await Assert.That(stub.LogEntries.Single().RequestMessage.Query!["limit"].Single()).IsEqualTo("50");
+    }
+
+    [Test]
+    [Arguments("""{"query":5}""", "'query'")]
+    [Arguments("""{"query":"ferry","limit":"many"}""", "'limit'")]
+    [Arguments("""{"query":"ferry","limit":5.5}""", "'limit'")]
+    public async Task Search_pages_with_a_mistyped_argument_names_it_without_a_request(string arguments, string named) {
+        using var stub = SearchStub("""{"pages":[]}""");
+
+        var (isError, text) = await CallAsync(Server(), stub.Url!, Args(arguments), "search_pages");
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).Contains(named);
+        await Assert.That(stub.LogEntries).IsEmpty();
+    }
+
+    [Test]
+    [Arguments("{}")]
+    [Arguments("""{"query":"   "}""")]
+    public async Task Search_pages_without_a_query_errors_without_a_request(string arguments) {
+        using var stub = SearchStub("""{"pages":[]}""");
+
+        var (isError, _) = await CallAsync(Server(), stub.Url!, Args(arguments), "search_pages");
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(stub.LogEntries).IsEmpty();
     }
 
     static async Task WithoutAmbientSessionAsync(Func<Task> body) {
