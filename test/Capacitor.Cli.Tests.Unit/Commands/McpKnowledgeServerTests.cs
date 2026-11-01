@@ -256,11 +256,12 @@ public class McpKnowledgeServerTests {
              "operation_id":"op-1","audience_kind":"team","audience_id":"t-1","curated_text":"Rule.",
              "target_kinds":["injection",""],"applies_to_vendors":["claude"],"applies_to_session_kinds":["hosted"],
              "applies_to_flow_roles":["reviewer"],"applies_to_platforms":["macos"],"status":"promoted","reason":"r",
-             "target_scope_kind":"project","target_scope_id":"p-1","preserve_audience":true,"preserve_decision":true}
+             "target_scope_kind":"project","target_scope_id":"p-1","preserve_audience":true,"preserve_decision":true,
+             "confirm_private_sources":true}
             """));
 
         await Assert.That(body.ToJsonString()).IsEqualTo(
-            """{"curation_key":{"source_repo_hash":"abc123","category":"safety","cluster_id":"c-1"},"operation_id":"op-1","audience_kind":"team","audience_id":"t-1","curated_text":"Rule.","target_kinds":["injection",""],"applies_to_vendors":["claude"],"applies_to_session_kinds":["hosted"],"applies_to_flow_roles":["reviewer"],"applies_to_platforms":["macos"],"status":"promoted","reason":"r","target_scope_kind":"project","target_scope_id":"p-1","preserve_audience":true,"preserve_decision":true}""");
+            """{"curation_key":{"source_repo_hash":"abc123","category":"safety","cluster_id":"c-1"},"operation_id":"op-1","audience_kind":"team","audience_id":"t-1","curated_text":"Rule.","target_kinds":["injection",""],"applies_to_vendors":["claude"],"applies_to_session_kinds":["hosted"],"applies_to_flow_roles":["reviewer"],"applies_to_platforms":["macos"],"status":"promoted","reason":"r","target_scope_kind":"project","target_scope_id":"p-1","preserve_audience":true,"preserve_decision":true,"confirm_private_sources":true}""");
     }
 
     [Test]
@@ -279,11 +280,11 @@ public class McpKnowledgeServerTests {
     public async Task Every_transition_field_reaches_the_wire_under_its_own_key() {
         var body = McpKnowledgeServer.BuildTransitionBody(Args("""
             {"action":"revoke","operation_id":"op","expected_doc_revision":"12","targets":["skill"],"edited_body":"B",
-             "reason":"why","member_disposition":"release"}
+             "reason":"why","member_disposition":"release","confirm_private_sources":true}
             """));
 
         await Assert.That(body.ToJsonString()).IsEqualTo(
-            """{"action":"revoke","operation_id":"op","expected_doc_revision":12,"targets":["skill"],"edited_body":"B","reason":"why","member_disposition":"release"}""");
+            """{"action":"revoke","operation_id":"op","expected_doc_revision":12,"targets":["skill"],"edited_body":"B","reason":"why","member_disposition":"release","confirm_private_sources":true}""");
     }
 
     [Test]
