@@ -37,13 +37,15 @@ sealed partial class HeadlessPromptRunner : IDisposable {
 
     public async Task<HeadlessPromptResponse> RunAsync(RunHeadlessPromptArgs args) {
         if (!_harnesses.TryGetValue(args.Harness, out var harness)) return HeadlessPromptResponses.NotStarted(HeadlessPromptResponses.NoHarness);
-        if (args.Deadline <= _time.GetUtcNow()) return HeadlessPromptResponses.NotStarted(HeadlessPromptResponses.DeadlinePassed);
+        var left = args.Deadline - _time.GetUtcNow();
+        if (left <= TimeSpan.Zero) return HeadlessPromptResponses.NotStarted(HeadlessPromptResponses.DeadlinePassed);
 
         using var cancel = CancellationTokenSource.CreateLinkedTokenSource(_shutdown);
         if (!_requests.TryAdd(args.RequestId, cancel)) return HeadlessPromptResponses.NotStarted(null, "request id already in flight");
 
         try {
-            using (var deadline = new CancellationTokenSource(args.Deadline - _time.GetUtcNow(), _time))
+            // One clock read for the check and the timer: a second read can land past the deadline and throw.
+            using (var deadline = new CancellationTokenSource(left, _time))
             using (var queued = CancellationTokenSource.CreateLinkedTokenSource(cancel.Token, deadline.Token)) {
                 try {
                     await _slots.WaitAsync(queued.Token);
