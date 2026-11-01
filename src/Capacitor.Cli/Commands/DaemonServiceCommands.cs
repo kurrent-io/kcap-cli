@@ -171,7 +171,7 @@ sealed class DaemonServiceCommands(
 
         var path = ServicePath.Refreshed(env.GetValueOrDefault("PATH"), Environment.GetEnvironmentVariable("PATH"), harnesses);
 
-        return path is null ? null : await RefreshPathAsync(path);
+        return path is null ? null : await RefreshPathAsync(path) with { Reinstall = $"kcap daemon service install --replace --verify{SystemFlag}" };
     }
 
     /// <summary>launchd reads a plist only when the job loads, so the rewrite takes a reload that keeps the
@@ -602,7 +602,7 @@ sealed class DaemonServiceCommands(
                 await Console.Out.WriteLineAsync($"  Daemon:    {CapacitorVersion.CurrentDisplay()} is running; the unit starts {daemonPath}");
             } else {
                 await Console.Out.WriteLineAsync($"Service '{id}' installed ({manager.Describe()}).");
-                await Console.Out.WriteLineAsync("  Auto-restarts on crash/SIGKILL; starts at login.");
+                await Console.Out.WriteLineAsync($"  {Supervision(manager)}");
             }
 
             // A reviewer switch frozen into a unit is worth saying out loud: the unit outlives the shell it
@@ -636,11 +636,22 @@ sealed class DaemonServiceCommands(
 
             await Console.Out.WriteLineAsync($"  Log:       {logPath}");
             await Console.Out.WriteLineAsync($"  Stop:      kcap daemon service stop --name {id}");
-            await Console.Out.WriteLineAsync($"  Remove:    kcap daemon service uninstall --name {id}");
+            await Console.Out.WriteLineAsync($"  Remove:    kcap daemon service uninstall{SystemFlag} --name {id}");
         } catch (IOException) { }
 
         return 0;
     }
+
+    /// <summary>What the unit does for the daemon. kcap-service starts a user's daemon only once they sign in, as the
+    /// Scheduled Task does.</summary>
+    internal static string Supervision(IServiceManager manager) => manager switch {
+        WindowsServiceManager              => "kcap-service restarts it if it stops, and starts it when you sign in.",
+        WindowsScheduledTaskServiceManager => "The Scheduled Task restarts it if it fails, and starts it when you sign in.",
+        _                                  => "Auto-restarts on crash/SIGKILL; starts at login.",
+    };
+
+    /// <summary>The flag that names kcap-service on the verbs that install or remove it.</summary>
+    string SystemFlag => manager is WindowsServiceManager ? " --system" : "";
 
     /// <summary>Plain install under the per-label service lock, matching stop/start/uninstall:
     /// null lock → the same coded-contention message, exit 1, without calling <c>Install</c>. Internal so

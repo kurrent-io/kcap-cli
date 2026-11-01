@@ -220,6 +220,15 @@ public class SetupDaemonServiceTests {
         await Assert.That(line).Contains("may not find every harness");
     }
 
+    /// <summary>kcap-service is reinstalled only with --system; the plain command would write a Scheduled Task.</summary>
+    [Test]
+    public async Task A_failed_refresh_suggests_the_reinstall_that_names_the_installed_unit() {
+        var line = await RefreshPathAsync(() => Task.FromResult<PathRefresh?>(
+            new(UnitRefresh.UnitUnsupported, Reinstall: "kcap daemon service install --replace --verify --system")));
+
+        await Assert.That(line).Contains("kcap daemon service install --replace --verify --system");
+    }
+
     [Test]
     public async Task A_reloaded_service_says_it_was_restarted() {
         await Assert.That(await RefreshPathAsync(() => Task.FromResult<PathRefresh?>(new(UnitRefresh.Reloaded)))).Contains("Restarted");

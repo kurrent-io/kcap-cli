@@ -83,7 +83,7 @@ Options for doctor:
                           gone). Held entries are never touched. Without
                           --clean, doctor reports state without modifying.
 
-Subcommands for service (per-user; auto-restarts on crash/SIGKILL, starts at login):
+Subcommands for service (per-user; restarts the daemon if it crashes, starts it at login):
   install [--name N] [--profile P] [--max-agents N] [--no-start] [--replace] [--verify] [--retire ID]
                           Register the daemon as an OS service and start it.
                           Pins the profile via KCAP_PROFILE and captures PATH so

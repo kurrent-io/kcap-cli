@@ -34,6 +34,16 @@ internal sealed class DaemonCommandsServiceInstallTests {
         await Assert.That(err.GetCapturedError()).Contains(refusal);
     }
 
+    /// <summary>Signals and logins are Unix terms; kcap-service and the Scheduled Task each say what they do on Windows.</summary>
+    [Test]
+    public async Task Each_unit_describes_its_own_supervision() {
+        var service = new WindowsServiceManager(Config.Root, new FakeServicePipe(), new FakeServiceEnrollmentStore(), tasks: null);
+
+        await Assert.That(DaemonServiceCommands.Supervision(service)).IsEqualTo("kcap-service restarts it if it stops, and starts it when you sign in.");
+        await Assert.That(DaemonServiceCommands.Supervision(new WindowsScheduledTaskServiceManager(Config.Root))).DoesNotContain("SIGKILL");
+        await Assert.That(DaemonServiceCommands.Supervision(new SystemdServiceManager(Home))).Contains("SIGKILL");
+    }
+
     /// <summary>An agent the target daemon hosts would be ended by the replace it started, so the command
     /// refuses before resolving or touching anything, and names the command to run elsewhere. A retired
     /// daemon ends what it hosts too.</summary>
