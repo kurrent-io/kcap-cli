@@ -62,10 +62,14 @@ static class SessionStartInventory {
         return new RecordingIdentity(MachineIdOrNull(config), DaemonName(env), account, store);
     }
 
-    // A config directory nothing may write leaves the id unminted; the rest of the identity still stands.
+    // Only an id on disk is one a later process reproduces; Get() can return one its write lost. A config
+    // directory nothing may write leaves the id out, and the rest of the identity still stands.
     static string? MachineIdOrNull(ConfigRoot config) {
         try {
-            return new MachineId(config).Get();
+            var machine = new MachineId(config);
+            var id      = machine.Get();
+
+            return machine.ReadPersisted() == id ? id : null;
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             return null;
         }

@@ -64,25 +64,19 @@ public class SessionStartRecordingStampTests {
         await Assert.That(body["recording"]!.AsObject().ContainsKey("config_dir")).IsFalse();
     }
 
+    /// <summary>A regular file where the config directory should be fails the write for every process,
+    /// whatever its privileges.</summary>
     [Test]
     public async Task A_machine_id_that_cannot_be_written_leaves_the_rest_of_the_identity() {
-        if (OperatingSystem.IsWindows()) return;
+        var work      = Home.CreateDir(".claude-work");
+        var notADir   = new ConfigRoot(Tmp.CreateFile("config-is-a-file", ""));
 
-        var work     = Home.CreateDir(".claude-work");
-        var dir      = Tmp.CreateDir("readonly-config");
-        var readOnly = new ConfigRoot(dir);
-        File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        var recording = SessionStartInventory.RecordingOf(
+            Body(Home.CreateFile(".claude-work/projects/-repo/abc.jsonl", "")), notADir, TestHarnesses.Under(Home), HarnessId.Claude,
+            null, null, Env());
 
-        try {
-            var recording = SessionStartInventory.RecordingOf(
-                Body(Home.CreateFile(".claude-work/projects/-repo/abc.jsonl", "")), readOnly, TestHarnesses.Under(Home), HarnessId.Claude,
-                null, null, Env());
-
-            await Assert.That(recording.MachineId).IsNull();
-            await Assert.That(recording.ConfigDir).IsEqualTo(AccountDirectory.Normalize(work));
-        } finally {
-            File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-        }
+        await Assert.That(recording.MachineId).IsNull();
+        await Assert.That(recording.ConfigDir).IsEqualTo(AccountDirectory.Normalize(work));
     }
 
     [Test]
