@@ -878,7 +878,11 @@ sealed class DaemonServiceCommands(
 
     PollingServiceVerify NewPollingVerify(Func<bool>? profileViable = null) =>
         new(store, manager, n => DaemonPidProbe.ValidatedPid(store, n), (n, t) => HelloProbe.RunAsync(store, n, time, t), time,
-            profileViable, endsManualOwner: OperatingSystem.IsWindows());
+            profileViable, endsManualOwner: OperatingSystem.IsWindows(),
+            bootBudget: OperatingSystem.IsWindows() ? PollingServiceVerify.DefaultBootBudget : null,
+            endNotePath: manager is WindowsScheduledTaskServiceManager
+                ? n => WindowsTaskUnit.StderrPath(root.Path($"daemon-{n}.log"))
+                : null);
 
     async Task<int> StartPlain() {
         using var txn = await ServiceTxnLock.TryAcquireAsync(store, id, TimeSpan.FromSeconds(10), time);

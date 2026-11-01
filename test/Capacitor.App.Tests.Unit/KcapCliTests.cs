@@ -134,8 +134,11 @@ public class KcapCliTests {
 
         await Assert.That(runner.SeenArgs).IsEquivalentTo(
             ["daemon", "service", "start", "--name", "daemon-a", "--verify"], CollectionOrdering.Matching);
-        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(60));
+        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(60) + BootExtension);
     }
+
+    /// <summary>A Windows verify waits out a daemon still probing vendor CLIs, so the app must outlast it.</summary>
+    static readonly TimeSpan BootExtension = OperatingSystem.IsWindows() ? TimeSpan.FromSeconds(70) : TimeSpan.Zero;
 
     [Test]
     public async Task ServiceInstallVerifiedAsync_argv_includes_profile_verify_and_replace() {
@@ -147,7 +150,7 @@ public class KcapCliTests {
         await Assert.That(runner.SeenArgs).IsEquivalentTo(
             ["daemon", "service", "install", "--name", "daemon-a", "--profile", "work", "--verify", "--replace"],
             CollectionOrdering.Matching);
-        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(60));
+        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(60) + BootExtension);
     }
 
     [Test]
@@ -157,7 +160,7 @@ public class KcapCliTests {
         await Assert.That(runner.SeenArgs).IsEquivalentTo(
             ["daemon", "service", "install", "--name", "daemon-a", "--profile", "work", "--verify", "--replace", "--retire", "old-name"],
             CollectionOrdering.Matching);
-        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(150));
+        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(150) + BootExtension);
     }
 
     [Test]

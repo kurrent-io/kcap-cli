@@ -135,6 +135,12 @@ public sealed class KcapCli : IKcapCli {
     // Covers forward/rollback budgets, lock wait, crash recovery and the manual-owner kill wait.
     static readonly TimeSpan MutationTimeout = TimeSpan.FromSeconds(60);
 
+    // On Windows the CLI's readiness wait stretches from its 20 s forward budget to a 90 s boot budget
+    // while the task's daemon is still probing vendor CLIs; cut short, the app abandons a verify that
+    // would have succeeded.
+    static readonly TimeSpan BootExtension = OperatingSystem.IsWindows() ? TimeSpan.FromSeconds(70) : TimeSpan.Zero;
+    static readonly TimeSpan ServiceVerifyTimeout = MutationTimeout + BootExtension;
+
     /// The UAC prompt waits on a person; past this the install is reported unconfirmed, not failed.
     static readonly TimeSpan ElevationTimeout = TimeSpan.FromMinutes(10);
     /// The forced refresh may wait 10 s for the service transaction lock before its own 85 s deadline starts.
@@ -144,8 +150,8 @@ public sealed class KcapCli : IKcapCli {
     // A rename adds, on top of the install's own budgets: the old id's 10s lock wait, its 5s label
     // query, the 5s target probe, the old daemon's fence (two connects and exchanges of 3s each to
     // acquire, then a 3s commit or abort), the old daemon's 10s end-agents wait and the retire's own 20s
-    // forward budget — about 128s in all.
-    static readonly TimeSpan RenameTimeout = TimeSpan.FromSeconds(150);
+    // forward budget — about 128s in all, plus the boot extension.
+    static readonly TimeSpan RenameTimeout = TimeSpan.FromSeconds(150) + BootExtension;
     static readonly TimeSpan VersionTimeout = TimeSpan.FromSeconds(10);
     // Same tier as VersionTimeout — also a read-only query — so a hung `launchctl print` can
     // never block the per-mutation gate forever once the lifecycle controller polls this.
@@ -235,7 +241,7 @@ public sealed class KcapCli : IKcapCli {
         var env = MutationEnv(); // throws before any spawn if the instance carries no server
         if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);
         return await Run(cliPath, ["daemon", "service", "start", "--name", _daemonName, "--verify"],
-            new RunOptions(EnvOverlay: await EnvWithTerminalPathAsync(env, ct).ConfigureAwait(false), Timeout: MutationTimeout), ct).ConfigureAwait(false);
+            new RunOptions(EnvOverlay: await EnvWithTerminalPathAsync(env, ct).ConfigureAwait(false), Timeout: ServiceVerifyTimeout), ct).ConfigureAwait(false);
     }
 
     public async Task<ProcessResult> ServiceReloadAsync(CancellationToken ct) {
@@ -261,7 +267,7 @@ public sealed class KcapCli : IKcapCli {
 
         var env = await EnvWithTerminalPathAsync(mutation, ct).ConfigureAwait(false);
         return await Run(cliPath, args.ToArray(), new RunOptions(EnvOverlay: env,
-            Timeout: retireServiceId is null ? MutationTimeout : RenameTimeout), ct).ConfigureAwait(false);
+            Timeout: retireServiceId is null ? ServiceVerifyTimeout : RenameTimeout), ct).ConfigureAwait(false);
     }
 
     public async Task<ProcessResult> ServiceInstallWindowsServiceAsync(CancellationToken ct) {

@@ -23,13 +23,29 @@ sealed class PollingServiceVerify(
         TimeSpan? forwardBudget = null,
         Func<string, CancellationToken, Task<AdmissionFenceAcquireResult>>? acquireFence = null,
         Func<string, TimeSpan, Task>? endDaemon = null,
-        bool endsManualOwner = false) {
+        bool endsManualOwner = false,
+        TimeSpan? bootBudget = null,
+        Func<string, string?>? endNotePath = null) {
     static readonly TimeSpan LockWait     = TimeSpan.FromSeconds(10);
     static readonly TimeSpan FenceWait    = TimeSpan.FromSeconds(3);
     static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(500);
     static readonly TimeSpan KillWait     = TimeSpan.FromSeconds(5);
 
+    /// <summary>
+    /// How long readiness keeps waiting, in all, for a daemon its unit is still running but that has not
+    /// answered yet. The daemon probes every vendor CLI before it binds its socket, which on a cold Windows
+    /// profile outlasts the forward budget; ending it then kills a boot that was going to succeed. The
+    /// desktop app's timeout for a verified install or start must sit above this plus the lock wait and
+    /// rollback.
+    /// </summary>
+    public static readonly TimeSpan DefaultBootBudget = TimeSpan.FromSeconds(90);
+
     readonly TimeSpan _forwardBudget = forwardBudget ?? ServiceVerify.DefaultForwardBudget;
+    readonly TimeSpan _bootBudget = bootBudget ?? TimeSpan.Zero;
+
+    // The leg the last failed readiness reading stopped at, and how long readiness waited in all.
+    string _notReadyLeg = ReadinessLeg.NoAnswer;
+    TimeSpan _waited;
 
     /// <summary>Asks a daemon to end its agents and exit, within the wait it is given</summary>
     readonly Func<string, TimeSpan, Task> _endDaemon = endDaemon ?? (async (name, wait) =>
@@ -93,8 +109,11 @@ sealed class PollingServiceVerify(
             return RollBackInstall(id, VerifyExit.ReadinessTimeout, VerifyExit.ReadinessTimeoutToken);
         }
 
-        if (!await WaitReadyAsync(id, expectedVersion))
-            return RollBackInstall(id, VerifyExit.ReadinessTimeout, VerifyExit.ReadinessTimeoutToken);
+        if (!await WaitReadyAsync(id, expectedVersion)) {
+            var exit = RollBackInstall(id, VerifyExit.ReadinessTimeout, VerifyExit.ReadinessTimeoutToken);
+            if (exit == VerifyExit.ReadinessTimeout) NoteEnded(id, "install");
+            return exit;
+        }
 
         if (retireServiceId is null) return VerifyExit.Ok;
 
@@ -187,33 +206,74 @@ sealed class PollingServiceVerify(
 
         if (await WaitReadyAsync(id, expectedVersion: null)) return VerifyExit.Ok;
 
-        manager.Stop(id, out _);
+        if (manager.Stop(id, out _)) NoteEnded(id, "start");
         return Fail(VerifyExit.ReadinessTimeout, VerifyExit.ReadinessTimeoutToken);
     }
 
     async Task<bool> WaitReadyAsync(string id, string? expectedVersion) {
-        var deadline = time.GetUtcNow() + _forwardBudget;
+        var started = time.GetUtcNow();
         while (true) {
             if (await IsReadyAsync(id, expectedVersion)) return true;
-            if (time.GetUtcNow() >= deadline) return false;
+            _waited = time.GetUtcNow() - started;
+            if (_waited >= _forwardBudget && (_waited >= _bootBudget || !StillStarting(id))) {
+                Say($"readiness_leg={_notReadyLeg}");
+                return false;
+            }
             await Task.Delay(PollInterval, time, CancellationToken.None);
+        }
+    }
+
+    // Nothing has answered while the unit still runs: the daemon is booting, or its supervisor is
+    // relaunching it. A daemon that answers wrongly is up, so it gets no extra time.
+    bool StillStarting(string id) {
+        if (_notReadyLeg != ReadinessLeg.NoAnswer) return false;
+        try {
+            return manager.Query(id).State == ServiceState.Running;
+        } catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException) {
+            return false;
         }
     }
 
     // Hello and the pid are read separately, so one reading can join a hello from one daemon to the pid
     // of its replacement. As the launchd engine does, a second reading must name the same pid.
-    async Task<bool> IsReadyAsync(string id, string? expectedVersion) =>
-        await ReadyPidAsync(id, expectedVersion) is { } pid && await ReadyPidAsync(id, expectedVersion) == pid;
+    async Task<bool> IsReadyAsync(string id, string? expectedVersion) {
+        if (await ReadyPidAsync(id, expectedVersion) is not { } pid) return false;
+        var again = await ReadyPidAsync(id, expectedVersion);
+        if (again == pid) return true;
+        if (again is not null) _notReadyLeg = ReadinessLeg.NotTaskOwned;
+        return false;
+    }
 
     // The same four legs the launchd engine requires: a well-formed hello, from this name, on the
     // current protocol and expected version, and from the daemon the task itself runs.
     async Task<int?> ReadyPidAsync(string id, string? expectedVersion) {
         var h = await hello(id, PollInterval * 4);
-        if (!h.WellFormed || h.DaemonName != id || h.ProtocolVersion != HelloProtocol.CurrentVersion) return null;
-        if (expectedVersion is not null && h.DaemonVersion != expectedVersion) return null;
+        if (!h.WellFormed) return NotReady(ReadinessLeg.NoAnswer);
+        if (h.DaemonName != id || h.ProtocolVersion != HelloProtocol.CurrentVersion) return NotReady(ReadinessLeg.WrongDaemon);
+        if (expectedVersion is not null && h.DaemonVersion != expectedVersion) return NotReady(ReadinessLeg.WrongVersion);
 
         var jobPid = manager.Query(id).JobPid;
-        return jobPid is not null && jobPid == validatedDaemonPid(id) ? jobPid : null;
+        return jobPid is not null && jobPid == validatedDaemonPid(id) ? jobPid : NotReady(ReadinessLeg.NotTaskOwned);
+    }
+
+    int? NotReady(string leg) {
+        _notReadyLeg = leg;
+        return null;
+    }
+
+    /// <summary>
+    /// Appends, beside the daemon's own output, why this verify ended it. Ended from outside, the daemon
+    /// writes nothing more, so without this line its log stops mid-boot with no reason.
+    /// </summary>
+    void NoteEnded(string id, string verb) {
+        if (endNotePath?.Invoke(id) is not { } path) return;
+        var line = $"{time.GetLocalNow().DateTime:yyyy-MM-dd HH:mm:ss.fff} [verify] `kcap daemon service {verb} --verify` "
+                 + $"ended this daemon after {(int)_waited.TotalSeconds}s: {ReadinessLeg.Describe(_notReadyLeg)}{Environment.NewLine}";
+        try {
+            File.AppendAllText(path, line);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            Say($"could not record why the daemon was ended in {path}: {ex.Message}");
+        }
     }
 
     async Task<bool> StopConfirmedAsync(string id) {
