@@ -97,12 +97,12 @@ public class McpToolAnnotationsTests {
 
     [Test]
     public async Task Knowledge_reads_are_read_only_and_its_writes_overwrite() {
-        foreach (var read in new[] { "list_skills", "get_skill", "list_facts", "search_facts" })
+        foreach (var read in new[] { "list_skills", "get_skill", "list_facts", "search_facts", "list_category_merges" })
             await Assert.That(Tool("kcap-knowledge", read).Annotations).IsEqualTo(McpToolAnnotations.Read).Because(read);
 
-        // Each write replaces standing state (a draft, a lifecycle status, a pin, a curation), and an
-        // operation_id retry replays rather than repeats.
-        foreach (var write in new[] { "edit_skill_body", "transition_skill", "adjust_skill_members", "curate_fact_cluster" })
+        // Each write replaces standing state (a draft, a lifecycle status, a pin, a curation, a queued
+        // merge), and a retry replays or finds the pair gone rather than repeating.
+        foreach (var write in new[] { "edit_skill_body", "transition_skill", "adjust_skill_members", "curate_fact_cluster", "merge_categories", "dismiss_category_merge" })
             await Assert.That(Tool("kcap-knowledge", write).Annotations).IsEqualTo(McpToolAnnotations.Destructive).Because(write);
     }
 

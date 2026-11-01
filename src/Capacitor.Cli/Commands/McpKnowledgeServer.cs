@@ -95,7 +95,9 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
         "Every fact and skill member carries its curation_key and curation: the address and the current state a " +
         "curate_fact_cluster call is built from. Skill writes take the doc_revision get_skill returned as " +
         "expected_doc_revision; a 409 doc_revision_mismatch names the current one. A skill's audience and " +
-        "applicability never change in place: curating a member's audience moves it to another skill later.";
+        "applicability never change in place: curating a member's audience moves it to another skill later. " +
+        "list_category_merges proposes facts filed under different categories that read as the same lesson: " +
+        "show the user both texts and merge_categories or dismiss_category_merge only on their decision.";
 
     static string BuildInitializeResponse(JsonNode id, JsonObject request) =>
         ToResponse<McpInitResult>(
@@ -116,15 +118,18 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
 
         try {
             using var response = toolName switch {
-                "list_skills"          => await client.GetAsync(BuildListSkillsUrl(baseUrl, arguments, cwdRepoHash), ct),
-                "get_skill"            => await client.GetAsync(BuildGetSkillUrl(baseUrl, arguments, cwdRepoHash), ct),
-                "list_facts"           => await client.GetAsync(BuildListFactsUrl(baseUrl, arguments, cwdRepoHash), ct),
-                "search_facts"         => await client.GetAsync(BuildSearchFactsUrl(baseUrl, arguments, cwdRepoHash), ct),
-                "edit_skill_body"      => await client.PostAsync(SkillUrl(baseUrl, arguments, "body"), Json(BuildEditBody(arguments)), ct),
-                "transition_skill"     => await client.PostAsync(SkillUrl(baseUrl, arguments, "transition"), Json(BuildTransitionBody(arguments)), ct),
-                "adjust_skill_members" => await client.PostAsync(SkillUrl(baseUrl, arguments, "members"), Json(BuildAdjustMembersBody(arguments)), ct),
-                "curate_fact_cluster"  => await client.PostAsync($"{baseUrl}/api/knowledge/facts/curate", Json(BuildCurateBody(arguments)), ct),
-                _                      => throw new ArgumentException($"Unknown tool: {toolName}")
+                "list_skills"            => await client.GetAsync(BuildListSkillsUrl(baseUrl, arguments, cwdRepoHash), ct),
+                "get_skill"              => await client.GetAsync(BuildGetSkillUrl(baseUrl, arguments, cwdRepoHash), ct),
+                "list_facts"             => await client.GetAsync(BuildListFactsUrl(baseUrl, arguments, cwdRepoHash), ct),
+                "search_facts"           => await client.GetAsync(BuildSearchFactsUrl(baseUrl, arguments, cwdRepoHash), ct),
+                "edit_skill_body"        => await client.PostAsync(SkillUrl(baseUrl, arguments, "body"), Json(BuildEditBody(arguments)), ct),
+                "transition_skill"       => await client.PostAsync(SkillUrl(baseUrl, arguments, "transition"), Json(BuildTransitionBody(arguments)), ct),
+                "adjust_skill_members"   => await client.PostAsync(SkillUrl(baseUrl, arguments, "members"), Json(BuildAdjustMembersBody(arguments)), ct),
+                "curate_fact_cluster"    => await client.PostAsync($"{baseUrl}/api/knowledge/facts/curate", Json(BuildCurateBody(arguments)), ct),
+                "list_category_merges"   => await client.GetAsync(BuildListMergesUrl(baseUrl, arguments), ct),
+                "merge_categories"       => await client.PostAsync($"{baseUrl}/api/knowledge/merges/merge", Json(BuildMergePairBody(arguments)), ct),
+                "dismiss_category_merge" => await client.PostAsync($"{baseUrl}/api/knowledge/merges/dismiss", Json(BuildMergePairBody(arguments)), ct),
+                _                        => throw new ArgumentException($"Unknown tool: {toolName}")
             };
 
             var body = await response.Content.ReadAsStringAsync(ct);
@@ -182,6 +187,14 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
         AddInt(qs, args, "limit");
         return $"{baseUrl}/api/knowledge/facts/search?{string.Join("&", qs)}";
     }
+
+    /// <summary>A blank repo is refused rather than read as omitted, which would widen the list to every scope.</summary>
+    static string BuildListMergesUrl(string baseUrl, JsonObject? args) =>
+        McpToolArguments.OptionalString(args, "repo") switch {
+            { } repo                       => $"{baseUrl}/api/knowledge/merges?repo={Uri.EscapeDataString(repo)}",
+            null when args?["repo"] is { } => throw new ArgumentException("'repo' must be a repository hash; omit it to list every scope you curate."),
+            null                           => $"{baseUrl}/api/knowledge/merges"
+        };
 
     /// <summary>A repo scope with no <c>scope_id</c> is the working directory's repo, and a refusal
     /// when there is none: never a wider scope.</summary>
@@ -273,6 +286,16 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
         return body;
     }
 
+    static JsonObject BuildMergePairBody(JsonObject? args) => new() {
+        ["survivor_uid"] = FactUid(args, "survivor_uid"),
+        ["absorbed_uid"] = FactUid(args, "absorbed_uid"),
+    };
+
+    static string FactUid(JsonObject? args, string key) =>
+        Guid.TryParse(McpToolArguments.RequireString(args, key), out var uid)
+            ? uid.ToString("D")
+            : throw new ArgumentException($"'{key}' must be a fact uid (a uuid) from list_category_merges.");
+
     static string DocId(JsonObject? args) =>
         Guid.TryParse(McpToolArguments.RequireString(args, "doc_id"), out var docId)
             ? docId.ToString("D")
@@ -354,6 +377,10 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
         new("string", "A fresh unique id for this change (at most 128 characters, not starting with the reserved found:, draft: or pin-remove:); reuse it only to retry the same call.");
     static readonly McpSchemaProperty CurateOperationIdProperty =
         new("string", "A fresh unique id for this change (not starting with the reserved approve-nomination:); reuse it only to retry the same call.");
+    static readonly McpSchemaProperty SurvivorUidProperty =
+        new("string", "The pair's survivor_uid as list_category_merges returned it: the fact that stays, keeping its category and curation.");
+    static readonly McpSchemaProperty AbsorbedUidProperty =
+        new("string", "The pair's absorbed_uid as list_category_merges returned it.");
     static readonly McpSchemaProperty RevisionProperty =
         new("integer", "The doc_revision get_skill (or the last write) returned; a stale one is refused 409 doc_revision_mismatch naming the current revision.");
 
@@ -448,5 +475,22 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
                 ["preserve_decision"]        = new("boolean", "With status omitted: rebuild the standing decision for a move or text edit."),
                 ["confirm_private_sources"]  = new("boolean", "promoted: release a fact whose every source session is private."),
             }, ["curation_key", "operation_id", "audience_kind"]), McpToolAnnotations.Destructive),
+        new("list_category_merges",
+            "List proposed cross-category merges: pairs of retained facts in one scope, filed under different categories, that read as the same lesson. Only scopes where you curate, or one repository with repo; most similar first, at most 100. Each pair carries scope_kind, scope_id, survivor_uid, survivor_category, survivor_text, absorbed_uid, absorbed_category, absorbed_text and similarity. Call this before merge_categories or dismiss_category_merge, and show the user both texts and categories of a pair before deciding.",
+            new("object", new() {
+                ["repo"] = new("string", "A repository hash; omit for every scope you curate."),
+            }, []), McpToolAnnotations.Read),
+        new("merge_categories",
+            "Merge a proposed pair from list_category_merges: the absorbed fact folds into the survivor, which keeps its category and curation. Only on the user's decision, after showing them both texts. Success is 204. 404 means the pair is no longer proposed (already merged, dismissed or gone): list again. Other refusals carry a code: invalid_request, forbidden, not_mergeable, cluster_topic_claimed, server_rebuilding, curation_intent_pending, conflict.",
+            new("object", new() {
+                ["survivor_uid"] = SurvivorUidProperty,
+                ["absorbed_uid"] = AbsorbedUidProperty,
+            }, ["survivor_uid", "absorbed_uid"]), McpToolAnnotations.Destructive),
+        new("dismiss_category_merge",
+            "Dismiss a proposed pair from list_category_merges as not the same lesson; it is never proposed again. Only on the user's decision, after showing them both texts. Success is 204; 404 and the coded refusals are as for merge_categories.",
+            new("object", new() {
+                ["survivor_uid"] = SurvivorUidProperty,
+                ["absorbed_uid"] = AbsorbedUidProperty,
+            }, ["survivor_uid", "absorbed_uid"]), McpToolAnnotations.Destructive),
     ];
 }
