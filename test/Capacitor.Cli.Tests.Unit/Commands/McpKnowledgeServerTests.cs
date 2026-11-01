@@ -167,11 +167,11 @@ public class McpKnowledgeServerTests {
     }
 
     sealed class RecordingHandler(HttpStatusCode status = HttpStatusCode.OK, string body = """{"ok":true}""") : HttpMessageHandler {
-        public List<(HttpMethod Method, string Path, string? Body)> Calls { get; } = [];
+        public List<(HttpMethod Method, string Path, string Query, string? Body)> Calls { get; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
             var sent = request.Content is null ? null : await request.Content.ReadAsStringAsync(ct);
-            Calls.Add((request.Method, request.RequestUri!.AbsolutePath, sent));
+            Calls.Add((request.Method, request.RequestUri!.AbsolutePath, request.RequestUri.Query, sent));
             return new HttpResponseMessage(status) { Content = new StringContent(body) };
         }
     }
@@ -202,6 +202,18 @@ public class McpKnowledgeServerTests {
         await Assert.That(handler.Calls.Single().Method.Method).IsEqualTo(method);
         await Assert.That(handler.Calls.Single().Path).IsEqualTo(path);
         await Assert.That(response).DoesNotContain("\"isError\":true");
+    }
+
+    [Test]
+    [Arguments("{}", "")]
+    [Arguments("""{"repo":"a/b c"}""", "?repo=a%2Fb%20c")]
+    public async Task Listing_merges_narrows_to_a_repo_only_when_given(string args, string query) {
+        var handler = new RecordingHandler();
+
+        await CallAsync(handler, "list_category_merges", args);
+
+        await Assert.That(handler.Calls.Single().Path).IsEqualTo("/api/knowledge/merges");
+        await Assert.That(handler.Calls.Single().Query).IsEqualTo(query);
     }
 
     [Test]

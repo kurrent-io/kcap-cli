@@ -126,7 +126,7 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
                 "transition_skill"       => await client.PostAsync(SkillUrl(baseUrl, arguments, "transition"), Json(BuildTransitionBody(arguments)), ct),
                 "adjust_skill_members"   => await client.PostAsync(SkillUrl(baseUrl, arguments, "members"), Json(BuildAdjustMembersBody(arguments)), ct),
                 "curate_fact_cluster"    => await client.PostAsync($"{baseUrl}/api/knowledge/facts/curate", Json(BuildCurateBody(arguments)), ct),
-                "list_category_merges"   => await client.GetAsync($"{baseUrl}/api/knowledge/merges", ct),
+                "list_category_merges"   => await client.GetAsync(BuildListMergesUrl(baseUrl, arguments), ct),
                 "merge_categories"       => await client.PostAsync($"{baseUrl}/api/knowledge/merges/merge", Json(BuildMergePairBody(arguments)), ct),
                 "dismiss_category_merge" => await client.PostAsync($"{baseUrl}/api/knowledge/merges/dismiss", Json(BuildMergePairBody(arguments)), ct),
                 _                        => throw new ArgumentException($"Unknown tool: {toolName}")
@@ -187,6 +187,11 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
         AddInt(qs, args, "limit");
         return $"{baseUrl}/api/knowledge/facts/search?{string.Join("&", qs)}";
     }
+
+    static string BuildListMergesUrl(string baseUrl, JsonObject? args) =>
+        McpToolArguments.OptionalString(args, "repo") is { } repo
+            ? $"{baseUrl}/api/knowledge/merges?repo={Uri.EscapeDataString(repo)}"
+            : $"{baseUrl}/api/knowledge/merges";
 
     /// <summary>A repo scope with no <c>scope_id</c> is the working directory's repo, and a refusal
     /// when there is none: never a wider scope.</summary>
@@ -468,8 +473,10 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
                 ["confirm_private_sources"]  = new("boolean", "promoted: release a fact whose every source session is private."),
             }, ["curation_key", "operation_id", "audience_kind"]), McpToolAnnotations.Destructive),
         new("list_category_merges",
-            "List proposed cross-category merges: pairs of retained facts in one scope, filed under different categories, that read as the same lesson. Only scopes where you curate; most similar first, at most 100. Each pair carries scope_kind, scope_id, survivor_uid, survivor_category, survivor_text, absorbed_uid, absorbed_category, absorbed_text and similarity. Call this before merge_categories or dismiss_category_merge, and show the user both texts and categories of a pair before deciding.",
-            new("object", new(), []), McpToolAnnotations.Read),
+            "List proposed cross-category merges: pairs of retained facts in one scope, filed under different categories, that read as the same lesson. Only scopes where you curate, or one repository with repo; most similar first, at most 100. Each pair carries scope_kind, scope_id, survivor_uid, survivor_category, survivor_text, absorbed_uid, absorbed_category, absorbed_text and similarity. Call this before merge_categories or dismiss_category_merge, and show the user both texts and categories of a pair before deciding.",
+            new("object", new() {
+                ["repo"] = new("string", "A repository hash; omit for every scope you curate."),
+            }, []), McpToolAnnotations.Read),
         new("merge_categories",
             "Merge a proposed pair from list_category_merges: the absorbed fact folds into the survivor, which keeps its category and curation. Only on the user's decision, after showing them both texts. Success is 204. 404 means the pair is no longer proposed (already merged, dismissed or gone): list again. Other refusals carry a code: invalid_request, forbidden, not_mergeable, cluster_topic_claimed, server_rebuilding, curation_intent_pending, conflict.",
             new("object", new() {
