@@ -49,6 +49,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
     readonly Func<ServerSessionsQuery, CancellationToken, Task<ServerSessionsFetch>> _fetch;
     readonly Func<CancellationToken, Task<SessionOwnerOptionDto[]?>> _fetchOwners;
     readonly Func<string, CancellationToken, Task<SummaryFetch>>? _fetchSummary;
+    readonly Func<string, CancellationToken, Task<HandoffContextFetch>>? _fetchHandoffContext;
     readonly Action<int>? _onUnauthorized;
     readonly CompositeDisposable _subscriptions = new();
     readonly ITimer _cadence;
@@ -112,10 +113,12 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
             TimeProvider time,
             TimeSpan? pushDebounce = null, TimeSpan? reconcileEvery = null, Action<int>? onUnauthorized = null,
             Func<string, CancellationToken, Task<SummaryFetch>>? fetchSummary = null,
-            IScheduler? pushScheduler = null) {
+            IScheduler? pushScheduler = null,
+            Func<string, CancellationToken, Task<HandoffContextFetch>>? fetchHandoffContext = null) {
         _fetch = fetch;
         _fetchOwners = fetchOwners;
         _fetchSummary = fetchSummary;
+        _fetchHandoffContext = fetchHandoffContext;
         _time = time;
         _overlay = new(time);
         _onUnauthorized = onUnauthorized;
@@ -252,6 +255,21 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
         var pinned = _pinId is not null && !_pinListed && !_pinGone ? _pinRow : null;
         _snapshots.OnNext(new([.. _live.Items], [.. _mineLive.Items], ended, pinned, _pinId));
         if (unlisted) IssuePinRefresh();
+    }
+
+    public async Task<HandoffContextFetch> ReadHandoffContextAsync(string sessionId, CancellationToken ct) {
+        if (_fetchHandoffContext is null) return new(ServerReadOutcome.Failed, null);
+        int laneEpoch;
+        lock (_lock) laneEpoch = _laneEpoch;
+        try {
+            var fetch = await _fetchHandoffContext(sessionId, ct).ConfigureAwait(false);
+            if (fetch.Outcome == ServerReadOutcome.Unauthorized) _onUnauthorized?.Invoke(laneEpoch);
+            return fetch;
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            throw;
+        } catch (Exception) {
+            return new(ServerReadOutcome.Failed, null);
+        }
     }
 
     public async Task<PinOutcome> PinAsync(string sessionId, PinPresentation presentation, CancellationToken ct) {

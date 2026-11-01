@@ -45,6 +45,8 @@ public class WorkspaceNavigationTests {
     }
 
     sealed class FixedLaunchClient : ILaunchClient {
+        public Task<IReadOnlySet<string>?> GetLaunchFeaturesAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlySet<string>?>(System.Collections.Frozen.FrozenSet<string>.Empty);
         public LaunchOutcome Next = new(true, Id1, null);
         public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) => Task.FromResult(Next);
     }
@@ -52,6 +54,8 @@ public class WorkspaceNavigationTests {
     /// Holds a launch open so a test can navigate (close-to-hide, open another) WHILE the launch is
     /// in flight — the exact window a stale generation has to close.
     sealed class GatedLaunchClient : ILaunchClient {
+        public Task<IReadOnlySet<string>?> GetLaunchFeaturesAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlySet<string>?>(System.Collections.Frozen.FrozenSet<string>.Empty);
         public readonly TaskCompletionSource<LaunchOutcome> Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) => Gate.Task;
     }
@@ -139,6 +143,8 @@ public class WorkspaceNavigationTests {
     /// Reports the failure before the launch call returns: the race where a LaunchFailed lands
     /// while the invoke is still in flight.
     sealed class FailureBeforeReturnLaunchClient(Subject<LaunchFailure> failures) : ILaunchClient {
+        public Task<IReadOnlySet<string>?> GetLaunchFeaturesAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlySet<string>?>(System.Collections.Frozen.FrozenSet<string>.Empty);
         public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) {
             failures.OnNext(new LaunchFailure(Id1, "launch_denied_by_owner: default"));
             return Task.FromResult(new LaunchOutcome(true, Id1, null));

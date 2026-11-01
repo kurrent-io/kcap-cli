@@ -160,6 +160,62 @@ public class MainWindowSearchTests {
         });
     }
 
+    /// Opening the placeholder released the source's pin and the listing never held it, so the
+    /// source is pinned again before it can open.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_failed_handoff_reopens_a_source_the_directory_no_longer_holds() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            h.OpenServer("S");
+            h.Host.Directory.Rows.RemoveKey("server:S");
+            h.Vm.CloseWorkspace();
+            var gate = new TaskCompletionSource<PinOutcome>();
+            h.Sessions.PinGate = gate;
+            var owner = new PinPresentation("alexey", "Alexey", null);
+
+            var reopening = h.Vm.ReopenServerSessionAsync("S", owner);
+            await Assert.That(h.Vm.CurrentWorkspace).IsNull();
+            h.ListServer("S");
+            gate.SetResult(PinOutcome.Pinned);
+
+            await Assert.That(await reopening).IsTrue();
+            await Assert.That(h.Sessions.PinCalls).IsEquivalentTo([("S", owner)]);
+            await Assert.That(h.Vm.CurrentWorkspace!.AgentId).IsEqualTo("S");
+            await Assert.That(h.Sessions.PinnedSessionId).IsEqualTo("S");
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_reopen_whose_pin_lands_after_a_navigation_opens_nothing() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            var gate = new TaskCompletionSource<PinOutcome>();
+            h.Sessions.PinGate = gate;
+
+            var reopening = h.Vm.ReopenServerSessionAsync("S", NoPresentation);
+            var elsewhere = h.OpenServer("E");
+            h.ListServer("S");
+            gate.SetResult(PinOutcome.Pinned);
+
+            await Assert.That(await reopening).IsFalse();
+            await Assert.That(h.Vm.CurrentWorkspace).IsSameReferenceAs(elsewhere);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_reopen_whose_pin_fails_opens_nothing() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            h.Sessions.PinResult = PinOutcome.Unavailable;
+
+            await Assert.That(await h.Vm.ReopenServerSessionAsync("S", NoPresentation)).IsFalse();
+            await Assert.That(h.Vm.CurrentWorkspace).IsNull();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Delayed_pin_after_escape_opens_nothing() {

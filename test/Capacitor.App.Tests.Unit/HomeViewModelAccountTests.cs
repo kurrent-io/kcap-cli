@@ -76,6 +76,8 @@ public class HomeViewModelAccountTests {
     static string Refusal(string label) => $"{label} is not available on this machine. Use the default account or pick another.";
 
     sealed class RecordingLaunchClient : ILaunchClient {
+        public Task<IReadOnlySet<string>?> GetLaunchFeaturesAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlySet<string>?>(System.Collections.Frozen.FrozenSet<string>.Empty);
         public List<LaunchRequest> Requests { get; } = [];
 
         public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) {
@@ -895,9 +897,9 @@ public class HomeViewModelAccountTests {
     public async Task The_launcher_comparison_ignores_age_and_readiness() {
         var a = new AccountUsageView([], "line", null, null, null, "updated 1m ago", false);
 
-        await Assert.That(HomeViewModel.DrawnUsageEquals(new Dictionary<string, AccountUsageView> { ["a1"] = a },
+        await Assert.That(AccountUsageView.DrawnUsageEquals(new Dictionary<string, AccountUsageView> { ["a1"] = a },
             new Dictionary<string, AccountUsageView> { ["a1"] = a with { AgeText = "updated 2m ago", Ready = true } })).IsTrue();
-        await Assert.That(HomeViewModel.DrawnUsageEquals(new Dictionary<string, AccountUsageView> { ["a1"] = a },
+        await Assert.That(AccountUsageView.DrawnUsageEquals(new Dictionary<string, AccountUsageView> { ["a1"] = a },
             new Dictionary<string, AccountUsageView> { ["a1"] = a with { BlockedText = "Limit hit" } })).IsFalse();
     }
 

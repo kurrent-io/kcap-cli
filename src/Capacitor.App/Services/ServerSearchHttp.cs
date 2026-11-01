@@ -24,6 +24,14 @@ public static class ServerSearchHttp {
         return new(outcome, body);
     };
 
+    public static Func<string, CancellationToken, Task<HandoffContextFetch>> HandoffContext(
+            ICapacitorHttpClient? http, ProfileContext? profiles) => async (sessionId, ct) => {
+        var (outcome, body) = await GetAsync(http, profiles,
+            ApiRoutes.SessionHandoffContext(sessionId),
+            RemoteModelsJsonContext.Default.HandoffContextDto, ct).ConfigureAwait(false);
+        return new(outcome, body);
+    };
+
     static async Task<(ServerReadOutcome, T?)> GetAsync<T>(
             ICapacitorHttpClient? http, ProfileContext? profiles, string route,
             System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> type, CancellationToken ct) where T : class {

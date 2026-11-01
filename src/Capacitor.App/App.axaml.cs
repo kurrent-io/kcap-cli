@@ -213,6 +213,7 @@ public partial class App : Application {
     // last, since its transitions are what the feed subscribes to.
     ServerPermissionFeed? _permissionFeed;
     SessionAttentionTracker? _attention;
+    HandoffDrafts? _handoffDrafts;
     BackgroundCommandActivity? _commands;
     SessionAccessService? _sessionAccess;
     PullRequestToneCache? _pullRequestTones;
@@ -433,7 +434,7 @@ public partial class App : Application {
             await HandleStartupFailureAsync(
                 desktop, ex, _service, _shutdown,
                 [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
-                    _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _accounts, _sessionAccess,
+                    _notificationSessions, _notificationSettings, _permissionFeed, _attention, _handoffDrafts, _commands, _permissions, _accounts, _sessionAccess,
                     _pullRequestTones, _launchApprovals, _webWorkspace, _activity, _home, _localServer, _localStack, _rail, _pause, _staleDaemonNudge, _restartPending, _expectedRestart],
                 _lifecycle, _lane, _localUpgrade, _localSearch, _menuBar, _coordinator);
             await DisposeServerClientsAsync(); // after _home above
@@ -456,6 +457,7 @@ public partial class App : Application {
             _notificationSettings = null;
             _permissionFeed = null;
             _attention = null;
+            _handoffDrafts = null;
             _commands = null;
             _permissions = null;
             _accounts = null;
@@ -1042,7 +1044,8 @@ public partial class App : Application {
             onUnauthorized: serverLane.ParkSignedOut);
         var sessions = new ServerSessionsService(
             serverLane, ServerSessionsService.HttpFetch(sessionHttp, profiles), ServerSessionsService.HttpOwners(sessionHttp, profiles),
-            _time, onUnauthorized: serverLane.ParkSignedOut, fetchSummary: ServerSearchHttp.Summary(sessionHttp, profiles));
+            _time, onUnauthorized: serverLane.ParkSignedOut, fetchSummary: ServerSearchHttp.Summary(sessionHttp, profiles),
+            fetchHandoffContext: ServerSearchHttp.HandoffContext(sessionHttp, profiles));
         var repoIdentity = new RepoIdentityResolver();
         var directory = new AgentDirectory(
             service, remoteAgents, serverLane, repoIdentity, GitRepository.ResolveMainRepoRoot,
@@ -1197,6 +1200,7 @@ public partial class App : Application {
         var transcripts = new LocalTranscripts();
         var readings = new AccountReadings(accounts.Snapshot, remoteAgents.DrawableDaemonAccounts, UsageClock.Create(_time));
         _usageClock = readings.Clock;
+        var handoffOutcomes = new HandoffOutcomeReader(service, ops, _time);
         WorkspaceViewModel BuildWorkspace(string agentId) => new(
             agentId, service, actions, attachFactory, () => new XtermTerminalSurface(80, 24, PtyDumpPath), _time, workspaceOpener, permissions,
             workContext, ops, uploader,
@@ -1207,7 +1211,8 @@ public partial class App : Application {
             resumeLedger: id => ResumeLedgerStore.For(_daemonStore, service.DaemonName).TryRead(id),
             pullRequestSnapshots: pullRequestSnapshots, transcripts: transcripts,
             pullRequestLinksChanged: pullRequestTones.Refresh, readings: readings, senders: senders,
-            appSubject: appSubject, notifier: notifier, serverLane: serverLane.Status, workContextLayout: workContextLayout);
+            appSubject: appSubject, notifier: notifier, serverLane: serverLane.Status, workContextLayout: workContextLayout,
+            handoffOutcomes: handoffOutcomes);
         // The origin lookup below and this call are two reads of a cache the directory's own
         // background recompute mutates, so the row can be gone by the time this runs: no row, no
         // host, and the click opens nothing.
@@ -1219,8 +1224,31 @@ public partial class App : Application {
                     signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts, inputSending: attention.ReplySending,
                     pullRequestSnapshots: pullRequestSnapshots, pullRequestLinksChanged: pullRequestTones.Refresh, readSubagent: readSubagent,
                     readings: readings, senders: senders, remoteAgents: remoteAgents, notifier: notifier, appSubject: appSubject,
-                    serverSessions: sessions, workContextLayout: workContextLayout)
+                    serverSessions: sessions, workContextLayout: workContextLayout, handoffOutcomes: handoffOutcomes)
                 : null;
+        // One for the app's life: a failed hand-off's draft outlives the composer that sent it.
+        var handoffDrafts = new HandoffDrafts(serverLane.LaunchFailures, directory, _time);
+        _handoffDrafts = handoffDrafts;
+        var checkouts = new LocalCheckoutFinder(repoIdentity);
+        var knownRepos = new RepoPathStore(_config, _time);
+        async Task<IReadOnlyList<string>> HandoffCandidatesAsync(CancellationToken ct) {
+            var remembered = (await _appState.LoadAsync()).HarnessByRepo?.Keys ?? [];
+            var known = await knownRepos.GetSortedPathsAsync();
+            var agents = service.Agents.Items.Select(a => a.RepoPath).OfType<string>().Where(p => p.Length > 0);
+            return [.. remembered, .. known, .. agents];
+        }
+        MainWindowViewModel? OpenWindow() => _coordinator?.Window?.DataContext as MainWindowViewModel;
+        HandoffComposerViewModel BuildHandoff(AgentRow row) => new(
+            HandoffComposerViewModel.SourceOf(row), service, launch, sessions, ops, checkouts, HandoffCandidatesAsync,
+            handoffDrafts, serverLane.Status, uploader, directory,
+            navigationGeneration: () => OpenWindow()?.NavigationGeneration ?? 0,
+            openSessionIfCurrent: (agentId, origin, generation) => OpenWindow()?.OpenSessionIfCurrent(agentId, origin, generation),
+            closeFailedLaunch: agentId => OpenWindow()?.CloseFailedLaunch(agentId),
+            // Unconditional: the failed launch's close has just moved the navigation generation on.
+            reopenSource: (sessionId, presentation) =>
+                OpenWindow() is { } window ? window.ReopenServerSessionAsync(sessionId, presentation) : Task.FromResult(false),
+            notifier: notifier, appServerUrl: profiles?.Resolution.ServerUrl,
+            modelCatalog: modelCatalog.Catalog, onUnauthorized: serverLane.ParkSignedOut, time: _time, shutdown: _shutdown.Token);
         // A session the server lists with no daemon behind it: read-only, so no terminal surface.
         RemoteSessionViewModel? BuildServer(string sessionId) =>
             directory.Rows.Lookup($"server:{sessionId}") is { HasValue: true, Value: var row }
@@ -1230,7 +1258,7 @@ public partial class App : Application {
                     signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts, inputSending: attention.ReplySending,
                     pullRequestSnapshots: pullRequestSnapshots, pullRequestLinksChanged: pullRequestTones.Refresh, readSubagent: readSubagent,
                     readings: readings, remoteAgents: remoteAgents, notifier: notifier, appSubject: appSubject, serverSessions: sessions,
-                    workContextLayout: workContextLayout)
+                    workContextLayout: workContextLayout, handoff: BuildHandoff, handoffOutcomes: handoffOutcomes)
                 : null;
 
         _coordinator = new MainWindowCoordinator(
@@ -2900,7 +2928,7 @@ public partial class App : Application {
             await Dispatcher.UIThread.InvokeAsync(async () => {
                 IDisposable?[] ui = [
                     _tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
-                    _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _accounts, _sessionAccess,
+                    _notificationSessions, _notificationSettings, _permissionFeed, _attention, _handoffDrafts, _commands, _permissions, _accounts, _sessionAccess,
                     _pullRequestTones, _launchApprovals, _webWorkspace, _activity, _home, _localServer, _localStack, _rail, _pause, _staleDaemonNudge, _restartPending, _expectedRestart,
                 ];
                 if (shutdown) {

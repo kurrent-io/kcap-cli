@@ -200,7 +200,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             LocalTranscripts? transcripts = null, Action<string>? pullRequestLinksChanged = null, AccountReadings? readings = null,
             IMessageSenderSource? senders = null,
             IObservable<string?>? appSubject = null, IAppNotifier? notifier = null,
-            IObservable<ServerLaneStatus>? serverLane = null, WorkContextLayout? workContextLayout = null) {
+            IObservable<ServerLaneStatus>? serverLane = null, WorkContextLayout? workContextLayout = null,
+            HandoffOutcomeReader? handoffOutcomes = null) {
         AgentId = agentId;
         _drafts = drafts;
         _opener = opener;
@@ -371,7 +372,9 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                     : new LocalFrameChatInput(agentId, daemon, ops, presence);
                 Chat = new ChatTabViewModel(
                     agentId, daemon, input, uploader, projection, opener, time, permissions, runs, note, sessionIds, localDaemonOnAppServer, planActivity, OpenCard, drafts, transcripts,
-                    senders, readings?.Local, readings?.Clock, signInCompleted) {
+                    senders, readings?.Local, readings?.Clock, signInCompleted,
+                    handoffOutcome: handoffOutcomes is null ? null : Observable.Switch(sessionIds
+                        .Select(sid => HandoffOutcomeReader.CardFor(handoffOutcomes, sid)))) {
                     ShowTerminal = hasTerminal ? () => ActiveTab = WorkspaceTab.Terminal : null,
                     InputSending = inputSending,
                 };

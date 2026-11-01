@@ -960,4 +960,22 @@ public class ServerSessionsServiceTests {
         await Assert.That(TitleIn(service.Live, "live-me")).IsEqualTo("Renamed");
         await Assert.That(TitleIn(service.MineLive, "live-me")).IsEqualTo("Renamed");
     }
+
+    [Test]
+    public async Task An_unauthorized_handoff_context_read_signs_the_lane_out() {
+        var lane = new FakeServerLane();
+        var listing = new ScriptedListing();
+        var parked = new List<int>();
+        using var service = new ServerSessionsService(
+            lane, listing.Fetch, _ => Task.FromResult<SessionOwnerOptionDto[]?>(Owners("me")), new FakeTimeProvider(),
+            onUnauthorized: parked.Add,
+            fetchHandoffContext: (_, _) => Task.FromResult(new HandoffContextFetch(ServerReadOutcome.Unauthorized, null)));
+        ScriptDefault(listing);
+        Connect(lane, epoch: 6);
+
+        var read = await service.ReadHandoffContextAsync("s1", CancellationToken.None);
+
+        await Assert.That(read.Outcome).IsEqualTo(ServerReadOutcome.Unauthorized);
+        await Assert.That(parked).IsEquivalentTo([6]);
+    }
 }

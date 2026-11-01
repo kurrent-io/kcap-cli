@@ -200,12 +200,14 @@ public class ButtonAutomationNameTests {
         try {
             await Assert.That(await AnnouncedAsync(window)).Contains("Claude Code · Default");
 
+            var chips = view.GetVisualDescendants().OfType<LaunchChipsView>().Single();
             async Task<List<string>> OpenAsync(string chip) {
-                var before = view.OpenMenuForTesting;
+                Flyout? Current() => chip is "RepositoryChip" or "MachineChip" ? view.OpenMenuForTesting : chips.OpenMenuForTesting;
+                var before = Current();
                 window.GetVisualDescendants().OfType<Button>().Single(b => b.Name == chip).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-                await WaitUntilAsync(() => view.OpenMenuForTesting is { } menu && menu != before, what: chip);
+                await WaitUntilAsync(() => Current() is { } menu && menu != before, what: chip);
                 Settle(window);
-                var menu = view.OpenMenuForTesting!;
+                var menu = Current()!;
                 var names = await AnnouncedAsync((Control)menu.Content!);
                 menu.Hide();
                 Dispatcher.UIThread.RunJobs();
@@ -226,6 +228,8 @@ public class ButtonAutomationNameTests {
     });
 
     sealed class NeverLaunch : ILaunchClient {
+        public Task<IReadOnlySet<string>?> GetLaunchFeaturesAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlySet<string>?>(System.Collections.Frozen.FrozenSet<string>.Empty);
         public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) =>
             Task.FromResult(new LaunchOutcome(false, null, "unexpected launch"));
     }
