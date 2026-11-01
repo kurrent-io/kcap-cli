@@ -155,7 +155,7 @@ static class ClaudeCliRunner {
             CancellationToken ct             = default
         ) =>
         (await RunDetailedAsync(prompt, timeout, time, log, profile, harnesses, model, maxTurns, promptViaStdin,
-            jsonSchema, mcpConfigJson, allowedTools, maxBudgetUsd, systemPrompt, ct)).Result;
+            jsonSchema, mcpConfigJson, allowedTools, maxBudgetUsd, systemPrompt, ct: ct)).Result;
 
     public static async Task<ClaudeCliOutcome> RunDetailedAsync(
             string            prompt,
@@ -172,6 +172,7 @@ static class ClaudeCliRunner {
             string[]?         allowedTools   = null,
             double?           maxBudgetUsd   = null,
             string?           systemPrompt   = null,
+            string?           executable     = null,
             CancellationToken ct             = default
         ) {
         // MCP mode without an allowlist would hand the model every tool the
@@ -203,7 +204,7 @@ static class ClaudeCliRunner {
         }
 
         try {
-            return await RunCoreAsync(prompt, timeout, time, log, profile, harnesses, workingDir, sessionId, model, maxTurns, promptViaStdin, jsonSchema, mcpConfigJson, allowedTools, maxBudgetUsd, systemPrompt, ct);
+            return await RunCoreAsync(prompt, timeout, time, log, profile, harnesses, workingDir, sessionId, model, maxTurns, promptViaStdin, jsonSchema, mcpConfigJson, allowedTools, maxBudgetUsd, systemPrompt, executable, ct);
         } finally {
             if (createdWorkingDir) {
                 try {
@@ -233,13 +234,14 @@ static class ClaudeCliRunner {
             string[]?         allowedTools,
             double?           maxBudgetUsd,
             string?           systemPrompt,
+            string?           executable,
             CancellationToken ct
         ) {
         // Resolve rather than pass "claude" verbatim: CreateProcess appends only .exe, so the
         // npm-installed claude.cmd shim on Windows would never be found.
-        var exePath = harnesses.ResolveLaunchable(HarnessId.Claude);
+        var exePath = executable ?? harnesses.ResolveLaunchable(HarnessId.Claude);
 
-        if (exePath is null) {
+        if (string.IsNullOrEmpty(exePath)) {
             log("claude not found on PATH or in the desktop app");
 
             return new(null, ClaudeCliFailure.ProcessFailure);

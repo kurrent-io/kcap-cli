@@ -6,43 +6,73 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Claude;
 
-/// <summary>A blank schema is no schema: the runner answers it as text, so claude must not be asked to enforce one.</summary>
+/// <summary>What reaches the claude command line: a blank schema is no schema, and the CLI is the one the daemon is
+/// configured to launch, not whichever claude the search path finds first.</summary>
 public class ClaudeHeadlessHarnessTests {
     [TempHome] public required TempHome Home { get; init; }
     [TempDir]  public required TempDir  Bin  { get; init; }
 
-    async Task<string> ArgsFor(string? schema) {
-        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
-
-        var argsFile = Bin.PathTo("args.txt");
-        Bin.CreateExecutable("claude", $$"""
+    string FakeClaude(string relativePath, string mark) =>
+        Bin.CreateExecutable(relativePath, $$"""
             #!/bin/sh
-            printf '%s\n' "$@" > '{{argsFile}}'
+            printf '%s\n' '{{mark}}' "$@" > '{{Bin.PathTo("args.txt")}}'
             cat > /dev/null
             printf '{"type":"result","subtype":"success","is_error":false,"result":"ok"}'
             exit 0
             """);
 
-        var harness = new ClaudeHeadlessHarness(TestHarnesses.Under(Home, BinaryProbe.Searching(Bin.Path)),
-            new ProfileContext(new(null, "default", null, null), new ProfileConfig()), TimeProvider.System,
-            NullLogger<ClaudeHeadlessHarness>.Instance);
+    ClaudeHeadlessHarness Harness(string? claudePath = null) {
+        var binaries = BinaryProbe.Searching(Bin.Path);
+        var config = new DaemonConfig {
+            Binaries = binaries,
+            Profiles = new ProfileContext(new(null, "default", null, null), new ProfileConfig()),
+        };
+        if (claudePath is not null) config.ClaudePath = claudePath;
 
+        return new(TestHarnesses.Under(Home, binaries), config, TimeProvider.System, NullLogger<ClaudeHeadlessHarness>.Instance);
+    }
+
+    async Task<string[]> ArgsFor(ClaudeHeadlessHarness harness, string? schema = null) {
         var outcome = await harness.RunAsync(
             new RunHeadlessPromptArgs("r1", "claude", "haiku", null, null, "p", schema, 1, null, DateTimeOffset.UtcNow.AddMinutes(1)),
             TimeSpan.FromSeconds(30), CancellationToken.None);
 
         await Assert.That(outcome.Result?.Result).IsEqualTo("ok");
 
-        return await File.ReadAllTextAsync(argsFile);
+        return (await File.ReadAllTextAsync(Bin.PathTo("args.txt"))).Split('\n');
     }
 
     [Test]
     public async Task A_blank_schema_asks_for_no_structured_reply() {
-        await Assert.That((await ArgsFor("  ")).Split('\n')).DoesNotContain("--json-schema");
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        FakeClaude("claude", "path");
+
+        await Assert.That(await ArgsFor(Harness(), "  ")).DoesNotContain("--json-schema");
     }
 
     [Test]
     public async Task A_schema_asks_for_a_structured_reply() {
-        await Assert.That((await ArgsFor("{}")).Split('\n')).Contains("--json-schema");
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        FakeClaude("claude", "path");
+
+        await Assert.That(await ArgsFor(Harness(), "{}")).Contains("--json-schema");
+    }
+
+    [Test]
+    public async Task The_configured_claude_runs_and_is_advertised_off_the_search_path() {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        FakeClaude("claude", "path");
+        var configured = FakeClaude("pinned/claude", "configured");
+        var harness    = Harness(configured);
+
+        await Assert.That(harness.IsAvailable()).IsTrue();
+        await Assert.That((await ArgsFor(harness))[0]).IsEqualTo("configured");
+    }
+
+    [Test]
+    public async Task A_configured_claude_that_is_gone_is_not_advertised() {
+        FakeClaude("claude", "path");
+
+        await Assert.That(Harness(Bin.PathTo("missing/claude")).IsAvailable()).IsFalse();
     }
 }

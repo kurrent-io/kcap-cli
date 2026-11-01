@@ -615,10 +615,10 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton<EvalContextCache>();
         builder.Services.AddSingleton<EvalRunner>();
         builder.Services.AddSingleton<IHeadlessHarness>(sp => new Harness.Claude.ClaudeHeadlessHarness(
-            sp.GetRequiredService<HarnessRegistry>(), sp.GetRequiredService<DaemonConfig>().Profiles,
+            sp.GetRequiredService<HarnessRegistry>(), sp.GetRequiredService<DaemonConfig>(),
             sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<Harness.Claude.ClaudeHeadlessHarness>>()));
         builder.Services.AddSingleton<IHeadlessHarness>(sp => new Harness.Codex.CodexHeadlessHarness(
-            sp.GetRequiredService<HarnessRegistry>(), sp.GetRequiredService<DaemonConfig>().Profiles,
+            sp.GetRequiredService<HarnessRegistry>(), sp.GetRequiredService<DaemonConfig>(),
             sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<Harness.Codex.CodexHeadlessHarness>>()));
         builder.Services.AddSingleton(sp => new HeadlessPromptRunner(
             sp.GetServices<IHeadlessHarness>(), sp.GetRequiredService<TimeProvider>(),

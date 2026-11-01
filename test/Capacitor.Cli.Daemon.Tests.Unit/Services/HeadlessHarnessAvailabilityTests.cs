@@ -12,14 +12,16 @@ public class HeadlessHarnessAvailabilityTests {
     [TempHome] public required TempHome Home { get; init; }
     [TempDir]  public required TempDir  Bin  { get; init; }
 
-    static readonly ProfileContext Profiles = new(new(null, "default", null, null), new ProfileConfig());
-
     HeadlessPromptRunner Runner(BinaryProbe binaries) {
         var harnesses = TestHarnesses.Under(Home, binaries);
+        var config    = new DaemonConfig {
+            Binaries = binaries,
+            Profiles = new ProfileContext(new(null, "default", null, null), new ProfileConfig()),
+        };
 
         return new([
-            new ClaudeHeadlessHarness(harnesses, Profiles, TimeProvider.System, NullLogger<ClaudeHeadlessHarness>.Instance),
-            new CodexHeadlessHarness(harnesses, Profiles, TimeProvider.System, NullLogger<CodexHeadlessHarness>.Instance)
+            new ClaudeHeadlessHarness(harnesses, config, TimeProvider.System, NullLogger<ClaudeHeadlessHarness>.Instance),
+            new CodexHeadlessHarness(harnesses, config, TimeProvider.System, NullLogger<CodexHeadlessHarness>.Instance)
         ], TimeProvider.System, NullLogger<HeadlessPromptRunner>.Instance, CancellationToken.None);
     }
 

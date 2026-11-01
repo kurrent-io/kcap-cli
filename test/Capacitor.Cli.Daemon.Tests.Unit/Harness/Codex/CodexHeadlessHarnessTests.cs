@@ -28,8 +28,12 @@ public class CodexHeadlessHarnessTests {
             exit 0
             """);
 
-        var harness = new CodexHeadlessHarness(TestHarnesses.Under(Home, BinaryProbe.Searching(Bin.Path)),
-            new ProfileContext(new(null, "default", null, null), new ProfileConfig()), TimeProvider.System,
+        var binaries = BinaryProbe.Searching(Bin.Path);
+        var config   = new DaemonConfig {
+            Binaries = binaries,
+            Profiles = new ProfileContext(new(null, "default", null, null), new ProfileConfig()),
+        };
+        var harness = new CodexHeadlessHarness(TestHarnesses.Under(Home, binaries), config, TimeProvider.System,
             NullLogger<CodexHeadlessHarness>.Instance);
 
         var outcome = await harness.RunAsync(
