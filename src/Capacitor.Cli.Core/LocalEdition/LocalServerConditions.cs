@@ -75,6 +75,7 @@ public static class LocalServerConditions {
             LocalServerCondition.Unreadable   => "The local installation's records cannot be read. kcap local status says which file.",
             LocalServerCondition.PortTaken    => "Another program holds the local server's port, so it cannot start. Stop that program; kcap never stops a program it did not start.",
             LocalServerCondition.Restarting   => "Its service is starting it again, and it reconnects once the server answers. kcap local logs shows why it stopped.",
+            LocalServerCondition.ServesAnother => "Its service runs another local installation, so this one cannot start. kcap local status names it.",
             _                                 => null,
         };
 
@@ -90,6 +91,7 @@ public static class LocalServerConditions {
             LocalServerCondition.Installed    => "installed",
             LocalServerCondition.PortTaken    => "port_taken",
             LocalServerCondition.Restarting   => "restarting",
+            LocalServerCondition.ServesAnother => "serves_another",
             _                                 => throw new ArgumentOutOfRangeException(nameof(condition), condition, null),
         };
     }

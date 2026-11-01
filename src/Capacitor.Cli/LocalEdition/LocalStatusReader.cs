@@ -91,7 +91,8 @@ sealed class LocalStatusReader(LocalStack stack, string cliVersion, Func<int, Po
                 var others = Roots(state.Readings).ToList();
                 return Down($"Not running: the {service.Describe} {service.Name(unit)} serves another installation.", fields, notes,
                     [$"It runs the installation in {string.Join(" and ", others)}. One user has one unit, so only one installation runs at a time; "
-                  + $"manage that one with KCAP_LOCAL_ROOT={others.FirstOrDefault() ?? "<its root>"} kcap local …."]);
+                  + $"manage that one with KCAP_LOCAL_ROOT={others.FirstOrDefault() ?? "<its root>"} kcap local …."])
+                    with { Reading = new(LocalServerCondition.ServesAnother) };
 
             case OwnerDecision.Unknown:
                 var unreadable = Unreadable(state.Readings).ToList();

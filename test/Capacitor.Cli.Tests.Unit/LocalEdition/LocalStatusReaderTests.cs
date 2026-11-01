@@ -267,6 +267,8 @@ public class LocalStatusReaderTests {
         await Assert.That((await Read()).Headline).IsEqualTo("Stopped.");
     }
 
+    /// <summary>A start from this root cannot bring up a unit that runs another, so the reading a client acts on is not
+    /// one it would offer Start for.</summary>
     [Test]
     public async Task A_unit_serving_another_root_names_it() {
         Publish();
@@ -277,6 +279,7 @@ public class LocalStatusReaderTests {
 
         await Assert.That(report.Headline).Contains("serves another installation");
         await Assert.That(Text(report)).Contains($"KCAP_LOCAL_ROOT={other}");
+        await Assert.That(report.Reading.Condition).IsEqualTo(LocalServerCondition.ServesAnother);
     }
 
     [Test]

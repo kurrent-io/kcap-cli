@@ -35,4 +35,8 @@ public enum LocalServerCondition {
     /// <summary>Installed, and its supervisor is bringing the server up: relaunching it after an exit, or running a
     /// process that does not answer yet. Only the supervisor can say so, through <c>kcap local status --json</c>.</summary>
     Restarting,
+
+    /// <summary>Installed, but the user's one service unit runs an installation in another root, so no start from this
+    /// one brings it up. Only the service manager can say so, through <c>kcap local status --json</c>.</summary>
+    ServesAnother,
 }
