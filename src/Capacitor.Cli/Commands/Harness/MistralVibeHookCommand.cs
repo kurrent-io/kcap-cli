@@ -113,7 +113,7 @@ sealed class MistralVibeHookCommand(
         if (hosted.AgentId is { } agentHostId) forwarded["agent_host_id"] = agentHostId;
         if (activeProfile?.DefaultVisibility is { } visibility) forwarded["default_visibility"] = visibility;
 
-        SessionStartInventory.Stamp(forwarded, config, harnesses, clock.Time);
+        SessionStartInventory.Stamp(forwarded, config, harnesses, HarnessId.MistralVibe, clock.Time);
         var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, forwarded.ToJsonString(), clock.Time);
 
         if (await RepoExclusion.IsOutOfScopeAsync(router, config, enriched,

@@ -324,7 +324,7 @@ sealed class GeminiHookCommand(
             forwarded["default_visibility"] = visibility;
         }
 
-        SessionStartInventory.Stamp(forwarded, config, harnesses, clock.Time);
+        SessionStartInventory.Stamp(forwarded, config, harnesses, HarnessId.Gemini, clock.Time, TryGetString(node, "transcript_path"));
         var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, forwarded.ToJsonString(), clock.Time);
 
         if (await RepoExclusion.IsOutOfScopeAsync(router, config, enriched,

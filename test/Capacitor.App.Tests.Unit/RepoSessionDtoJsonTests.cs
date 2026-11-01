@@ -30,6 +30,22 @@ public class RepoSessionDtoJsonTests {
         await Assert.That(row.Branch).IsEqualTo("fix/terminal-replay-loh");
     }
 
+    [Test]
+    public async Task Recording_identity_deserializes_and_reads_null_when_absent() {
+        static RepoSessionDto Row(string field) => JsonSerializer.Deserialize($$"""
+            {"items":[{"session_id":"s1","status":"ended","access_level":"full","started_at":"2026-10-22T13:04:24Z",
+              "last_activity_at":"2026-10-22T16:56:41Z"{{field}}}],"total":1}
+            """, RemoteModelsJsonContext.Default.RepoSessionsResponseDto)!.Items.Single();
+
+        var recorded = Row(""","recording":{"machine_id":"m-1","daemon_name":"laptop","account_id":"acct-1","config_dir":"/Users/me/.claude"}""");
+
+        await Assert.That(recorded.Recording).IsEqualTo(new RepoSessionRecordingDto {
+            MachineId = "m-1", DaemonName = "laptop", AccountId = "acct-1", ConfigDir = "/Users/me/.claude"
+        });
+        await Assert.That(Row("").Recording).IsNull();
+        await Assert.That(Row(""","recording":null""").Recording).IsNull();
+    }
+
     /// An older server omits the field, which is not the same as withholding it from the viewer.
     [Test]
     public async Task Pull_requests_tell_absent_from_withheld_from_empty() {

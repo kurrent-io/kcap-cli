@@ -298,7 +298,7 @@ public sealed class CursorHookCommand(
             if (agentHostId is not null) node["agent_host_id"] = agentHostId;
 
             // Surface 3: attach this machine's harness inventory, session-start only.
-            if (eventName == "sessionStart") SessionStartInventory.Stamp(node.AsObject(), config, harnesses, clock.Time);
+            if (eventName == "sessionStart") SessionStartInventory.Stamp(node.AsObject(), config, harnesses, HarnessId.Cursor, clock.Time);
 
             if (eventName == "afterAgentThought") {
                 var sid = TryGetString(node, "session_id") ?? "";

@@ -417,7 +417,7 @@ public sealed class ClaudeHookCommand(
                 node["ended_at"] = clock.Time.GetUtcNow().ToString("O");
             // Surface 3: the degraded arm spools via this path and bypasses HandleCore's stamp, so a
             // replayed session-start must still carry the harness inventory (the hook-ingest carrier).
-            if (command == "session-start") SessionStartInventory.Stamp(node.AsObject(), config, harnesses, clock.Time);
+            if (command == "session-start") SessionStartInventory.Stamp(node.AsObject(), config, harnesses, HarnessId.Claude, clock.Time, accounts: accounts);
             DefaultLastAssistantMessage(node, command);
             return node.ToJsonString();
         } catch { return body; }
@@ -582,7 +582,7 @@ public sealed class ClaudeHookCommand(
 
                 // Surface 3: attach this machine's harness inventory, session-start only (the
                 // injections above apply to every event; the inventory is a session-start signal).
-                if (command == "session-start") SessionStartInventory.Stamp(node.AsObject(), config, harnesses, clock.Time);
+                if (command == "session-start") SessionStartInventory.Stamp(node.AsObject(), config, harnesses, HarnessId.Claude, clock.Time, accounts: accounts);
 
                 DefaultLastAssistantMessage(node, command);
 
