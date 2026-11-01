@@ -1194,12 +1194,13 @@ public class SetupCommandTests {
             bool auth = true, bool skip = false, string visibility = "org_public",
             CodingAgentsStep.Paths? paths = null, bool browserFinished = false, Func<bool>? nameSessions = null,
             ImportSkip? leaveOut = null,
-            Func<IReadOnlyList<SetupImportChoice>, IReadOnlyList<SetupImportChoice>>? choose = null) => new(
+            Func<IReadOnlyList<SetupImportChoice>, IReadOnlyList<SetupImportChoice>>? choose = null,
+            Core.Setup.Intelligence.IntelligenceSetupResponse? intelligence = null) => new(
         AuthSatisfied: auth, SkipImport: skip, NoPrompt: noPrompt, PromptYesNo: prompt ?? (() => true),
         Profiles: Resolutions.At("https://example.test", Config.Root), ProfileName: "work", ServerUrl: "https://example.test",
         DefaultVisibility: visibility, CurrentRepo: null, WorkingDirectory: Config.Directory,
         Paths: paths ?? PathsWithEvalWatchFor(HarnessId.Codex), BrowserImport: browser, BrowserImportFailed: false,
-        BrowserFinished: browserFinished, PromptNameSessions: nameSessions, Skip: leaveOut, ChooseProjects: choose);
+        BrowserFinished: browserFinished, PromptNameSessions: nameSessions, Skip: leaveOut, Intelligence: intelligence, ChooseProjects: choose);
 
     /// <summary>Two repositories and one folder that matched none, plus a session with no folder recorded.</summary>
     static ImportCommand.ImportDiscoveryResult DiscoveredProjects() {
@@ -1315,6 +1316,48 @@ public class SetupCommandTests {
         await Assert.That(saidBeforeAsking).Contains("go to the model provider that agent uses");
         await Assert.That(runner.Captured!.SkipTitle).IsEqualTo(!answer);
         await Assert.That(spawner.Seen!.NameSessions).IsEqualTo(answer);
+    }
+
+    /// <summary>Once the server's own model titles imports, naming them here would run the user's agent on the same
+    /// sessions for nothing: it is not asked, the import leaves titling to the server, and the pace is said instead.</summary>
+    [Test, NotInParallel]
+    public async Task A_server_that_titles_is_not_doubled_by_naming_here() {
+        var runner  = FakeImportRunner.Succeeding().Discovering(Discovered(3, 20, 5));
+        var spawner = FakeBackgroundImportSpawner.Running();
+        using var console = new SpectreCapture();
+        Func<bool> mustNotAsk = () => throw new InvalidOperationException("must not ask about naming");
+
+        await Command(runner, spawner, FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs(nameSessions: mustNotAsk,
+                intelligence: new("local_agent", "claude", null, true, 10, ["titles", "outcomes"])));
+
+        await Assert.That(runner.Captured!.SkipTitle).IsTrue();
+        await Assert.That(spawner.Seen!.NameSessions).IsFalse();
+        await Assert.That(console.Flat).Contains("works through 25 imported sessions at up to 10 a day: about 3 days");
+    }
+
+    [Test, NotInParallel]
+    public async Task A_server_with_no_title_model_still_offers_naming_here() {
+        var runner = FakeImportRunner.Succeeding().Discovering(Discovered(3, 20, 5));
+        var asked  = false;
+        using var console = new SpectreCapture();
+
+        await Command(runner, FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs(nameSessions: () => asked = true, intelligence: new("none", null, null, false, 10, [])));
+
+        await Assert.That(asked).IsTrue();
+        await Assert.That(console.Flat).DoesNotContain("a day: about");
+    }
+
+    [Test]
+    [Arguments(1, 200, "1 imported session at up to 200 a day: about 1 day.")]
+    [Arguments(450, 200, "450 imported sessions at up to 200 a day: about 3 days.")]
+    [Arguments(0, 200, null)]
+    public async Task The_pace_line_counts_whole_days(int sessions, int perDay, string? tail) {
+        var line = SetupCommand.ImportCostLine(sessions, new("provider", null, "anthropic", true, perDay, ["titles"]));
+
+        if (tail is null) await Assert.That(line).IsNull();
+        else await Assert.That(line).EndsWith(tail);
     }
 
     /// <summary>Declining the import is not a question about naming, and an unattended run cannot consent:

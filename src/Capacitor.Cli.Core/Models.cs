@@ -1310,6 +1310,9 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(Capacitor.Cli.Core.Http.PublishArtefactVersionBody))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Http.SetArtefactVisibilityBody))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Setup.VisibilityOptionsResponse))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Setup.Intelligence.IntelligenceSetupRequest))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Setup.Intelligence.IntelligenceSetupResponse))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Setup.Intelligence.IntelligenceSetupError))]
 [JsonSourceGenerationOptions(
     PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,
     UseStringEnumConverter = true

@@ -31,7 +31,7 @@ public class LocalCommandTests {
     public async Task A_trailing_argument_is_refused_before_anything_runs(string sub) {
         using var stderr = ConsoleOutput.StartErrorCapture();
 
-        var exit = await new LocalCommand(new NoStack(), new LocalUpgradeCommand(new NoStack()), new LocalFetchCommand(new NoStack()), new NoBrowser(), new FakeOutgoingRecorders([]), new ConfigRoot("/no-config"), new UserHome("/no-home")).HandleAsync(["local", sub, "--bogus"]);
+        var exit = await new LocalCommand(new NoStack(), new LocalUpgradeCommand(new NoStack()), new LocalFetchCommand(new NoStack()), new LocalIntelligenceCommand(new FixedCapacitorHttpClient(), new Core.LocalEdition.LocalRoot("/no-local-root")), new NoBrowser(), new FakeOutgoingRecorders([]), new ConfigRoot("/no-config"), new UserHome("/no-home")).HandleAsync(["local", sub, "--bogus"]);
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(stderr.GetCapturedError()).Contains("takes no arguments: --bogus");
@@ -44,7 +44,7 @@ public class LocalCommandTests {
     public async Task A_quick_uninstall_is_refused_off_Windows() {
         using var stderr = ConsoleOutput.StartErrorCapture();
 
-        var exit = await new LocalCommand(new NoStack(), new LocalUpgradeCommand(new NoStack()), new LocalFetchCommand(new NoStack()), new NoBrowser(), new FakeOutgoingRecorders([]), new ConfigRoot("/no-config"), new UserHome("/no-home")).HandleAsync(["local", "uninstall", "--quick", "--yes"]);
+        var exit = await new LocalCommand(new NoStack(), new LocalUpgradeCommand(new NoStack()), new LocalFetchCommand(new NoStack()), new LocalIntelligenceCommand(new FixedCapacitorHttpClient(), new Core.LocalEdition.LocalRoot("/no-local-root")), new NoBrowser(), new FakeOutgoingRecorders([]), new ConfigRoot("/no-config"), new UserHome("/no-home")).HandleAsync(["local", "uninstall", "--quick", "--yes"]);
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(stderr.GetCapturedError()).Contains("--quick is for the Windows app's uninstaller");

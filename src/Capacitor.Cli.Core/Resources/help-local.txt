@@ -24,6 +24,17 @@ Subcommands:
                             installation's root, so the next `kcap setup --local` installs it without
                             downloading. Installs nothing; the cache is emptied once an install uses it.
       --json                One JSON object per line on stdout, for the desktop app.
+  intelligence <answer> [--model <model>] [--import-outcomes | --no-import-outcomes] [--json]
+                            Choose who runs the server's background model calls: titles, outcomes, evals.
+                            <answer> is claude or codex (your own agent, run by this machine's daemon),
+                            anthropic, openai, openrouter or cohere (a provider, with your API key), or none.
+                            A provider's key is read from its variable (ANTHROPIC_API_KEY, OPENAI_API_KEY,
+                            OPENROUTER_API_KEY, COHERE_API_KEY) or asked for, never taken from the command
+                            line; the server tries it once before storing anything.
+      --model <model>       A provider's model. Without it the server's default runs (gpt-5-mini for OpenAI).
+      --import-outcomes     Imported sessions also get a summary of what each achieved, at the server's daily
+                            pace for background work on imports. --no-import-outcomes turns that off.
+      --json                One JSON object on stdout, for the desktop app.
   uninstall [--purge] [--force] [--yes] [--quick]
                             Stop every kcap daemon and watcher and the local server, then remove the
                             server's service and binaries. Its data and identity are kept, so
@@ -45,7 +56,8 @@ any other kcap changing the installation, and first finish or undo a setup, upgr
 upgrade exits 0 when it upgraded, 1 when it failed before the switch, 2 when it failed after the switch, 3
 when there was nothing to do, and 4 when no bundle is published for this version yet. fetch exits 0 when the
 bundle is in the cache, 1 when it failed, 3 when the installation already runs this version, and 4 when no
-bundle is published for it yet.
+bundle is published for it yet. intelligence exits 0 when the server took the answer, 1 when it could not be
+asked, and 2 when the arguments or the server refused it, storing nothing.
 
 On Windows the server runs under the kcap-service Windows service when that is installed (`kcap setup
 --local --windows-service`, or `kcap daemon service install --system`, moves it there), and otherwise as a

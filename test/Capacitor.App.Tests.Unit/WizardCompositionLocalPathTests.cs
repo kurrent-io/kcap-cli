@@ -168,7 +168,7 @@ public class WizardCompositionLocalPathTests {
         }).WaitAsync(TimeSpan.FromSeconds(30));
 
         await Assert.That(start).IsEqualTo(WizardStepId.Harnesses);
-        await Assert.That(eyebrow).StartsWith("STEP 1 OF 3 ·");
+        await Assert.That(eyebrow).StartsWith("STEP 1 OF 4 ·");
         await Assert.That(backVisible).IsFalse();
         await Assert.That(afterBack).IsEqualTo(WizardStepId.Harnesses);
         await Assert.That(signInShown).IsFalse();

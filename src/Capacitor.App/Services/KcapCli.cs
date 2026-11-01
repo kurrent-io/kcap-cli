@@ -4,6 +4,7 @@ using Capacitor.App.Services.LocalSetup;
 using Capacitor.App.Services.Mutation;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Setup.Intelligence;
 
 namespace Capacitor.App.Services;
 
@@ -124,6 +125,12 @@ public interface IKcapCli {
     /// `import --discover --json` for these vendors, or every harness when none is named; null when the
     /// run failed or printed no report.
     Task<ImportDiscoveryReport?> ImportDiscoverAsync(IReadOnlyList<string> vendorFlags, CancellationToken ct);
+
+    /// <summary><c>local intelligence &lt;answer&gt; --json</c>: tells the local server who runs its background model
+    /// calls. A provider's key goes in the child's environment, never its arguments, which any local user can read.
+    /// <paramref name="importOutcomes"/> null leaves the server's choice as it is.</summary>
+    Task<IntelligenceSetupOutcome> LocalIntelligenceAsync(
+        IntelligenceAnswer answer, string? model, string? apiKey, bool? importOutcomes, CancellationToken ct);
 }
 
 public sealed class KcapCli : IKcapCli {
@@ -136,6 +143,8 @@ public sealed class KcapCli : IKcapCli {
     static readonly TimeSpan ReloadTimeout = TimeSpan.FromSeconds(105);
     // Discovery reads every vendor's history off disk; a large Claude projects tree takes seconds.
     static readonly TimeSpan DiscoverTimeout = TimeSpan.FromSeconds(120);
+    // The server probes a provider's key with one model call before it answers.
+    static readonly TimeSpan IntelligenceTimeout = TimeSpan.FromSeconds(90);
     // A rename adds, on top of the install's own budgets: the old id's 10s lock wait, its 5s label
     // query, the 5s target probe, the old daemon's fence (two connects and exchanges of 3s each to
     // acquire, then a 3s commit or abort), the old daemon's 10s end-agents wait and the retire's own 20s
@@ -403,6 +412,34 @@ public sealed class KcapCli : IKcapCli {
 
         return await _runner.RunAsync(cliPath, ["local", "start"],
             new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: LocalStartTimeout), ct).ConfigureAwait(false);
+    }
+
+    public async Task<IntelligenceSetupOutcome> LocalIntelligenceAsync(
+            IntelligenceAnswer answer, string? model, string? apiKey, bool? importOutcomes, CancellationToken ct) {
+        if (CliPath is not { } cliPath) return new IntelligenceSetupOutcome.Failed("kcap CLI not found");
+
+        List<string> args = ["local", "intelligence", answer.Token];
+        if (answer.Vendor is not null && !string.IsNullOrWhiteSpace(model)) args.AddRange(["--model", model.Trim()]);
+        if (importOutcomes is { } outcomes) args.Add(outcomes ? "--import-outcomes" : "--no-import-outcomes");
+        args.AddRange(["--json", "--no-update-check"]);
+
+        var env = await SpawnEnvAsync(ct).ConfigureAwait(false);
+        if (answer.Vendor is { } vendor && apiKey is not null) env[vendor.KeyVariable] = apiKey;
+
+        var result = await Run(cliPath, [.. args], new RunOptions(EnvOverlay: env, Timeout: IntelligenceTimeout), ct).ConfigureAwait(false);
+
+        IntelligenceCliLine? line = null;
+        try {
+            var last = result.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault();
+            if (last is not null) line = JsonSerializer.Deserialize(last, IntelligenceCliJsonContext.Default.IntelligenceCliLine);
+        } catch (JsonException) { }
+
+        return line switch {
+            { Applied: { } applied }            => new IntelligenceSetupOutcome.Applied(applied),
+            { Ok: false, Error: { } error } when result.ExitCode == 2 => new IntelligenceSetupOutcome.Refused(error),
+            { Ok: false, Error: { } error }     => new IntelligenceSetupOutcome.Failed(error),
+            _ => new IntelligenceSetupOutcome.Failed(result.TimedOut ? "kcap did not answer in time" : $"kcap exited {result.ExitCode}: {result.Stderr.Trim()}"),
+        };
     }
 
     public async Task<ImportDiscoveryReport?> ImportDiscoverAsync(IReadOnlyList<string> vendorFlags, CancellationToken ct) {

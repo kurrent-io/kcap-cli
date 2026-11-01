@@ -99,6 +99,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     public Func<CancelHeadlessPromptArgs, Task>?                      CancelHeadlessPromptHandler { get; set; }
     public Func<string[]>?                                            GetHeadlessVendors          { get; set; }
 
+    /// <summary>What this daemon advertises it can run headless, to the server and on the local status alike.</summary>
+    public string[] AdvertisedHeadlessVendors() => RunHeadlessPromptHandler is null ? [] : GetHeadlessVendors?.Invoke() ?? [];
+
     // Eval protocol 2 (outcomes + coded failures) client-result invocations, registered beside
     // the protocol-1 ones above. Null (early startup / an unwired test) fails closed with a
     // server-authored chat_error rather than silently answering as protocol 1.
@@ -801,7 +804,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             ActiveCountVersion: activeCount?.Version,
             SupportsAccountLaunches: true,
             Accounts: GetAccountsSnapshot?.Invoke(),
-            HeadlessVendors: RunHeadlessPromptHandler is null ? [] : GetHeadlessVendors?.Invoke() ?? [],
+            HeadlessVendors: AdvertisedHeadlessVendors(),
             SupportsScratchWorkspace: true,
             SupportsHandoffLaunch: true);
     }

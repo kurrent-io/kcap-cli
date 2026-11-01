@@ -44,15 +44,29 @@ public class HistoryStepViewModelTests {
         Split("solo", "notes", Share("claude", 3, 3, 0, 25)),
     ], 0, [new(D30, 5), new(D90, 25), new(null, 49)]);
 
+    /// The intelligence page's answer as the Import page sees it.
+    sealed class Answer : IImportIntelligence {
+        public Cli.Core.Setup.Intelligence.IntelligenceSetupResponse? Applied { get; set; }
+        public readonly List<bool> Reposted = [];
+
+        public Task<Cli.Core.Setup.Intelligence.IntelligenceSetupOutcome?> ApplyImportOutcomesAsync(bool importOutcomes, CancellationToken ct) {
+            Reposted.Add(importOutcomes);
+            Applied = Applied! with { ImportOutcomes = importOutcomes };
+
+            return Task.FromResult<Cli.Core.Setup.Intelligence.IntelligenceSetupOutcome?>(new Cli.Core.Setup.Intelligence.IntelligenceSetupOutcome.Applied(Applied));
+        }
+    }
+
     sealed class Harness {
         public readonly FakeKcapCli Cli = new();
         public bool Local;
+        public readonly Answer Intelligence = new();
         public readonly HistoryStepViewModel Vm;
 
         public Harness(ImportDiscoveryReport? report, bool onLocalPath = false) {
             Cli.DiscoverBehavior = _ => Task.FromResult(report);
             Local = onLocalPath;
-            Vm = new HistoryStepViewModel(Cli, action => action(), "test-mac", TimeProvider.System, () => Local);
+            Vm = new HistoryStepViewModel(Cli, action => action(), "test-mac", TimeProvider.System, () => Local, Intelligence);
         }
 
         public async Task EnterAsync() {
@@ -892,5 +906,82 @@ public class HistoryStepViewModelTests {
         await Assert.That(levels.Mixed).IsNull();
         await Assert.That(levels.Clicked).IsTrue();
         await Assert.That(levels.Levels.All(l => l == ImportLevel.OnlyMe)).IsTrue();
+    }
+
+    static Cli.Core.Setup.Intelligence.IntelligenceSetupResponse Took(string mode, string? harness = null, string? vendor = null, bool outcomes = true) =>
+        new(mode, harness, vendor, outcomes, 10, mode == "none" ? [] : ["titles", "outcomes"]);
+
+    /// Once the local server titles imports, naming them on this machine too would spend the agent's quota twice.
+    [Test]
+    public async Task A_server_that_titles_takes_the_naming_offer_away() {
+        var h = new Harness(Report(), onLocalPath: true);
+        h.Intelligence.Applied = Took("local_agent", harness: "claude");
+        await h.EnterAsync();
+        h.Vm.TitleLocally = true;
+
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await h.Vm.Run!.Completion;
+
+        await Assert.That(h.Vm.TitlingOffered).IsFalse();
+        await Assert.That(h.Cli.ImportRequests.All(r => r.SkipTitle)).IsTrue();
+    }
+
+    [Test]
+    public async Task Summarising_is_offered_on_by_default_with_the_pace_once_a_model_runs() {
+        var h = new Harness(Report(), onLocalPath: true);
+        h.Intelligence.Applied = Took("provider", vendor: "anthropic");
+        await h.EnterAsync();
+
+        await Assert.That(h.Vm.SummariseOffered).IsTrue();
+        await Assert.That(h.Vm.SummariseOutcomes).IsTrue();
+        await Assert.That(h.Vm.PaceLine).IsEqualTo("The server works through 27 sessions at up to 10 a day: about 3 days");
+    }
+
+    [Test]
+    public async Task Without_a_model_there_is_nothing_to_summarise_or_pace() {
+        var h = new Harness(Report(), onLocalPath: true);
+        await h.EnterAsync();
+
+        await Assert.That(h.Vm.SummariseOffered).IsFalse();
+        await Assert.That(h.Vm.PaceLine).IsNull();
+        await Assert.That(h.Vm.TitlingOffered).IsTrue();
+    }
+
+    /// The choice is the server's to keep, so it goes through the same answer the intelligence page sent, before the
+    /// import starts; an unchanged choice is not sent again, which would re-probe a provider's key for nothing.
+    [Test]
+    public async Task A_changed_summarise_choice_is_sent_before_the_import() {
+        var h = new Harness(Report(), onLocalPath: true);
+        h.Intelligence.Applied = Took("local_agent", harness: "codex");
+        await h.EnterAsync();
+        h.Vm.SummariseOutcomes = false;
+
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+
+        await Assert.That(h.Intelligence.Reposted).IsEquivalentTo([false]);
+        await Assert.That(h.Cli.ImportRequests).IsNotEmpty();
+    }
+
+    [Test]
+    public async Task An_unchanged_summarise_choice_is_not_sent_again() {
+        var h = new Harness(Report(), onLocalPath: true);
+        h.Intelligence.Applied = Took("local_agent", harness: "codex");
+        await h.EnterAsync();
+
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+
+        await Assert.That(h.Intelligence.Reposted).IsEmpty();
+    }
+
+    /// The local promise is that nothing leaves the machine; a provider the server sends excerpts to breaks it, so
+    /// the page says where they go.
+    [Test]
+    public async Task The_lede_names_where_excerpts_go_once_a_model_runs() {
+        var h = new Harness(Report(), onLocalPath: true);
+        h.Intelligence.Applied = Took("provider", vendor: "openai");
+        await h.EnterAsync();
+
+        await Assert.That(h.Vm.Lede).Contains("send excerpts to OpenAI");
+        await Assert.That(h.Vm.Lede).DoesNotContain("Everything stays on this machine");
     }
 }

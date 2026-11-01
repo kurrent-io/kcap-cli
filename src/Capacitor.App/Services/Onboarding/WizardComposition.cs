@@ -110,6 +110,8 @@ internal sealed record WizardGraphOptions(
     bool                                                                         ResumeWebSignUp = false,
     // The app's one bundle prefetch, started while the edition page leads with the local edition; null fetches nothing ahead.
     LocalBundlePrefetch?                                                         Prefetch = null,
+    // The harnesses a daemon of this name, else this machine, can run headless; null offers no local agent.
+    Func<string, CancellationToken, Task<string[]>>?                             HeadlessHarnesses = null,
     // The install page offers to run kcap as a Windows service.
     bool                                                                         OffersWindowsService = false);
 
@@ -328,7 +330,13 @@ internal static class WizardComposition {
             () => options.ResolveIdentity()?.Profile, options.ShutdownToken,
             onLocalPath: OnLocalPath,
             visibilityOptions: options.ReadVisibilityOptions);
-        var history = new HistoryStepViewModel(cli, options.Bridges.Post, machine, options.Time, OnLocalPath);
+        var intelligence = new IntelligenceStepViewModel(
+            cli, options.Bridges.Post, OnLocalPath,
+            () => [.. harnesses.Rows.Where(r => r.Selected).Select(r => r.Id)],
+            ct => options.HeadlessHarnesses is { } read
+                ? read(options.ResolveIdentity()?.DaemonName ?? options.DefaultDaemonName ?? "daemon", ct)
+                : Task.FromResult<string[]>([]));
+        var history = new HistoryStepViewModel(cli, options.Bridges.Post, machine, options.Time, OnLocalPath, intelligence);
         var daemon = new DaemonEnabler(
             cli, options.RunMutation,
             // Gated on a committed sign-in or local install and resolved fresh per call, never the startup-cached profile.
@@ -383,7 +391,7 @@ internal static class WizardComposition {
         }, options.UrlOpener, PrepareWorkspaceAsync, serviceChanged,
             // The same page Help and support → Set up kcap leads through to connect an agent.
             addAgent: () => shell?.TryGoTo(WizardStepId.Harnesses));
-        IWizardStep[] steps = [edition, installStep, signIn, harnesses, history, new UsageDataStepViewModel(options.UsageNotice), done];
+        IWizardStep[] steps = [edition, installStep, signIn, harnesses, intelligence, history, new UsageDataStepViewModel(options.UsageNotice), done];
 
         // Before a server is connected the app has nothing to show, so deferring is offered only for the optional steps after.
         var canFinishLater = signIn.WhenAnyValue(x => x.Satisfied).Select(_ => Unit.Default)

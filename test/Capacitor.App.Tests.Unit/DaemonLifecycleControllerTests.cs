@@ -2449,6 +2449,16 @@ sealed class FakeKcapCli : IKcapCli {
         return DiscoverBehavior(vendorFlags);
     }
 
+    public readonly List<(Cli.Core.Setup.Intelligence.IntelligenceAnswer Answer, string? Model, string? Key, bool? ImportOutcomes)> IntelligenceCalls = [];
+    public Func<Cli.Core.Setup.Intelligence.IntelligenceAnswer, Task<Cli.Core.Setup.Intelligence.IntelligenceSetupOutcome>> IntelligenceBehavior =
+        answer => Task.FromResult<Cli.Core.Setup.Intelligence.IntelligenceSetupOutcome>(new Cli.Core.Setup.Intelligence.IntelligenceSetupOutcome.Applied(
+            new(answer.Mode, answer.Harness, answer.Vendor?.Id, true, 200, answer.Mode == "none" ? [] : ["titles", "outcomes"])));
+    public Task<Cli.Core.Setup.Intelligence.IntelligenceSetupOutcome> LocalIntelligenceAsync(
+            Cli.Core.Setup.Intelligence.IntelligenceAnswer answer, string? model, string? apiKey, bool? importOutcomes, CancellationToken ct) {
+        IntelligenceCalls.Add((answer, model, apiKey, importOutcomes));
+        return IntelligenceBehavior(answer);
+    }
+
     public int ImportCallCount;
     public readonly List<ImportRequest> ImportRequests = [];
     public Func<ImportRequest, Action<StreamedLine>, CancellationToken, Task<StreamingResult>> ImportBehavior =

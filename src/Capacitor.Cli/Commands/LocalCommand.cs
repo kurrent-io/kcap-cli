@@ -8,7 +8,7 @@ namespace Capacitor.Cli.Commands;
 
 /// <summary>The <c>kcap local</c> group, for the installation <c>kcap setup --local</c> made.</summary>
 sealed class LocalCommand(
-    ILocalStackFactory stacks, LocalUpgradeCommand upgrade, LocalFetchCommand fetch, IBrowserLauncher browser, IOutgoingRecorders recorders,
+    ILocalStackFactory stacks, LocalUpgradeCommand upgrade, LocalFetchCommand fetch, LocalIntelligenceCommand intelligence, IBrowserLauncher browser, IOutgoingRecorders recorders,
     ConfigRoot config, UserHome home) {
     const int DefaultLogLines = 50;
 
@@ -36,6 +36,7 @@ sealed class LocalCommand(
             "uninstall"    => await UninstallAsync(args[2..]),
             "upgrade"      => await upgrade.HandleAsync(args),
             "fetch"        => await fetch.HandleAsync(args),
+            "intelligence" => await intelligence.HandleAsync(args),
             LocalConsoleBreakCommand.Name => LocalConsoleBreakCommand.Run(args[2..]),
             _              => await Unknown(sub),
         };

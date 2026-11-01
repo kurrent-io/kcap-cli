@@ -43,7 +43,7 @@ public class LocalUninstallCommandTests {
     async Task<(int Exit, string Out, string Err)> RunAsync(params string[] args) {
         var config  = new ConfigRoot(Tmp.CreateDir("cfg"));
         var stacks  = new StackFactory(() => new(Root, Home, Service, new HttpClient(), TimeProvider.System, new FakeOutgoingRecorders(_log), config));
-        var command = new LocalCommand(stacks, new LocalUpgradeCommand(stacks), new LocalFetchCommand(stacks), new NoBrowser(), new FakeOutgoingRecorders(_log), config, Home);
+        var command = new LocalCommand(stacks, new LocalUpgradeCommand(stacks), new LocalFetchCommand(stacks), new LocalIntelligenceCommand(new FixedCapacitorHttpClient(), new Core.LocalEdition.LocalRoot("/no-local-root")), new NoBrowser(), new FakeOutgoingRecorders(_log), config, Home);
 
         using var capture = ConsoleOutput.StartFullCapture();
 

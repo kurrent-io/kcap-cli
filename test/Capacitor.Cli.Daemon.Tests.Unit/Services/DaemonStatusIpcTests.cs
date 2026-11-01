@@ -95,7 +95,7 @@ public class DaemonStatusIpcTests {
     /// mirrors <c>AgentStatusSnapshotTests.Build</c> — for the pure write-path exception test
     /// below, which drives <see cref="DaemonStatusIpc.HandleSubscribeAsync"/> directly against a
     /// fake stream instead of a real connection.</summary>
-    (AgentOrchestrator Orchestrator, DaemonStatusIpc StatusIpc, TempDaemonStore Daemons, DaemonConfig Config) BuildBareStatusIpc(string name) {
+    (AgentOrchestrator Orchestrator, DaemonStatusIpc StatusIpc, TempDaemonStore Daemons, DaemonConfig Config, ServerConnection Connection) BuildBareStatusIpc(string name) {
         var daemons   = new TempDaemonStore();
         var stateRoot = daemons.Store.StateDirectory(name);
         var store       = new LaunchConsentStore(stateRoot, NullLogger.Instance, TimeProvider.System);
@@ -131,7 +131,7 @@ public class DaemonStatusIpcTests {
             Debounce = TimeSpan.FromMilliseconds(1),
         };
 
-        return (orchestrator, statusIpc, daemons, config);
+        return (orchestrator, statusIpc, daemons, config, connection);
     }
 
     sealed record Harness(
@@ -434,7 +434,7 @@ public class DaemonStatusIpcTests {
 
     [Test]
     public async Task Snapshot_reports_the_committed_codex_resolution() {
-        var (orchestrator, statusIpc, daemons, config) = BuildBareStatusIpc("status-ipc-experimental");
+        var (orchestrator, statusIpc, daemons, config, _) = BuildBareStatusIpc("status-ipc-experimental");
         try {
             config.CodexResolution = new(4, true, "0.150.0", true, null);
             config.AcknowledgedCodexResolution = new(3, true, "0.150.0", true, null);
@@ -470,8 +470,29 @@ public class DaemonStatusIpcTests {
     }
 
     [Test]
+    public async Task Snapshot_reports_the_headless_harnesses_by_the_advertisement_rule() {
+        var (orchestrator, statusIpc, daemons, _, connection) = BuildBareStatusIpc("status-ipc-headless");
+        try {
+            connection.GetHeadlessVendors = () => ["claude", "codex"];
+
+            var before = JsonSerializer.Deserialize(statusIpc.Snapshot(), StatusIpcJsonContext.Default.DaemonStatusDto)!;
+
+            await Assert.That(before.Daemon.HeadlessVendors).IsNotNull();
+            await Assert.That(before.Daemon.HeadlessVendors!).IsEmpty();
+
+            connection.RunHeadlessPromptHandler = _ => Task.FromResult(default(HeadlessPromptResponse));
+            var after = JsonSerializer.Deserialize(statusIpc.Snapshot(), StatusIpcJsonContext.Default.DaemonStatusDto)!;
+
+            await Assert.That(after.Daemon.HeadlessVendors).IsEquivalentTo(["claude", "codex"]);
+        } finally {
+            await orchestrator.DisposeAsync();
+            daemons.Dispose();
+        }
+    }
+
+    [Test]
     public async Task Snapshot_carries_the_configured_vendor_models() {
-        var (orchestrator, statusIpc, daemons, config) = BuildBareStatusIpc("status-ipc-vendor-models");
+        var (orchestrator, statusIpc, daemons, config, _) = BuildBareStatusIpc("status-ipc-vendor-models");
         try {
             config.VendorModels = new(StringComparer.Ordinal) { ["pi"] = [new("p/a", "A · p")], ["kiro"] = [] };
 
@@ -493,7 +514,7 @@ public class DaemonStatusIpcTests {
     /// </summary>
     [Test]
     public async Task HandleSubscribeAsync_absorbs_a_write_side_disconnect_without_faulting() {
-        var (orchestrator, statusIpc, daemons, _) = BuildBareStatusIpc("status-ipc-throw-test");
+        var (orchestrator, statusIpc, daemons, _, _) = BuildBareStatusIpc("status-ipc-throw-test");
         try {
             var stream           = new VanishedSubscriberStream();
             var firstSnapshotSeen = false;

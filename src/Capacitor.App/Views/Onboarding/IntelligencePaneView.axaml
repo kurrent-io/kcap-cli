@@ -1,0 +1,54 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels.Onboarding"
+             xmlns:intel="clr-namespace:Capacitor.Cli.Core.Setup.Intelligence;assembly=Capacitor.Cli.Core"
+             x:Class="Capacitor.App.Views.Onboarding.IntelligencePaneView"
+             x:DataType="vm:IntelligenceStepViewModel">
+    <StackPanel Spacing="12">
+        <TextBlock Classes="onboardingDetail" Text="Looking for agents this machine can run…" IsVisible="{Binding IsLoading}" />
+        <Border Classes="onboardingCard" IsVisible="{Binding !IsLoading}">
+            <ItemsControl x:Name="IntelligenceOptions" ItemsSource="{Binding Options}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Spacing="2" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:IntelligenceOption">
+                        <RadioButton Classes="onboardingOption" GroupName="Intelligence"
+                                     AutomationProperties.Name="{Binding Label}" AutomationProperties.HelpText="{Binding Detail}"
+                                     IsChecked="{Binding IsSelected, Mode=TwoWay}">
+                            <StackPanel Spacing="2">
+                                <TextBlock Classes="onboardingLabel" FontSize="13" Text="{Binding Label}" />
+                                <TextBlock Classes="onboardingDetail" TextWrapping="Wrap" Text="{Binding Detail}" />
+                            </StackPanel>
+                        </RadioButton>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </Border>
+        <Border Classes="onboardingCard" IsVisible="{Binding ProviderSelected}">
+            <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto" ColumnSpacing="12" RowSpacing="8">
+                <TextBlock Grid.Row="0" Classes="onboardingLabel" VerticalAlignment="Center" Text="Provider" />
+                <ComboBox x:Name="IntelligenceVendorPicker" Grid.Row="0" Grid.Column="1" Classes="kcapField" HorizontalAlignment="Stretch"
+                          ItemsSource="{Binding Vendors}" SelectedItem="{Binding SelectedVendor, Mode=TwoWay}"
+                          AutomationProperties.Name="Provider">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="intel:IntelligenceVendor">
+                            <TextBlock Text="{Binding Label}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+                <TextBlock Grid.Row="1" Classes="onboardingLabel" VerticalAlignment="Center" Text="Model" />
+                <TextBox x:Name="IntelligenceModelBox" Grid.Row="1" Grid.Column="1" Classes="onboardingField"
+                         Text="{Binding Model, Mode=TwoWay}" AutomationProperties.Name="Model" />
+                <TextBlock Grid.Row="2" Classes="onboardingLabel" VerticalAlignment="Center" Text="API key" />
+                <TextBox x:Name="IntelligenceKeyBox" Grid.Row="2" Grid.Column="1" Classes="onboardingField" PasswordChar="•"
+                         Text="{Binding ApiKey, Mode=TwoWay}" AutomationProperties.Name="API key" />
+                <TextBlock Grid.Row="3" Grid.Column="1" Classes="onboardingDetail" TextWrapping="Wrap" Text="{Binding KeyHint}" />
+            </Grid>
+        </Border>
+        <TextBlock x:Name="IntelligenceErrorText" Classes="onboardingError" TextWrapping="Wrap" Text="{Binding Error}"
+                   IsVisible="{Binding Error, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+    </StackPanel>
+</UserControl>

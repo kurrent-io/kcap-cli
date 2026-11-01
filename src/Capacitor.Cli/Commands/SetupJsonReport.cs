@@ -12,6 +12,7 @@ sealed class SetupJsonReport(TextWriter stdout) {
     public const string Visibility = "visibility";
     public const string Harnesses  = "harnesses";
     public const string Daemon     = "daemon";
+    public const string Intelligence = "intelligence";
     public const string Import     = "import";
 
     string? _step;
