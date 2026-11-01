@@ -38,10 +38,10 @@ public class LocalPermissionBridgePolicyTests {
         public PermissionDecisionLog  Log    { get; }
         public LocalPermissionBridge  Bridge { get; }
 
-        public Harness(PolicySnapshot? snapshot, string? approvalsReviewer = null) {
+        public Harness(PolicySnapshot? snapshot, string? approvalsReviewer = null, TimeSpan? personDeadline = null) {
             Log    = new PermissionDecisionLog(Tmp.Path, NullLogger.Instance);
             Bridge = new LocalPermissionBridge(Server, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance, TimeProvider.System, Broker, Log) {
-                AttributeHandler = _ => new AttributedAgent("agent-1", snapshot, approvalsReviewer),
+                AttributeHandler = _ => new AttributedAgent("agent-1", snapshot, approvalsReviewer, personDeadline),
             };
         }
 
@@ -262,6 +262,19 @@ public class LocalPermissionBridgePolicyTests {
         h.Broker.TrySettle(pending.RequestId, Allow, "allow", "app");
 
         await Assert.That(await Harness.BehaviorOf(await response)).IsEqualTo("allow");
+    }
+
+    /// A request held for a person under a deadline is denied and its card settled once nobody answers in time.
+    [Test, NotInParallel(nameof(LocalPermissionBridgePolicyTests))]
+    public async Task A_person_lane_request_past_its_deadline_is_denied_and_settled() {
+        await using var h = new Harness(Governed, "auto_review", TimeSpan.FromMilliseconds(300));
+        await h.StartAsync();
+
+        var response = await h.PostAsync("gh pr merge", vendor: "codex");
+
+        await Assert.That(await Harness.BehaviorOf(response)).IsEqualTo("deny");
+        await Assert.That(h.Broker.PendingSnapshot().Count).IsEqualTo(0);
+        await Assert.That(h.LogLines().Single()).Contains("\"source\":\"timeout\"");
     }
 
     /// Auto-review is Codex's; a Claude call attributed to such an agent takes the normal lane.

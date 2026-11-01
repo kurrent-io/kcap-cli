@@ -49,7 +49,7 @@ public class LocalPermissionBridgeJudgeTests {
                 TimeProvider.System, Broker, new PermissionDecisionLog(Tmp.Path, NullLogger.Instance), gateway,
                 new ConfigRoot(Tmp.CreateDir("config").Path)) {
                 AttributeHandler = a => a.AgentId switch {
-                    "agent-1"          => new AttributedAgent("agent-1", Governed, approvalsReviewer, bridgedSinceStart),
+                    "agent-1"          => new AttributedAgent("agent-1", Governed, approvalsReviewer, BridgedSinceStart: bridgedSinceStart),
                     "agent-ungoverned" => new AttributedAgent("agent-ungoverned", Ungoverned, BridgedSinceStart: bridgedSinceStart),
                     _                  => null,
                 },

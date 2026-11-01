@@ -1173,8 +1173,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     /// <summary>Only the session a fresh agent reported as its own started under this daemon: a request naming another
     /// one, such as an older session resumed inside the agent, may carry refusals this daemon never saw.</summary>
-    static AttributedAgent Attributed(AgentInstance agent, string canonicalSession) =>
-        new(agent.Id, agent.PolicySnapshot, agent.ApprovalsReviewer, FreshIn(agent, canonicalSession));
+    AttributedAgent Attributed(AgentInstance agent, string canonicalSession) =>
+        new(agent.Id, agent.PolicySnapshot, agent.ApprovalsReviewer, PersonDeadlineOf(agent), FreshIn(agent, canonicalSession));
+
+    /// <summary>An app-server Codex on auto-review raises its person-lane prompts through the bridge rather
+    /// than its own approval bridge, so they keep that bridge's fail-closed deadline.</summary>
+    TimeSpan? PersonDeadlineOf(AgentInstance agent) =>
+        agent is { ApprovalsReviewer: Core.Harness.Codex.CodexApprovalsReviewers.AutoReview,
+                   RuntimeTransport: Harness.Codex.CodexTransportDecision.AppServer }
+            ? TimeSpan.FromSeconds(Math.Max(1, _config.CodexAppServerApprovalTimeoutSeconds))
+            : null;
 
     static bool FreshIn(AgentInstance agent, string canonicalSession) =>
         agent.BridgedSinceStart && agent.SessionId is { } own && PermissionWire.Canonical(own) == canonicalSession;

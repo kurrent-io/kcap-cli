@@ -20,6 +20,8 @@ internal readonly record struct AttributedAgent(
     string AgentId,
     PolicySnapshot? PolicySnapshot = null,
     string? ApprovalsReviewer = null,
+    // How long a request raised for a person waits before the bridge denies it; null waits for an answer.
+    TimeSpan? PersonDeadline = null,
     bool BridgedSinceStart = false
 );
 
@@ -749,7 +751,20 @@ internal sealed partial class LocalPermissionBridge(
 
                     PermissionSettlement settlement;
                     try {
-                        settlement = await settlementTask.WaitAsync(ct);
+                        settlement = attributed?.PersonDeadline is { } deadline
+                            ? await settlementTask.WaitAsync(deadline, time, ct)
+                            : await settlementTask.WaitAsync(ct);
+                    } catch (TimeoutException) {
+                        if (_broker.TrySettle(pending.RequestId, PermissionSettlements.DenyDecision,
+                                PermissionSettlements.Deny, PermissionSettlements.SourceTimeout)) {
+                            _decisionLog?.Record(new PermissionDecisionRecord(
+                                time.GetUtcNow().ToString("O"), pending.AgentId, pending.SessionId, pending.Vendor,
+                                pending.ToolName, PermissionSettlements.Deny, PermissionSettlements.SourceTimeout));
+                            RecordRefusal(vendor, attributed, canonicalSessionId, node, toolName, toolInput, PermissionSettlements.Deny);
+                            await WriteResponseAsync(context, BuildHookResponseJson(PermissionSettlements.DenyDecision, vendor, suggestions, toolName), time);
+                            return;
+                        }
+                        settlement = await settlementTask;
                     } catch (OperationCanceledException) {
                         // Shutdown: claim rather than inspect. Losing means another party settled first.
                         if (_broker.TrySettle(pending.RequestId, PermissionSettlements.DenyDecision,
