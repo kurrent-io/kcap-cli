@@ -24,7 +24,7 @@ sealed class LocalServerTaskService(
     UnitFileWriter? writeUnit = null,
     Func<LocalRoot, string?>? findLive = null,
     Func<LocalServerUnit, int?>? findServer = null,
-    Func<int, string?>? breakConsole = null
+    Func<int, TimeSpan, string?>? breakConsole = null
 ) : ILocalServerService {
     /// <summary>The server's own shutdown, Postgres's included, then time for the probe to see the lock released.</summary>
     static readonly TimeSpan StopBudget = TimeSpan.FromSeconds(90);
@@ -39,7 +39,7 @@ sealed class LocalServerTaskService(
     readonly Func<string[], (int ExitCode, string StdOut, string StdErr)> _schtasks = schtasks ?? (args => ServiceProcess.Run("schtasks", args));
     readonly UnitFileWriter _writeUnit = writeUnit ?? ((path, content, encoding) => ServiceFiles.WriteOwnerOnly(path, content, encoding, durable: true, home: home));
     readonly Func<LocalServerUnit, int?> _findServer = findServer ?? FindTaskServer;
-    readonly Func<int, string?> _breakConsole = breakConsole ?? BreakThroughHelper;
+    readonly Func<int, TimeSpan, string?> _breakConsole = breakConsole ?? BreakThroughHelper;
 
     public string Describe => "Windows Scheduled Task";
 
@@ -161,7 +161,7 @@ sealed class LocalServerTaskService(
     async Task Stop(LocalServerUnit unit, CancellationToken ct) {
         _writeUnit(StopMarker(unit), "", null);
 
-        if (_findServer(unit) is { } pid && _breakConsole(pid) is { } error)
+        if (_findServer(unit) is { } pid && _breakConsole(pid, BreakBudget) is { } error)
             throw new LocalLifecycleException($"The local server (pid {pid}) could not be asked to stop: {error}");
 
         await LocalStackProbe.WaitUntilDownAsync(unit.Root, StopBudget, time, ct, findLive);
@@ -201,7 +201,8 @@ sealed class LocalServerTaskService(
         _schtasks(LocalServerTaskUnit.DisableArgs(unit));
         _writeUnit(StopMarker(unit), "", null);
 
-        if (_findServer(unit) is { } pid) _breakConsole(pid);
+        // The sender's wait comes out of the grace too, or a hung sender would outlast the caller's deadline.
+        if (_findServer(unit) is { } pid && deadline - time.GetUtcNow() is { Ticks: > 0 } left) _breakConsole(pid, left);
 
         while (live(unit.Root) is not null && time.GetUtcNow() < deadline) await Task.Delay(ExitPollGap, time, ct);
 
@@ -251,13 +252,13 @@ sealed class LocalServerTaskService(
 
     /// <summary>The sender leaves its own console for the server's, so it is a child, never this process: the command
     /// running the stop still has a console to report on.</summary>
-    static string? BreakThroughHelper(int pid) {
+    static string? BreakThroughHelper(int pid, TimeSpan budget) {
         if (Environment.ProcessPath is not { } kcap) return "the kcap executable's path is unknown";
 
         var (exit, _, err, timedOut) = ServiceProcess.RunBounded(kcap,
-            ["local", LocalConsoleBreakCommand.Name, pid.ToString(CultureInfo.InvariantCulture)], BreakBudget);
+            ["local", LocalConsoleBreakCommand.Name, pid.ToString(CultureInfo.InvariantCulture)], budget);
 
-        return timedOut ? $"the sender did not finish within {BreakBudget.TotalSeconds:0}s"
+        return timedOut ? $"the sender did not finish within {budget.TotalSeconds:0}s"
              : exit == 0 ? null
              : string.IsNullOrWhiteSpace(err) ? $"the sender exited {exit}" : err.Trim();
     }

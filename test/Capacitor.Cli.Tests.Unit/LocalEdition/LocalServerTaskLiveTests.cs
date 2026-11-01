@@ -75,13 +75,13 @@ public class LocalServerTaskLiveTests {
     }
 
     /// <summary>The sender leaves its console, so it is the real kcap, never the test host.</summary>
-    string? Break(int pid) {
+    string? Break(int pid, TimeSpan budget) {
         using var sender = Process.Start(KcapProcess.StartInfo(Daemons.Store, Config.Root,
             "local", "console-break", pid.ToString(CultureInfo.InvariantCulture)))!;
         sender.StandardInput.Close();
         var error = sender.StandardError.ReadToEnd();
         sender.StandardOutput.ReadToEnd();
-        sender.WaitForExit();
+        if (!sender.WaitForExit(budget)) return $"the sender did not finish within {budget.TotalSeconds:0}s";
 
         return sender.ExitCode == 0 ? null : $"exit {sender.ExitCode}: {error.Trim()}";
     }

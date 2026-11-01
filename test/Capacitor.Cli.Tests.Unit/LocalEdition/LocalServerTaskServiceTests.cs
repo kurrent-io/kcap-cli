@@ -45,9 +45,9 @@ public class LocalServerTaskServiceTests {
         File.WriteAllText(path, content, encoding ?? Encoding.UTF8);
     }
 
-    LocalServerTaskService Service(Schtasks schtasks, Func<LocalServerUnit, int?>? findServer = null, Func<int, string?>? breakConsole = null,
+    LocalServerTaskService Service(Schtasks schtasks, Func<LocalServerUnit, int?>? findServer = null, Func<int, TimeSpan, string?>? breakConsole = null,
         Func<LocalRoot, string?>? findLive = null) =>
-        new(Home, TimeProvider.System, schtasks.Run, Write, findLive ?? (_ => null), findServer ?? (_ => null), breakConsole ?? (_ => null));
+        new(Home, TimeProvider.System, schtasks.Run, Write, findLive ?? (_ => null), findServer ?? (_ => null), breakConsole ?? ((_, _) => null));
 
     [Test]
     public async Task A_fresh_install_registers_the_task_and_runs_it() {
@@ -77,7 +77,7 @@ public class LocalServerTaskServiceTests {
             }, (path, content, encoding) => {
                 order.Add($"write {Path.GetExtension(path)}");
                 Write(path, content, encoding);
-            }, _ => null, _ => server, pid => {
+            }, _ => null, _ => server, (pid, _) => {
                 order.Add($"break {pid}");
                 server = null;
                 return null;
@@ -121,7 +121,7 @@ public class LocalServerTaskServiceTests {
         var schtasks = new Schtasks();
         var broken   = new List<int>();
 
-        await Service(schtasks, _ => broken.Count == 0 ? 4242 : null, pid => {
+        await Service(schtasks, _ => broken.Count == 0 ? 4242 : null, (pid, _) => {
             broken.Add(pid);
             return null;
         }).StopAsync(Unit, CancellationToken.None);
@@ -143,7 +143,7 @@ public class LocalServerTaskServiceTests {
         var service = new LocalServerTaskService(Home, TimeProvider.System, args => {
             if (args[0] == "/End") aliveAtEnd = exitingFor > 0;
             return new Schtasks().Run(args);
-        }, Write, _ => null, Server, _ => {
+        }, Write, _ => null, Server, (_, _) => {
             broken = true;
             return null;
         });
@@ -158,7 +158,7 @@ public class LocalServerTaskServiceTests {
     public async Task A_server_that_cannot_be_asked_to_stop_is_a_failed_stop_and_the_task_is_not_ended() {
         var schtasks = new Schtasks();
 
-        await Assert.That(() => Service(schtasks, _ => 4242, _ => "could not attach").StopAsync(Unit, CancellationToken.None))
+        await Assert.That(() => Service(schtasks, _ => 4242, (_, _) => "could not attach").StopAsync(Unit, CancellationToken.None))
             .Throws<LocalLifecycleException>().WithMessageContaining("could not attach");
         await Assert.That(schtasks.Calls).DoesNotContain("/End /TN kcap-local");
     }
@@ -167,7 +167,7 @@ public class LocalServerTaskServiceTests {
     public async Task A_stack_still_up_after_the_break_is_a_failed_stop() {
         var time     = new FakeTimeProvider();
         var schtasks = new Schtasks();
-        var service  = new LocalServerTaskService(Home, time, schtasks.Run, Write, _ => "the server still holds its instance lock", _ => null, _ => null);
+        var service  = new LocalServerTaskService(Home, time, schtasks.Run, Write, _ => "the server still holds its instance lock", _ => null, (_, _) => null);
 
         var stop = service.StopAsync(Unit, CancellationToken.None);
         while (!stop.IsCompleted) time.Advance(TimeSpan.FromSeconds(1));
@@ -191,7 +191,7 @@ public class LocalServerTaskServiceTests {
     [Test]
     public async Task A_stop_marks_the_wrapper_stopped_before_the_break_and_a_start_clears_it() {
         var markedAtBreak = false;
-        var service = Service(new Schtasks(), _ => markedAtBreak ? null : 4242, _ => {
+        var service = Service(new Schtasks(), _ => markedAtBreak ? null : 4242, (_, _) => {
             markedAtBreak = File.Exists(StopMarker);
             return null;
         });
