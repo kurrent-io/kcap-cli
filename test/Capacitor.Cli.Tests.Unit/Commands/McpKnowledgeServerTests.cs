@@ -217,6 +217,18 @@ public class McpKnowledgeServerTests {
     }
 
     [Test]
+    [Arguments("""{"repo":""}""")]
+    [Arguments("""{"repo":"  "}""")]
+    public async Task A_blank_repo_is_refused_rather_than_widening_the_list(string args) {
+        var handler = new RecordingHandler();
+
+        var response = await CallAsync(handler, "list_category_merges", args);
+
+        await Assert.That(response).Contains("\"isError\":true");
+        await Assert.That(handler.Calls.Count).IsEqualTo(0);
+    }
+
+    [Test]
     [Arguments("merge_categories")]
     [Arguments("dismiss_category_merge")]
     public async Task A_merge_decision_sends_the_pair_and_nothing_else(string tool) {

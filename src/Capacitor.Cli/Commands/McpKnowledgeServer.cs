@@ -188,10 +188,13 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
         return $"{baseUrl}/api/knowledge/facts/search?{string.Join("&", qs)}";
     }
 
+    /// <summary>A blank repo is refused rather than read as omitted, which would widen the list to every scope.</summary>
     static string BuildListMergesUrl(string baseUrl, JsonObject? args) =>
-        McpToolArguments.OptionalString(args, "repo") is { } repo
-            ? $"{baseUrl}/api/knowledge/merges?repo={Uri.EscapeDataString(repo)}"
-            : $"{baseUrl}/api/knowledge/merges";
+        McpToolArguments.OptionalString(args, "repo") switch {
+            { } repo                       => $"{baseUrl}/api/knowledge/merges?repo={Uri.EscapeDataString(repo)}",
+            null when args?["repo"] is { } => throw new ArgumentException("'repo' must be a repository hash; omit it to list every scope you curate."),
+            null                           => $"{baseUrl}/api/knowledge/merges"
+        };
 
     /// <summary>A repo scope with no <c>scope_id</c> is the working directory's repo, and a refusal
     /// when there is none: never a wider scope.</summary>
