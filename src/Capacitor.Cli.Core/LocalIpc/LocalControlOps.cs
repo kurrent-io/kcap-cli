@@ -34,6 +34,8 @@ public interface ILocalControlOps {
     Task<HandoffProbeReplyDto?> ProbeHandoffAsync(HandoffProbeRequestDto request, CancellationToken ct);
     /// Null when the daemon keeps no outcome for the session, or the exchange failed.
     Task<HandoffOutcomeDto?> ReadHandoffOutcomeAsync(string sessionId, CancellationToken ct);
+    /// Null when the request or the reply never crossed the socket.
+    Task<ResumeProbeReplyDto?> ProbeResumeAsync(ResumeProbeRequestDto request, CancellationToken ct);
 }
 
 /// One-shot Core IPC operations behind a fresh socket per call — no Hello negotiation (callers
@@ -251,6 +253,22 @@ public sealed class LocalControlOps(DaemonStore store, string daemonName, TimePr
         if (reply.Type != FrameType.HandoffOutcomeReply) return null;
         try {
             return JsonSerializer.Deserialize(reply.Text, HandoffIpcJsonContext.Default.HandoffOutcomeReplyDto)?.Outcome;
+        } catch (JsonException) {
+            return null;
+        }
+    }
+
+    public async Task<ResumeProbeReplyDto?> ProbeResumeAsync(ResumeProbeRequestDto request, CancellationToken ct) {
+        var json = JsonSerializer.Serialize(request, ResumeInPlaceIpcJsonContext.Default.ResumeProbeRequestDto);
+        LocalFrame reply;
+        try {
+            reply = await ExchangeAsync(new LocalFrame(FrameType.ResumeProbe) { Text = json }, ReplyTimeout, ct);
+        } catch (LocalControlOpsException) {
+            return null;
+        }
+        if (reply.Type != FrameType.ResumeProbeReply) return null;
+        try {
+            return JsonSerializer.Deserialize(reply.Text, ResumeInPlaceIpcJsonContext.Default.ResumeProbeReplyDto);
         } catch (JsonException) {
             return null;
         }

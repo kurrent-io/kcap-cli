@@ -55,6 +55,8 @@ public enum FrameType : byte {
     HandoffProbe = 34, // Text = HandoffProbeRequestDto JSON
     // A hand-off's takeover outcome — one-shot; answered on HandoffOutcomeReply.
     HandoffOutcomeQuery = 35, // Text = the successor's session id
+    // In-place resume probe — one-shot; answered on ResumeProbeReply.
+    ResumeProbe = 36, // Text = ResumeProbeRequestDto JSON
     // daemon → client
     Attached  = 64,
     Stdout    = 65,
@@ -85,4 +87,5 @@ public enum FrameType : byte {
     SessionRenameAck = 88, // Text = SessionRenameAckDto JSON, reply to SessionRename
     HandoffProbeReply = 89, // Text = HandoffProbeReplyDto JSON, reply to HandoffProbe
     HandoffOutcomeReply = 90, // Text = HandoffOutcomeReplyDto JSON, reply to HandoffOutcomeQuery
+    ResumeProbeReply = 91, // Text = ResumeProbeReplyDto JSON, reply to ResumeProbe
 }

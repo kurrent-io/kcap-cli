@@ -3,6 +3,7 @@ using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Continuation;
+using Capacitor.Cli.Core.Handoff;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Core.WorkItems;
@@ -701,7 +702,7 @@ internal partial class AgentOrchestrator {
         }
 
         _resumeOrder.InsertRange(0, queue);
-        _ledgerWorktrees = [.. _ledgerWorktrees, .. entries.Where(e => e.Launch.Work == WorkLocation.OwnedWorktree).Select(e => e.Launch.WorktreePath)];
+        _ledgerWorktrees = [.. _ledgerWorktrees, .. entries.Where(KeepsItsDirectory).Select(e => e.Launch.WorktreePath)];
         _ledgerAgentIds  = [.. _ledgerAgentIds.Concat(entries.Select(e => e.AgentId)).Distinct(StringComparer.Ordinal)];
 
         return true;
@@ -919,7 +920,7 @@ internal partial class AgentOrchestrator {
 
         entries = [.. entries.Where(e => e.State != ResumeState.Interrupted || now - e.UpdatedAt <= InterruptedRetention)];
 
-        _ledgerWorktrees = [.. entries.Where(e => e.Launch.Work == WorkLocation.OwnedWorktree).Select(e => e.Launch.WorktreePath)];
+        _ledgerWorktrees = [.. entries.Where(KeepsItsDirectory).Select(e => e.Launch.WorktreePath)];
         _ledgerAgentIds  = [.. entries.SelectMany(e => (e.InheritedAgentIds ?? []).Append(e.AgentId)).Distinct(StringComparer.Ordinal)];
 
         foreach (var entry in entries) {
@@ -1091,9 +1092,13 @@ internal partial class AgentOrchestrator {
         await DiscardFailedLaunchJournalAsync(journal, agent.Id);
     }
 
-    /// <summary>Every owned worktree the ledger names, interrupted entries included: a later manual
-    /// resume needs its worktree as much as a boot candidate does.</summary>
+    /// <summary>Every directory the startup sweep must keep for the ledger, interrupted entries included: a later
+    /// manual resume needs its worktree as much as a boot candidate does. An in-place agent's directory is listed
+    /// although the daemon may never delete it, because it can be a retained worktree the sweep would otherwise
+    /// remove once it is clean.</summary>
     internal IReadOnlyList<string> LedgerWorktreePaths() => _ledgerWorktrees;
+
+    static bool KeepsItsDirectory(ResumeLedgerEntry entry) => entry.Launch.Work is WorkLocation.OwnedWorktree or WorkLocation.InPlace;
 
     /// <summary>The boot resume lane: reports the entries interrupted at boot, then resumes the
     /// candidates at most <see cref="DaemonConfig.ResumeConcurrency"/> at a time. Never throws.</summary>
@@ -1251,8 +1256,9 @@ internal partial class AgentOrchestrator {
             return ResumeOutcome.Interrupted;
         }
 
-        // A continuation resolves the same recorded account, so it would be refused too.
-        if (!reason.StartsWith(AccountResolution.Unavailable, StringComparison.Ordinal)) {
+        // A continuation resolves the same recorded account, so it would be refused too; a reserved session is being
+        // handed off, and a continuation would take it over a second time.
+        if (!reason.StartsWith(AccountResolution.Unavailable, StringComparison.Ordinal) && reason != SourceReservedReason) {
             var outcome = await ContinueEntry(entry, reason, ct);
             if (outcome != ResumeOutcome.Interrupted) return outcome;
             if (IsWithdrawn(entry.AgentId)) return ResumeOutcome.Stopped;
@@ -1286,6 +1292,15 @@ internal partial class AgentOrchestrator {
         // always gets its nudge, which is how it learns it was relaunched mid-flow.
         var silent  = entry.Participant is null && entry.AwaitingInput == true
                    && _runtimeFactories.TryGetValue(entry.Vendor, out var factory) && factory.ResumesIdleWithoutPrompt(entry.Transport);
+        // The lease a hand-off takeover would need, held until the readiness window passes, so the session is not taken
+        // over from under the agent re-registering on it.
+        HandoffTakeoverAdmission? leased = null;
+        if (entry.Participant is null && entry.SessionId is { } leasedSession) {
+            leased = await _server.BeginSourceResumeAsync(leasedSession, ct);
+            if (leased?.Refusal == SourceReservedReason) return (SourceReservedReason, null);
+        }
+        await using var lease = leased?.Token is { } token ? KeepSourceLease(token, entry.SessionId!) : null;
+
         var resume  = new ResumeLaunch(entry, ResumedWorktree(entry)) { Token = ct, StartsWaiting = silent };
         var command = BuildResumeCommand(entry, LastAlive(entry, null), _server.CurrentConnectionId) is var built && silent
             ? built with { Prompt = "" }
@@ -1348,6 +1363,8 @@ internal partial class AgentOrchestrator {
     }
 
     const string SupersededReason = "superseded";
+
+    internal const string SourceReservedReason = "source_reserved";
 
     internal TimeSpan ContinueSummaryBudget { get; set; } = TimeSpan.FromSeconds(10);
 
@@ -1577,7 +1594,7 @@ internal partial class AgentOrchestrator {
         var launch = entry.Launch;
         var path   = launch.WorktreePath;
 
-        if (launch.Work == WorkLocation.BorrowedCwd) return WorktreeInfo.Borrowed(path);
+        if (launch.Work is WorkLocation.BorrowedCwd or WorkLocation.InPlace) return WorktreeInfo.Borrowed(path);
 
         // An entry written before the worktree fields existed carries none of them.
         return new WorktreeInfo(

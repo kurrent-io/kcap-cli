@@ -97,6 +97,20 @@ sealed class CaptureServerConnection : ServerConnection {
         return Task.FromResult(admission);
     }
 
+    /// <summary>The server's answer to each restart-resume lease begin; unset, the server lacks the method.</summary>
+    public Func<string, HandoffTakeoverAdmission?>? BeginResume { get; set; }
+
+    public ConcurrentQueue<string> ResumeBegins { get; } = new();
+
+    internal override Task<HandoffTakeoverAdmission?> InvokeBeginSourceResumeRawAsync(string sessionId, CancellationToken ct) {
+        ResumeBegins.Enqueue(sessionId);
+
+        return BeginResume is { } answer
+            ? Task.FromResult(answer(sessionId))
+            : throw new Microsoft.AspNetCore.SignalR.HubException(
+                "Failed to invoke 'BeginSourceResume' due to an error on the server. HubException: Method does not exist.");
+    }
+
     public override Task<bool> RenewHandoffTakeoverAsync(string token, CancellationToken ct) {
         HandoffRenews.Enqueue(token);
 

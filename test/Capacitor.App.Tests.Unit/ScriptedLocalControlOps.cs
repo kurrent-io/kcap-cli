@@ -146,6 +146,13 @@ sealed class ScriptedLocalControlOps : ILocalControlOps {
         ProbeHandoff?.Invoke(request)
             ?? throw new InvalidOperationException("ScriptedLocalControlOps: unscripted ProbeHandoff call");
 
+    /// Answers ProbeResume; unset, a probe throws as any unscripted call does.
+    public Func<ResumeProbeRequestDto, Task<ResumeProbeReplyDto?>>? ProbeResume { get; set; }
+
+    public Task<ResumeProbeReplyDto?> ProbeResumeAsync(ResumeProbeRequestDto request, CancellationToken ct) =>
+        ProbeResume?.Invoke(request)
+            ?? throw new InvalidOperationException("ScriptedLocalControlOps: unscripted ProbeResume call");
+
     /// Answers ReadHandoffOutcome; unset, a read throws as any unscripted call does.
     public Func<string, Task<HandoffOutcomeDto?>>? ReadHandoffOutcome { get; set; }
 

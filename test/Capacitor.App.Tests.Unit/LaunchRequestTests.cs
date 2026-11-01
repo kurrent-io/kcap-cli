@@ -165,6 +165,14 @@ public class LaunchRequestTests {
     }
 
     [Test]
+    public async Task A_resume_carries_its_block_snake_case() {
+        var json = Payload(new LaunchRequest("kcap-dev", "/repo", "claude", "go", Resume: new ResumeLaunchPayload("s-1", "/repo")));
+
+        await Assert.That(json.EnumerateObject().Select(p => p.Name).ToArray()).IsEquivalentTo([.. TwelveKeys, "resume"]);
+        await Assert.That(json.GetProperty("resume").GetRawText()).IsEqualTo("""{"source_session_id":"s-1","directory":"/repo"}""");
+    }
+
+    [Test]
     public async Task A_blank_account_id_is_sent_as_no_key() {
         var json = Payload(new LaunchRequest("kcap-dev", "/repo", "claude", "go", AccountId: "  "));
         var keys = json.EnumerateObject().Select(p => p.Name).ToArray();

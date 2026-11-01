@@ -17,13 +17,15 @@ public sealed class HandoffDrafts : IDisposable {
     /// still in flight: that call has no deadline of its own.
     static readonly TimeSpan PendingTtl = TimeSpan.FromMinutes(10);
 
-    sealed record Held(string SourceSessionId, HandoffDraft Draft, DateTimeOffset At, Action<string>? OnFailed);
+    /// A resume's agent appears as a row before its readiness is judged, so the row never confirms it.
+    sealed record Held(string SourceSessionId, HandoffDraft Draft, DateTimeOffset At, Action<string>? OnFailed, bool Resume);
 
     readonly Lock _lock = new();
     readonly Dictionary<string, Held> _pending = new(StringComparer.Ordinal);
     readonly Dictionary<string, (string Reason, DateTimeOffset At)> _recentFailures = new(StringComparer.Ordinal);
     readonly Dictionary<string, HandoffDraft> _failed = new(StringComparer.Ordinal);
     readonly Dictionary<string, HandoffDraft> _unsent = new(StringComparer.Ordinal);
+    readonly HashSet<string> _resumeFailed = new(StringComparer.Ordinal);
     readonly IAgentDirectory? _directory;
     readonly TimeProvider _time;
     readonly CompositeDisposable _subscriptions = new();
@@ -44,26 +46,34 @@ public sealed class HandoffDrafts : IDisposable {
                 foreach (var change in changes)
                     if (change.Reason is ChangeReason.Add or ChangeReason.Update
                      && change.Current is { IsPlaceholder: false, Origin: AgentOrigin.Local } row)
-                        Confirm(row.Id);
+                        ConfirmStarted(row.Id);
             })
             .DisposeWith(_subscriptions);
     }
 
     /// onFailed runs on the UI thread, with the worded failure, when a failure for the agent arrives
     /// after this hold.
-    public HandoffHold Hold(string sourceSessionId, string agentId, HandoffDraft draft, Action<string>? onFailed = null) {
+    public HandoffHold Hold(string sourceSessionId, string agentId, HandoffDraft draft, Action<string>? onFailed = null) =>
+        Hold(sourceSessionId, agentId, draft, onFailed, resume: false);
+
+    /// A resume's draft is held until a failure or the hold's expiry: only a failure says anything about it.
+    public HandoffHold HoldResume(string sourceSessionId, string agentId, HandoffDraft draft) =>
+        Hold(sourceSessionId, agentId, draft, onFailed: null, resume: true);
+
+    HandoffHold Hold(string sourceSessionId, string agentId, HandoffDraft draft, Action<string>? onFailed, bool resume) {
         var id = Key(agentId);
-        if (RowExists(id)) return HandoffHold.AlreadyStarted;
+        if (!resume && RowExists(id)) return HandoffHold.AlreadyStarted;
         lock (_lock) {
             var now = _time.GetUtcNow();
             if (_recentFailures.Remove(id, out var failure) && now - failure.At <= PendingTtl) {
-                StoreFailed(sourceSessionId, draft with { Error = HandoffFailureText.For(failure.Reason) });
+                StoreFailed(sourceSessionId, Failed(draft, failure.Reason, resume));
+                if (resume) _resumeFailed.Add(sourceSessionId);
                 return HandoffHold.AlreadyFailed;
             }
-            _pending[id] = new Held(sourceSessionId, draft, now, onFailed);
+            _pending[id] = new Held(sourceSessionId, draft, now, onFailed, resume);
         }
         // The row can land between the first check and the registration.
-        if (!RowExists(id)) return HandoffHold.Pending;
+        if (resume || !RowExists(id)) return HandoffHold.Pending;
         Confirm(id);
         return HandoffHold.AlreadyStarted;
     }
@@ -101,6 +111,24 @@ public sealed class HandoffDrafts : IDisposable {
         lock (_lock) return _unsent.Remove(sourceSessionId, out var draft) ? draft : null;
     }
 
+    /// Whether a resume of the source failed in this app's lifetime, so its composers offer only the hand-off.
+    public bool ResumeFailed(string sourceSessionId) {
+        lock (_lock) return _resumeFailed.Contains(sourceSessionId);
+    }
+
+    /// A resume refused before any agent existed.
+    public void MarkResumeFailed(string sourceSessionId) {
+        lock (_lock) _resumeFailed.Add(sourceSessionId);
+    }
+
+    void ConfirmStarted(string agentId) {
+        var id = Key(agentId);
+        lock (_lock) {
+            if (_pending.TryGetValue(id, out var held) && held.Resume) return;
+        }
+        Confirm(id);
+    }
+
     public void Confirm(string agentId) {
         var id = Key(agentId);
         lock (_lock) {
@@ -114,8 +142,10 @@ public sealed class HandoffDrafts : IDisposable {
         lock (_lock) {
             var now = _time.GetUtcNow();
             if (_pending.Remove(id, out var held) && now - held.At <= PendingTtl) {
-                var worded = HandoffFailureText.For(failure.Reason);
-                StoreFailed(held.SourceSessionId, held.Draft with { Error = worded });
+                var failed = Failed(held.Draft, failure.Reason, held.Resume);
+                var worded = failed.Error!;
+                StoreFailed(held.SourceSessionId, failed);
+                if (held.Resume) _resumeFailed.Add(held.SourceSessionId);
                 return () => {
                     _directory?.RemovePlaceholder(id);
                     held.OnFailed?.Invoke(worded);
@@ -130,6 +160,9 @@ public sealed class HandoffDrafts : IDisposable {
             return null;
         }
     }
+
+    static HandoffDraft Failed(HandoffDraft draft, string reason, bool resume) =>
+        draft with { Error = resume ? HandoffFailureText.ResumeFallback(reason) : HandoffFailureText.For(reason) };
 
     bool RowExists(string id) =>
         _directory?.Rows.Items.Any(r => r is { IsPlaceholder: false, Origin: AgentOrigin.Local } && Key(r.Id) == id) == true;

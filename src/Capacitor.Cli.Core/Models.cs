@@ -1139,6 +1139,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(LaunchAgentCommand))]
 [JsonSerializable(typeof(Handoff.HandoffTakeoverAdmission))]
 [JsonSerializable(typeof(Handoff.HandoffTakeoverBeginRequest))]
+[JsonSerializable(typeof(Resume.SourceResumeBeginRequest))]
 [JsonSerializable(typeof(ExplicitReviewerModelLaunch))]
 [JsonSerializable(typeof(ReviewerModelResolveRequestV1))]
 [JsonSerializable(typeof(ReviewerModelResolveResponseV1))]
@@ -1767,7 +1768,10 @@ public readonly record struct LaunchAgentCommand(
         bool              ScratchWorkspace = false,
         // Continue an ended session from this start. Sent only to a daemon advertising
         // DaemonConnect.SupportsHandoffLaunch; a daemon that cannot carry it refuses the launch.
-        Capacitor.Cli.Core.Handoff.HandoffLaunch? Handoff = null
+        Capacitor.Cli.Core.Handoff.HandoffLaunch? Handoff = null,
+        // Resume an ended session natively in its own directory. Sent only to a daemon advertising
+        // DaemonConnect.SupportsResumeInPlace; a daemon that cannot carry it refuses the launch.
+        Capacitor.Cli.Core.Resume.ResumeInPlaceLaunch? ResumeInPlace = null
     );
 
 /// <summary>Caller-selected Codex launch posture. Valid ONLY for interactive, daemon-owned-worktree
@@ -2329,7 +2333,10 @@ public readonly record struct DaemonConnect(
         bool                                        SupportsScratchWorkspace = false,
         // Accepts a LaunchAgentCommand.Handoff launch. False from a daemon predating it, which would
         // ignore the block and start an ordinary session.
-        bool                                        SupportsHandoffLaunch = false
+        bool                                        SupportsHandoffLaunch = false,
+        // Accepts a LaunchAgentCommand.ResumeInPlace launch. False from a daemon predating it, which would
+        // ignore the block and start an ordinary session.
+        bool                                        SupportsResumeInPlace = false
     );
 
 public sealed record UnattendedVendorCapability(

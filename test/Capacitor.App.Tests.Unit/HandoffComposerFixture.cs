@@ -25,6 +25,16 @@ sealed class HandoffComposerFixture : IDisposable {
     public List<HandoffComposerViewModel> Built { get; } = [];
     public List<string> Reopened { get; } = [];
     public RecordingNotifier Notifier { get; } = new();
+    /// This app's machine id; null offers no Resume.
+    public string? MachineId;
+
+    /// A server and a daemon that both carry resume-in-place/1, on the machine a session's recording names.
+    public void OfferResume(string machineId) {
+        MachineId = machineId;
+        Launch.Features = System.Collections.Frozen.FrozenSet.Create(HandoffWire.Capability, ResumeInPlaceWire.Capability);
+        Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null,
+            ["input/1", "input/2", HandoffWire.Capability, ResumeInPlaceWire.Capability]));
+    }
     readonly Dictionary<string, string> _origins = new() { [Checkout] = "https://github.com/acme/widgets.git" };
 
     public HandoffComposerFixture() {
@@ -40,7 +50,8 @@ sealed class HandoffComposerFixture : IDisposable {
             _ => Task.FromResult<IReadOnlyList<string>>([Checkout]),
             Drafts, Lane, Uploader, Directory,
             () => 0, (_, _, _) => { }, _ => { },
-            (sessionId, _) => { Reopened.Add(sessionId); return Task.FromResult(true); }, Notifier, FakeDaemonServerUrl);
+            (sessionId, _) => { Reopened.Add(sessionId); return Task.FromResult(true); }, Notifier, FakeDaemonServerUrl,
+            localMachineId: () => MachineId);
         Sessions.HandoffContext = new HandoffContextDto(row.SessionId ?? row.Id, "acme", "widgets", "feature/x", null, ["c1"]);
         Built.Add(vm);
         return vm;

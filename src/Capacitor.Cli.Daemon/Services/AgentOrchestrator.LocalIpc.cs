@@ -558,7 +558,7 @@ internal partial class AgentOrchestrator {
         if (attachmentIds is { Length: > 0 }) {
             if (AttachmentIds.Validate(attachmentIds) is { } invalid) return Refuse(SendTextReasons.AttachmentsRefused, invalid);
 
-            if (agent.Placement == AttachmentPlacement.Worktree && agent.Work == WorkLocation.BorrowedCwd)
+            if (agent.Placement == AttachmentPlacement.Worktree && agent.Work is WorkLocation.BorrowedCwd or WorkLocation.InPlace)
                 return Refuse(SendTextReasons.AttachmentsRefused, AttachmentRefusals.NeedsOwnedWorktree);
 
             if (!agent.Runtime.EmitsTerminalOutput && IsQuitCommand(text))

@@ -276,6 +276,15 @@ public class ServerConnectionAdvertisementTests {
     }
 
     [Test]
+    public async Task DaemonConnect_advertises_in_place_resumes() {
+        var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1", ConfigRoot = Config.Root };
+        await using var conn = new ServerConnection(config, new FixedCredentialSource(), NullLoggerFactory.Instance,
+            NullLogger<ServerConnection>.Instance, TimeProvider.System);
+
+        await Assert.That(conn.BuildDaemonConnect("mac", [], [], null, config.Advertisement).SupportsResumeInPlace).IsTrue();
+    }
+
+    [Test]
     public async Task The_begin_takeover_argument_goes_out_snake_case_through_the_hub_options() {
         var options = new System.Text.Json.JsonSerializerOptions();
         ServerConnection.ConfigureHubPayload(options);
@@ -284,5 +293,15 @@ public class ServerConnectionAdvertisementTests {
             new Capacitor.Cli.Core.Handoff.HandoffTakeoverBeginRequest("src", "succ"), options);
 
         await Assert.That(json).IsEqualTo("""{"source_session_id":"src","successor_session_id":"succ"}""");
+    }
+
+    [Test]
+    public async Task The_begin_resume_argument_goes_out_snake_case_through_the_hub_options() {
+        var options = new System.Text.Json.JsonSerializerOptions();
+        ServerConnection.ConfigureHubPayload(options);
+
+        var json = System.Text.Json.JsonSerializer.Serialize(new Capacitor.Cli.Core.Resume.SourceResumeBeginRequest("src"), options);
+
+        await Assert.That(json).IsEqualTo("""{"source_session_id":"src"}""");
     }
 }
