@@ -212,6 +212,21 @@ public class AgentsSkillsInstallerTests {
         await Assert.That(failure.Reason).Contains("pages");
     }
 
+    /// <summary>A folder where a SKILL.md belongs is a missing file, though Windows refuses to open it with an access error.</summary>
+    [Test]
+    public async Task TryInstall_names_a_folder_in_place_of_a_SKILL_md_as_the_plugin_being_incomplete() {
+        using var src = new TempDir();
+        using var dst = new TempDir();
+
+        foreach (var name in SourceNames.Where(n => n != "pages")) src.CreateFile([name, "SKILL.md"], $"---\nname: {name}\n---\nbody");
+        src.CreateDir("pages", "SKILL.md");
+
+        var failure = AgentsSkillsInstaller.TryInstall(src.Path, dst.Path);
+
+        await Assert.That(failure!.PluginIncomplete).IsTrue();
+        await Assert.That(failure.Reason).Contains("pages");
+    }
+
     /// <summary>A skill the process may not read reads as absent to <c>File.Exists</c>; a reinstall would not fix that,
     /// so it is not reported as kcap's plugin being incomplete. Root reads through the mode, so the test needs another user.</summary>
     [Test, ExcludeOn(OS.Windows)]

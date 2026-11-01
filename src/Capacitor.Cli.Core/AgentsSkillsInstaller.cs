@@ -79,6 +79,8 @@ public static class AgentsSkillsInstaller {
                 using var entries = Directory.EnumerateFileSystemEntries(path).GetEnumerator();
                 entries.MoveNext();
             } else {
+                // Windows refuses to open a directory as a file with an access error; one where a file belongs is missing.
+                if (Directory.Exists(path)) return null;
                 using (File.OpenRead(path)) { }
             }
 
