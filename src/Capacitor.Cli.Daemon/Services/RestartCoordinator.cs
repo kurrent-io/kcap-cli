@@ -59,7 +59,6 @@ internal sealed partial class RestartCoordinator : BackgroundService {
     bool          _whenIdle;
     bool          _fired;
     bool          _selfDetected;
-    // Pending only for a newly installed harness, so an update landing meanwhile still takes over.
     bool          _harnessOnly;
     // A foreground daemon cannot restart itself; the harness check stops there rather than holding the
     // coordinator fired, which would swallow every later update and request.
@@ -199,7 +198,9 @@ internal sealed partial class RestartCoordinator : BackgroundService {
         lock (_gate) {
             if (_fired) return RestartRequestResult.Restarting; // already in progress
 
-            if (!_pending || _harnessOnly) {
+            // A pending when-idle restart (a request or a new harness) waits for every agent to leave, which idle
+            // agents never do, so an update landing behind it still has to take over.
+            if (!_pending || _whenIdle) {
                 var current = StatBinary();
                 if (RestartDecision.BinaryChanged(_baseline, current)) {
                     _pending      = true;

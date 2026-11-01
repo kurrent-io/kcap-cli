@@ -434,6 +434,24 @@ public class RestartCoordinatorTests {
         await Assert.That(spy.Calls).IsEqualTo(1);
     }
 
+    /// <summary>A when-idle request that reaches the daemon before its poll sees the new binary must not
+    /// hide the update: idle agents never leave, so only the turn-boundary restart would ever fire.</summary>
+    [Test]
+    public async Task An_update_landing_behind_a_when_idle_request_fires_at_the_turn_boundary() {
+        var spy  = new SpyStrategy();
+        var size = 100L;
+        var c    = NewCoordinator(spy, isBusy: () => false, stat: () => new BinaryStat(size, 1));
+        c.HasAgents = () => true;
+
+        c.RequestRestart(force: false, whenIdle: true);
+        await Assert.That(spy.Calls).IsEqualTo(0);
+
+        size = 200;
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(1);
+        await Assert.That(DaemonRestartMarker.TryRead(Daemons.Store, "laptop")!.Reason).IsEqualTo("self-detected");
+    }
+
     /// <summary>A request that lands while a harness restart is running stays pending after its no-op.</summary>
     [Test]
     public async Task A_request_during_a_no_op_harness_restart_is_not_dropped() {
