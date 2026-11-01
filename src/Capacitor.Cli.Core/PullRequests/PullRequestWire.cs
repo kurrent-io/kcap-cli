@@ -16,12 +16,17 @@ public static class PullRequestWire {
     public static int? KnownCount(PullRequestCountDto? count) => count is { Kind: "exact" or "lower_bound", Value: >= 0 } ? count.Value : null;
     public static string? SafeLink(string? value) => value is { Length: > 0 and <= 4096 } && Uri.TryCreate(value, UriKind.Absolute, out var uri)
         && uri.Scheme == "https" && uri.UserInfo.Length == 0 && uri.IsDefaultPort ? uri.AbsoluteUri : null;
-    public static string? PrLink(string? value, PullRequestSubjectDto subject) {
+    public static string? PrLink(string? value, PullRequestSubjectDto subject) => PrLink(value, "github.com", subject.Number);
+
+    /// The subject's owner and repo are deliberately not compared: after a repository rename the subject keeps the name
+    /// the local remote gives while GitHub hands out links under the new one, and it redirects either to the same PR.
+    public static string? PrLink(string? value, string host, int number) {
         if (SafeLink(value) is not { } safe) return null;
         var uri = new Uri(safe);
-        var path = $"/{subject.Owner}/{subject.RepoName}/pull/{subject.Number.ToString(CultureInfo.InvariantCulture)}";
-        return uri.Host == "github.com" && (uri.AbsolutePath.TrimEnd('/').Equals(path, StringComparison.OrdinalIgnoreCase)
-            || uri.AbsolutePath.TrimEnd('/').Equals(path + "/files", StringComparison.OrdinalIgnoreCase)) ? safe : null;
+        var parts = uri.AbsolutePath.TrimEnd('/').Split('/');
+        var page = parts.Length == 6 && parts[5].Equals("files", StringComparison.OrdinalIgnoreCase) ? parts[..5] : parts;
+        return uri.IdnHost.Equals(host, StringComparison.OrdinalIgnoreCase) && page is ["", { Length: > 0 }, { Length: > 0 }, var pull, var n]
+            && pull.Equals("pull", StringComparison.OrdinalIgnoreCase) && n == number.ToString(CultureInfo.InvariantCulture) ? safe : null;
     }
     public static string? CheckLink(string? value) => value is { Length: > 0 and <= 4096 } && Uri.TryCreate(value, UriKind.Absolute, out var uri)
         && uri.Scheme == "https" && uri.UserInfo.Length == 0 ? uri.AbsoluteUri : null;

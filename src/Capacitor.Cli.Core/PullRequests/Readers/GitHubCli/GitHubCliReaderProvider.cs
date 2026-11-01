@@ -78,14 +78,7 @@ public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider ti
             Owner = parts[0], RepoName = parts[1], Number = number };
     }
 
-    public string? PrLink(string? url, PullRequestSubjectDto subject) {
-        if (PullRequestWire.SafeLink(url) is not { } safe) return null;
-        var uri = new Uri(safe);
-        var path = $"/{subject.Owner}/{subject.RepoName}/pull/{subject.Number.ToString(CultureInfo.InvariantCulture)}";
-        var actual = uri.AbsolutePath.TrimEnd('/');
-        return uri.IdnHost.Equals(subject.Host, StringComparison.OrdinalIgnoreCase)
-            && (actual.Equals(path, StringComparison.OrdinalIgnoreCase) || actual.Equals(path + "/files", StringComparison.OrdinalIgnoreCase)) ? safe : null;
-    }
+    public string? PrLink(string? url, PullRequestSubjectDto subject) => PullRequestWire.PrLink(url, subject.Host, subject.Number);
 
     public Task<IReadOnlyList<PullRequestLinkDto>> DiscoverAsync(PullRequestRepository repository, string branch, CancellationToken ct) {
         if (cli.IsStopped || !Serves(repository.Provider, repository.Host) || !GitHubCliRunner.ValidOwner(repository.Owner)
