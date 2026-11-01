@@ -151,6 +151,23 @@ public class ArtefactCommandTests {
         await Assert.That(lines[4]).IsEqualTo("p3    v2      org        2026-09-16  github:42     Untitled");
     }
 
+    /// <summary>Titles and excerpts of another person's page reach stdout as they are, so stderr carries
+    /// the same warning `page get` gives for a page the caller does not own.</summary>
+    [Test]
+    public async Task Search_warns_on_stderr_only_when_a_hit_is_someone_elses() {
+        var mine   = new RecordingArtefactsApi { SearchResult = new ArtefactSearchResult.Found([Hit("p1", "Mine", mine: true)]) };
+        var shared = new RecordingArtefactsApi {
+            SearchResult = new ArtefactSearchResult.Found([Hit("p1", "Mine", mine: true), Hit("p2", "Theirs")])
+        };
+
+        var (_, _, quiet) = await SearchAsync(mine, "ferry");
+        var (_, output, warned) = await SearchAsync(shared, "ferry");
+
+        await Assert.That(quiet).IsEmpty();
+        await Assert.That(warned.Trim()).IsEqualTo(ArtefactCommand.SearchUntrustedNotice);
+        await Assert.That(output).DoesNotContain(ArtefactCommand.SearchUntrustedNotice);
+    }
+
     [Test]
     public async Task Search_neutralises_control_characters_in_author_text() {
         var api = new RecordingArtefactsApi {
