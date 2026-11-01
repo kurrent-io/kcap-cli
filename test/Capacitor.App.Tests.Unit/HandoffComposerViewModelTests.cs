@@ -1063,4 +1063,50 @@ public class HandoffComposerViewModelTests {
         await Assert.That(vm.Tray.Items.ToArray()).IsEquivalentTo([a, b], TUnit.Assertions.Enums.CollectionOrdering.Matching);
         await Assert.That(vm.Choices.SelectedVendor).IsEqualTo("claude");
     });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_daemon_change_during_the_upload_stops_the_launch_and_rechecks() => Run(async rig => {
+        var upload = new TaskCompletionSource<UploadOutcome>();
+        rig.Uploader.Pending = upload;
+        var vm = await rig.ReadyAsync();
+        vm.Text = "carry on";
+        vm.Tray.AddAll([Chip("a.png")]);
+
+        var starting = vm.StartCommand.Execute().ToTask();
+        rig.Daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(supportedVendors: []));
+        upload.SetResult(new UploadOutcome(UploadKind.Uploaded, ["u1"], null));
+        await starting;
+        await vm.PendingEvaluationForTesting;
+
+        await Assert.That(rig.Launch.Requests).IsEmpty();
+        await Assert.That(vm.Text).IsEqualTo("carry on");
+        await Assert.That(vm.Error).IsEqualTo(HandoffComposerViewModel.ChangedDuringUpload);
+        await Assert.That(vm.DisabledReason).IsEqualTo(HomeViewModel.NoHarnessesNotice(null));
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Failed_files_past_the_tray_limit_come_back_after_the_next_launch() => Run(async rig => {
+        const string second = "fedcba9876543210fedcba9876543210";
+        var first = Enumerable.Range(0, 7).Select(i => Chip($"a{i}.png")).ToArray();
+        var later = Enumerable.Range(0, 7).Select(i => Chip($"b{i}.png")).ToArray();
+        rig.Drafts.Hold(SessionId, LaunchedId, new HandoffDraft("first", first, "codex", "", null, null, null, null));
+        rig.Drafts.Hold(SessionId, second, new HandoffDraft("second", later, "codex", "", null, null, null, null));
+        rig.Failures.OnNext(new LaunchFailure(LaunchedId, "handoff_start_changed: moved"));
+        rig.Failures.OnNext(new LaunchFailure(second, "handoff_start_changed: moved"));
+
+        var vm = await rig.ReadyAsync();
+
+        await Assert.That(vm.Tray.Count).IsEqualTo(InputWire.MaxAttachmentsPerPrompt);
+        await Assert.That(vm.Error).Contains("4 more files");
+
+        rig.Uploader.Next = new UploadOutcome(UploadKind.Uploaded, ["u1"], null);
+        rig.Launch.During = _ => rig.Navigate();
+        await vm.StartCommand.Execute();
+
+        await Assert.That(rig.Uploader.Calls.Single().Count).IsEqualTo(InputWire.MaxAttachmentsPerPrompt);
+        await Assert.That(vm.Tray.Items.Select(f => f.FileName).ToArray())
+            .IsEquivalentTo(later.Skip(3).Select(f => f.FileName), TUnit.Assertions.Enums.CollectionOrdering.Matching);
+    });
 }

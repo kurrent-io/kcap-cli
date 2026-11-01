@@ -27,7 +27,8 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
     public const string InvalidTarget = "There's no branch or commit to start this hand-off from";
     public const string SignInToHandOff = "Sign in to your kcap server to hand off";
     public const string DaemonOnAnotherServer = "Your local kcap daemon is connected to a different kcap server, so it can't take this hand-off";
-    public const string Checking = "Checking where the new session would start…";
+    public const string ChangedDuringUpload = "Your kcap daemon or server changed while the files uploaded. Check where the new session would start and send again.";
+    public const string Checking ="Checking where the new session would start…";
     public const string WaitingForDaemon = "Waiting for your local kcap daemon…";
     const string StripPrefix = "New session in a fresh worktree";
     const string FullAccess = "full";
@@ -425,6 +426,12 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
                     return;
                 }
                 if (uploadError is not null) { Error = uploadError; return; }
+                // The probed start and the captured vendor are stale once a check was deferred; the
+                // finally block runs it.
+                if (_recheckAfterLaunch) {
+                    Error = ChangedDuringUpload;
+                    return;
+                }
                 // The upload is long enough for the daemon to have restarted without attachments.
                 if (!CanAttachNow()) {
                     Error = HomeViewModel.AttachHintFor(_signedIn, false);
@@ -547,13 +554,21 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
         _ = ReevaluateAsync(CancellationToken.None);
     }
 
-    /// Text typed since the launch stays, with the returned prompt after it.
+    /// Text typed since the launch stays, with the returned prompt after it. Files past the tray's
+    /// limit wait as a failed draft, which the end of the next launch takes back.
     void Apply(HandoffDraft draft) {
         Text = HandoffDraft.JoinText(Text, draft.Text);
-        if (Tray.Count == 0) Tray.Restore(draft.Attachments);
-        else Tray.AddAll([.. draft.Attachments.Where(f => Tray.Items.All(staged => staged.Id != f.Id))]);
+        var returned = draft.Attachments.Where(f => Tray.Items.All(staged => staged.Id != f.Id)).ToList();
+        var fits = Tray.FreeSlots;
+        if (Tray.Count == 0 && returned.Count <= fits) Tray.Restore(returned);
+        else Tray.AddAll(returned[..Math.Min(fits, returned.Count)]);
         _choices.Restore(draft);
         Error = draft.Error;
+        if (returned.Count <= fits) return;
+        var waiting = returned[fits..];
+        _drafts.KeepFailed(_session.SessionId, draft with { Text = "", Attachments = waiting, Error = null });
+        var note = $"{waiting.Count} more files come back once this message is sent ({AttachmentTray.CapReason})";
+        Error = Error is null ? note : $"{Error.TrimEnd('.')}. {note}";
     }
 
     /// The listing row a session-only workspace was built from, as the composer reads it.

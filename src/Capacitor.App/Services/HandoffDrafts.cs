@@ -79,6 +79,11 @@ public sealed class HandoffDrafts : IDisposable {
         _failedFor.OnNext(sourceSessionId);
     }
 
+    /// Kept without telling FailedFor: a composer that cannot fit the draft yet takes it back itself.
+    public void KeepFailed(string sourceSessionId, HandoffDraft draft) {
+        lock (_lock) StoreFailed(sourceSessionId, draft);
+    }
+
     /// Under _lock. A source can have several launches fail before any composer takes one back.
     void StoreFailed(string sourceSessionId, HandoffDraft draft) =>
         _failed[sourceSessionId] = _failed.TryGetValue(sourceSessionId, out var earlier) ? earlier.MergedWith(draft) : draft;
