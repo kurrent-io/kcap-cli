@@ -27,17 +27,22 @@ public class ServiceStatusJsonTests {
         var q = new ServiceQuery(LabelProbe.Loaded, true, ServiceState.Running, "/u/kcap-daemon", 42);
 
         var (withFields, _) = ServiceStatusRender.Render(q, "d", null, 42, false, false,
-            supervisor: "windows_service", serviceUpgradeAvailable: true, windowsServiceInstallable: false);
+            supervisor: "windows_service", serviceUpgradeAvailable: true, windowsServiceInstallable: false,
+            supervisorAdopted: true, serviceRunsLocalServer: true);
         var (without, _) = ServiceStatusRender.Render(q, "d", null, 42, false, false);
 
         using var doc = JsonDocument.Parse(withFields!);
         await Assert.That(doc.RootElement.GetProperty("supervisor").GetString()).IsEqualTo("windows_service");
         await Assert.That(doc.RootElement.GetProperty("service_upgrade_available").GetBoolean()).IsTrue();
         await Assert.That(doc.RootElement.GetProperty("windows_service_installable").GetBoolean()).IsFalse();
+        await Assert.That(doc.RootElement.GetProperty("supervisor_adopted").GetBoolean()).IsTrue();
+        await Assert.That(doc.RootElement.GetProperty("service_runs_local_server").GetBoolean()).IsTrue();
         using var bare = JsonDocument.Parse(without!);
         await Assert.That(bare.RootElement.TryGetProperty("supervisor", out _)).IsFalse();
         await Assert.That(bare.RootElement.TryGetProperty("service_upgrade_available", out _)).IsFalse();
         await Assert.That(bare.RootElement.TryGetProperty("windows_service_installable", out _)).IsFalse();
+        await Assert.That(bare.RootElement.TryGetProperty("supervisor_adopted", out _)).IsFalse();
+        await Assert.That(bare.RootElement.TryGetProperty("service_runs_local_server", out _)).IsFalse();
     }
 
     [Test]

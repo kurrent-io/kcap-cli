@@ -21,7 +21,9 @@ public sealed record ServiceStatusJson(
     string? TxnOperation = null, string? TxnPhase = null, DateTimeOffset? TxnMarkedAt = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Supervisor = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? ServiceUpgradeAvailable = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? WindowsServiceInstallable = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? WindowsServiceInstallable = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? SupervisorAdopted = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? ServiceRunsLocalServer = null);
 
 /// <summary>Machine-readable outcome for <c>kcap daemon service ensure</c> — what the ladder did, and
 /// (on a refusal) which recovery surface the flow should offer. <see cref="Recovery"/> is non-null on
@@ -59,7 +61,8 @@ internal static class ServiceStatusRender {
             string? unitProfile = null, string? unitServerUrl = null,
             string? unitExpectedServer = null, string? unitConsentSeed = null,
             TxnMarker? marker = null, DateTimeOffset? markedAt = null,
-            string? supervisor = null, bool? serviceUpgradeAvailable = null, bool? windowsServiceInstallable = null) {
+            string? supervisor = null, bool? serviceUpgradeAvailable = null, bool? windowsServiceInstallable = null,
+            bool? supervisorAdopted = null, bool? serviceRunsLocalServer = null) {
         if (q.Probe == LabelProbe.Unknown) return (null, 1);
 
         var state = q.State switch {
@@ -75,7 +78,7 @@ internal static class ServiceStatusRender {
             unitProfile, unitServerUrl, unitExpectedServer, unitConsentSeed,
             q.LoadedSpawnType,
             marker?.Operation, marker?.Phase, txnMarker ? markedAt : null,
-            supervisor, serviceUpgradeAvailable, windowsServiceInstallable);
+            supervisor, serviceUpgradeAvailable, windowsServiceInstallable, supervisorAdopted, serviceRunsLocalServer);
 
         return (JsonSerializer.Serialize(dto, ServiceJsonContext.Default.ServiceStatusJson), 0);
     }

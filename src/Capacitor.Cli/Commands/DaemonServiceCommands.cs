@@ -953,6 +953,12 @@ sealed class DaemonServiceCommands(
         }
         await Console.Out.WriteLineAsync($"Service '{id}': {status.State} ({manager.Describe()})");
         if (status.BinaryPath is { } bin) await Console.Out.WriteLineAsync($"  binary: {bin}");
+        if (manager is WindowsServiceManager windows && OperatingSystem.IsWindows()) {
+            var (daemon, server) = windows.Supervision();
+            var stopped = new LocalEdition.RegistryLocalServerEnrollmentStore().Read()?.Stopped;
+            foreach (var line in ServiceSupervisionLines.For(id, status.State == ServiceState.NotInstalled ? null : daemon, server, stopped))
+                await Console.Out.WriteLineAsync(line);
+        }
         if (ServiceTxnMarker.Exists(store, id) && !ServiceTxnLock.IsHeld(store, id))
             await Console.Out.WriteLineAsync(UnfinishedTxnLines(
                 id, ServiceTxnMarker.Read(store, id), ServiceTxnMarker.WrittenAt(store, id)));
@@ -980,17 +986,21 @@ sealed class DaemonServiceCommands(
         var (unitProfile, unitServerUrl, unitExpectedServer, unitConsentSeed) = UnitEnvEvidence(query.UnitPresent);
 
         string? supervisor = null;
-        bool? upgrade = null, installable = null;
+        bool? upgrade = null, installable = null, adopted = null, runsServer = null;
         if (OperatingSystem.IsWindows()) {
             supervisor  = ServiceManagerFactory.SupervisorWord(manager);
             upgrade     = manager is WindowsServiceManager ? WindowsServiceBinaries.UpgradeAvailable() : null;
             installable = manager is WindowsScheduledTaskServiceManager && WindowsServiceBinaries.Bundled() is not null;
+            if (manager is WindowsServiceManager windows) {
+                adopted    = query.UnitPresent ? windows.Supervision().Daemon?.Adopted : null;
+                runsServer = new LocalEdition.RegistryLocalServerEnrollmentStore().Read() is not null;
+            }
         }
 
         var (json, exitCode) = ServiceStatusRender.Render(
             query, id, installBinary, daemonPid, txnMarker, txnActive,
             unitProfile, unitServerUrl, unitExpectedServer, unitConsentSeed,
-            marker, markedAt, supervisor, upgrade, installable);
+            marker, markedAt, supervisor, upgrade, installable, adopted, runsServer);
 
         if (json is null) {
             await Console.Error.WriteLineAsync($"Could not determine service status for '{id}' ({manager.Describe()}).");

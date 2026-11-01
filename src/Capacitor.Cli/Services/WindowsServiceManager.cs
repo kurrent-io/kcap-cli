@@ -49,6 +49,11 @@ sealed class WindowsServiceManager(
     /// <summary>This user's enrollment, under whatever name</summary>
     internal ServiceEnrollment? Enrollment => enrollments.Read();
 
+    /// <summary>The service's own account of this user's daemon and local server; either is null when the service
+    /// did not say, as one too old to run servers does not</summary>
+    internal (ServicePipeStatus? Daemon, ServicePipeStatus? Server) Supervision() =>
+        (pipe.Send("status", Quick)?.Status, pipe.Send(ServicePipeVerbs.ServerStatus, Quick)?.Status);
+
     /// <summary>Whether the enrollment under <paramref name="serviceId"/> already pins this profile and agent cap,
     /// as an install with these values would write them</summary>
     /// <exception cref="ArgumentException">The agent cap is not one an install would accept</exception>

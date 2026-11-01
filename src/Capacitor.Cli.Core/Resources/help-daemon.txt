@@ -159,11 +159,13 @@ Subcommands for service (per-user; restarts the daemon if it crashes, starts it 
                           marker) fail closed to attention with a coded reason
                           — never mutated into.
   status [--name N] [--json]
-                          Show installed / running state. --json emits a
-                          machine-readable snapshot (service/job/daemon pids,
-                          binary paths, transaction-marker state) and exits
-                          non-zero if the underlying service state can't be
-                          determined.
+                          Show installed / running state. Under kcap-service it
+                          also says whether the service started or adopted the
+                          daemon, and whether it runs your local server too.
+                          --json emits a machine-readable snapshot
+                          (service/job/daemon pids, binary paths,
+                          transaction-marker state) and exits non-zero if the
+                          underlying service state can't be determined.
   refresh [--force]       Bring installed units up to this version. A reload
                           stops the daemon with its hosted agents kept, and the
                           reloaded daemon resumes them; --force reloads the
