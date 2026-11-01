@@ -12,6 +12,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Harness.Claude;
+using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Remote.Models;
 using DynamicData;
@@ -2305,11 +2306,13 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// launcher sends no posture and a daemon without posture support still accepts the launch.
     /// Both halves go together once either differs — the daemon rejects a partial posture.
     internal static CodexLaunchPosture? CodexPostureFor(string vendor, string sandbox, string approval) =>
-        HostedHarnessCatalog.SupportsCodexPosture(vendor)
-     && !(string.Equals(sandbox, HostedHarnessCatalog.DefaultCodexSandbox, StringComparison.Ordinal)
-       && string.Equals(approval, HostedHarnessCatalog.DefaultCodexApproval, StringComparison.Ordinal))
-            ? new CodexLaunchPosture(sandbox, approval)
-            : null;
+        !HostedHarnessCatalog.SupportsCodexPosture(vendor) ? null
+      : string.Equals(approval, HostedHarnessCatalog.CodexAutoApproval, StringComparison.Ordinal)
+            ? new CodexLaunchPosture(sandbox, HostedHarnessCatalog.DefaultCodexApproval, CodexApprovalsReviewers.AutoReview)
+      : string.Equals(sandbox, HostedHarnessCatalog.DefaultCodexSandbox, StringComparison.Ordinal)
+     && string.Equals(approval, HostedHarnessCatalog.DefaultCodexApproval, StringComparison.Ordinal)
+            ? null
+            : new CodexLaunchPosture(sandbox, approval);
 
     /// An id that matches nothing degrades gracefully in the workspace ("session not found" with
     /// retry), which beats a red error under a live card.

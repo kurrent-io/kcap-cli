@@ -38,10 +38,11 @@ public class LocalPermissionBridgePolicyTests {
         public PermissionDecisionLog  Log    { get; }
         public LocalPermissionBridge  Bridge { get; }
 
-        public Harness(PolicySnapshot? snapshot) {
+        public Harness(
+                PolicySnapshot? snapshot, string? approvalsReviewer = null, TimeSpan? personDeadline = null, bool policyUnavailable = false) {
             Log    = new PermissionDecisionLog(Tmp.Path, NullLogger.Instance);
             Bridge = new LocalPermissionBridge(Server, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance, TimeProvider.System, Broker, Log) {
-                AttributeHandler = _ => new AttributedAgent("agent-1", snapshot),
+                AttributeHandler = _ => new AttributedAgent("agent-1", snapshot, approvalsReviewer, personDeadline, policyUnavailable),
             };
         }
 
@@ -191,6 +192,116 @@ public class LocalPermissionBridgePolicyTests {
 
         await Assert.That(await Harness.BehaviorOf(response)).IsEqualTo("deny");
         await Assert.That(h.Server.PolicyEvents().Single().Vendor).IsEqualTo("codex");
+    }
+
+    // === Codex auto-review: kcap policy first, then Codex's reviewer, never a card for an undecided call ===
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgePolicyTests))]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task An_auto_review_codex_call_no_rule_decides_is_left_to_codex(bool governed) {
+        await using var h = new Harness(governed ? Governed : null, "auto_review");
+        await h.StartAsync();
+
+        var response = await h.PostAsync("cargo build", vendor: "codex");
+
+        await Assert.That(await response.Content.ReadAsStringAsync()).IsEqualTo("{}");
+        await Assert.That(h.Broker.PendingSnapshot().Count).IsEqualTo(0);
+        await Assert.That(h.Server.BeginCount).IsEqualTo(0);
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgePolicyTests))]
+    public async Task An_auto_review_codex_call_is_still_denied_by_policy() {
+        await using var h = new Harness(Governed, "auto_review");
+        await h.StartAsync();
+
+        var response = await h.PostAsync("git push --force", vendor: "codex");
+
+        await Assert.That(await Harness.BehaviorOf(response)).IsEqualTo("deny");
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgePolicyTests))]
+    public async Task An_auto_review_codex_call_a_policy_asks_about_still_reaches_a_person() {
+        await using var h = new Harness(Governed, "auto_review");
+        await h.StartAsync();
+
+        var response = h.PostAsync("gh pr merge", vendor: "codex");
+        var pending  = await h.WaitPendingAsync();
+        h.Broker.TrySettle(pending.RequestId, Allow, "allow", "app");
+
+        await Assert.That(await Harness.BehaviorOf(await response)).IsEqualTo("allow");
+    }
+
+    /// A policy that cannot be evaluated is not an undecided one: the call reaches a person, never Codex's reviewer.
+    [Test, NotInParallel(nameof(LocalPermissionBridgePolicyTests))]
+    public async Task An_auto_review_codex_call_whose_policy_evaluation_fails_still_reaches_a_person() {
+        var unevaluable = new PolicySnapshot("snap-broken", [
+            new PolicyScopeDocument(PolicyScope.Repo, "/wt/.kcap/approvals.yaml", Rules, null!)], false, []);
+        await using var h = new Harness(unevaluable, "auto_review");
+        await h.StartAsync();
+
+        var response = h.PostAsync("cargo build", vendor: "codex");
+        var pending  = await h.WaitPendingAsync();
+        h.Broker.TrySettle(pending.RequestId, Allow, "allow", "app");
+
+        await Assert.That(await Harness.BehaviorOf(await response)).IsEqualTo("allow");
+    }
+
+    /// A dropped policy document may have denied the call, so nothing short of a surviving rule's
+    /// decision hands it to Codex's reviewer.
+    [Test, NotInParallel(nameof(LocalPermissionBridgePolicyTests))]
+    public async Task An_auto_review_codex_call_under_a_degraded_policy_still_reaches_a_person() {
+        var degraded = Governed with { Degraded = true, Degradations = ["/wt/.kcap/broken.yaml: unreadable"] };
+        await using var h = new Harness(degraded, "auto_review");
+        await h.StartAsync();
+
+        var denied = await h.PostAsync("git push --force", vendor: "codex");
+        await Assert.That(await Harness.BehaviorOf(denied)).IsEqualTo("deny");
+
+        var response = h.PostAsync("cargo build", vendor: "codex");
+        var pending  = await h.WaitPendingAsync();
+        h.Broker.TrySettle(pending.RequestId, Allow, "allow", "app");
+
+        await Assert.That(await Harness.BehaviorOf(await response)).IsEqualTo("allow");
+    }
+
+    /// A launch whose policy failed to build has no snapshot, but its calls are not policy-free: they reach a person.
+    [Test, NotInParallel(nameof(LocalPermissionBridgePolicyTests))]
+    public async Task An_auto_review_codex_call_whose_policy_failed_to_build_still_reaches_a_person() {
+        await using var h = new Harness(null, "auto_review", policyUnavailable: true);
+        await h.StartAsync();
+
+        var response = h.PostAsync("cargo build", vendor: "codex");
+        var pending  = await h.WaitPendingAsync();
+        h.Broker.TrySettle(pending.RequestId, Allow, "allow", "app");
+
+        await Assert.That(await Harness.BehaviorOf(await response)).IsEqualTo("allow");
+    }
+
+    /// A request held for a person under a deadline is denied and its card settled once nobody answers in time.
+    [Test, NotInParallel(nameof(LocalPermissionBridgePolicyTests))]
+    public async Task A_person_lane_request_past_its_deadline_is_denied_and_settled() {
+        await using var h = new Harness(Governed, "auto_review", TimeSpan.FromMilliseconds(300));
+        await h.StartAsync();
+
+        var response = await h.PostAsync("gh pr merge", vendor: "codex");
+
+        await Assert.That(await Harness.BehaviorOf(response)).IsEqualTo("deny");
+        await Assert.That(h.Broker.PendingSnapshot().Count).IsEqualTo(0);
+        await Assert.That(h.LogLines().Single()).Contains("\"source\":\"timeout\"");
+    }
+
+    /// Auto-review is Codex's; a Claude call attributed to such an agent takes the normal lane.
+    [Test, NotInParallel(nameof(LocalPermissionBridgePolicyTests))]
+    public async Task Auto_review_never_yields_a_claude_call() {
+        await using var h = new Harness(null, "auto_review");
+        await h.StartAsync();
+
+        var response = h.PostAsync("cargo build");
+        var pending  = await h.WaitPendingAsync();
+        h.Broker.TrySettle(pending.RequestId, Allow, "allow", "app");
+
+        await Assert.That(await Harness.BehaviorOf(await response)).IsEqualTo("allow");
     }
 }
 

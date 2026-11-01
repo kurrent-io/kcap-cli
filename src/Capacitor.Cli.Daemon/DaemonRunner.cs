@@ -1670,6 +1670,7 @@ public static partial class DaemonRunner {
                 // Caller-selected launch posture, advertised per vendor rather than per platform —
                 // the seam is platform-neutral, and only the Codex launcher honours a posture block.
                 SupportsLaunchPosture: isCodex,
+                SupportsApprovalsReviewer: isCodex,
                 InteractiveTransport: isCodex ? codex.InteractiveTransport : null));
         }
         return capabilities;

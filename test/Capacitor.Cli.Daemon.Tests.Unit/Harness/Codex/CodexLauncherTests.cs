@@ -907,6 +907,25 @@ public class CodexLauncherTests {
         await Assert.That(args[aIdx + 1]).IsEqualTo(approval);
     }
 
+    [Test]
+    public async Task BuildArgs_selected_auto_review_routes_approvals_to_codex_reviewer() {
+        var args = NewLauncher().BuildArgs(InteractiveCtx(new("workspace-write", "on-request", "auto_review"))).Args;
+
+        var aIdx = Array.IndexOf(args, "--ask-for-approval");
+        var cIdx = Array.IndexOf(args, "approvals_reviewer=\"auto_review\"");
+
+        await Assert.That(args[aIdx + 1]).IsEqualTo("on-request");
+        await Assert.That(cIdx).IsGreaterThan(0);
+        await Assert.That(args[cIdx - 1]).IsEqualTo("-c");
+    }
+
+    [Test]
+    public async Task BuildArgs_without_a_reviewer_does_not_override_codex_configuration() {
+        var args = NewLauncher().BuildArgs(InteractiveCtx(new("workspace-write", "untrusted"))).Args;
+
+        await Assert.That(args.Any(a => a.StartsWith("approvals_reviewer=", StringComparison.Ordinal))).IsFalse();
+    }
+
     /// <summary>The regression that matters most: with no posture block the argv must be EXACTLY the
     /// sequence pinned below. These are literal transcriptions of the launcher's output, not a second
     /// run of it, so an added, removed, renamed or REORDERED argument fails here — comparing two runs

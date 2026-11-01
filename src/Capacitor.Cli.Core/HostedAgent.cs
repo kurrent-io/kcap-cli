@@ -26,6 +26,10 @@ public sealed record HostedAgent(string? AgentId, bool IsRendered, DaemonBridge 
     /// daemon owns, so the Codex hook stands down from both.</summary>
     public const string HostedAppServerVar = "KCAP_HOSTED_APPSERVER";
 
+    /// <summary>Set to "1" on an app-server session launched with Codex auto-review, so the Codex hook asks
+    /// the daemon for a policy decision before Codex's reviewer takes the request.</summary>
+    public const string CodexAutoReviewVar = "KCAP_CODEX_AUTO_REVIEW";
+
     /// <summary>Set to "1" on a headless agent kcap itself runs, so its hooks answer the vendor but record nothing.</summary>
     public const string SkipVar = "KCAP_SKIP";
 

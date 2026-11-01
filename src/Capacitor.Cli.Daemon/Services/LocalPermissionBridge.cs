@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Daemon.Harness.Claude;
@@ -15,7 +16,16 @@ using Microsoft.Extensions.Logging;
 namespace Capacitor.Cli.Daemon.Services;
 
 internal readonly record struct PermissionAttribution(string? AgentId, string SessionId, string? Cwd);
-internal readonly record struct AttributedAgent(string AgentId, PolicySnapshot? PolicySnapshot = null, bool BridgedSinceStart = false);
+internal readonly record struct AttributedAgent(
+    string AgentId,
+    PolicySnapshot? PolicySnapshot = null,
+    string? ApprovalsReviewer = null,
+    // How long a request raised for a person waits before the bridge denies it; null waits for an answer.
+    TimeSpan? PersonDeadline = null,
+    // The launch could not build its policy, so a missing snapshot is not a missing policy.
+    bool PolicyUnavailable = false,
+    bool BridgedSinceStart = false
+);
 
 /// <summary>
 /// Localhost-only HTTP bridge that fronts the server's permission flow for spawned
@@ -674,7 +684,12 @@ internal sealed partial class LocalPermissionBridge(
 
                 // The launched agent's own policy, and the judge for a call no rule decided, answer
                 // before a human is asked. Anything the evaluation throws leaves the request on the human lane.
+                // An ask rule, or a policy that could not be applied in full (one that failed to build, a
+                // dropped document, a failed evaluation, a judge that errored rather than judged), keeps the
+                // request for a person.
+                var keepForPerson = attributed is { PolicyUnavailable: true };
                 if (vendor is "claude" or "codex" && attributed is { PolicySnapshot: { IsEmpty: false } snapshot } governed) {
+                    keepForPerson = snapshot.Degraded;
                     ClaudeHostedPolicyResult? policy = null;
                     try {
                         var call = new ClaudeHostedPermissionCall(canonicalSessionId!, governed.AgentId, toolName, toolInput,
@@ -684,6 +699,7 @@ internal sealed partial class LocalPermissionBridge(
                             : await ClaudeHostedPolicySeam.EvaluateAsync(call, snapshot, time, policyJudge, judgeState, JudgeBudget, logger, _refusals, ct);
                     } catch (Exception ex) {
                         LogPolicyEvaluationFailed(logger, ex, governed.AgentId);
+                        keepForPerson = true;
                     }
 
                     if (policy is { } decided) {
@@ -705,7 +721,20 @@ internal sealed partial class LocalPermissionBridge(
                         }
 
                         _ = server.AppendAgentRunEventAsync(governed.AgentId, decided.Event);
+                        keepForPerson |= decided.Outcome == PolicyOutcome.Ask
+                                      || decided.Event.FailureClass is { } failure && failure != PolicyJudgeResult.Uncertain;
                     }
+                }
+
+                // Codex's own reviewer takes whatever kcap policy left undecided. An empty answer is "no
+                // decision" to the Codex hook. Its refusals never pass through here, so the judge can no
+                // longer be told the list is complete.
+                if (vendor == "codex" && !keepForPerson
+                 && attributed is { ApprovalsReviewer: CodexApprovalsReviewers.AutoReview } autoReviewed) {
+                    _refusals.MarkIncomplete(canonicalSessionId!);
+                    LogYieldedToCodexAutoReview(logger, autoReviewed.AgentId, toolName);
+                    await WriteResponseAsync(context, "{}", time);
+                    return;
                 }
 
                 if (pending is null) {
@@ -725,7 +754,20 @@ internal sealed partial class LocalPermissionBridge(
 
                     PermissionSettlement settlement;
                     try {
-                        settlement = await settlementTask.WaitAsync(ct);
+                        settlement = attributed?.PersonDeadline is { } deadline
+                            ? await settlementTask.WaitAsync(deadline, time, ct)
+                            : await settlementTask.WaitAsync(ct);
+                    } catch (TimeoutException) {
+                        if (_broker.TrySettle(pending.RequestId, PermissionSettlements.DenyDecision,
+                                PermissionSettlements.Deny, PermissionSettlements.SourceTimeout)) {
+                            _decisionLog?.Record(new PermissionDecisionRecord(
+                                time.GetUtcNow().ToString("O"), pending.AgentId, pending.SessionId, pending.Vendor,
+                                pending.ToolName, PermissionSettlements.Deny, PermissionSettlements.SourceTimeout));
+                            RecordRefusal(vendor, attributed, canonicalSessionId, node, toolName, toolInput, PermissionSettlements.Deny);
+                            await WriteResponseAsync(context, BuildHookResponseJson(PermissionSettlements.DenyDecision, vendor, suggestions, toolName), time);
+                            return;
+                        }
+                        settlement = await settlementTask;
                     } catch (OperationCanceledException) {
                         // Shutdown: claim rather than inspect. Losing means another party settled first.
                         if (_broker.TrySettle(pending.RequestId, PermissionSettlements.DenyDecision,
@@ -1214,6 +1256,9 @@ internal sealed partial class LocalPermissionBridge(
 
         return payload.ToJsonString();
     }
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Left {ToolName} for agent {AgentId} to Codex auto-review: no kcap policy decided it")]
+    static partial void LogYieldedToCodexAutoReview(ILogger logger, string agentId, string? toolName);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Local permission bridge listening on {BaseUrl}")]
     static partial void LogBridgeStarted(ILogger logger, string baseUrl);

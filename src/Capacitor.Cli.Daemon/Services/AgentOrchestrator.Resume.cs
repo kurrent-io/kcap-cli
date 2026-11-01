@@ -388,6 +388,7 @@ internal partial class AgentOrchestrator {
             AccountId:              agent.Account?.AccountId,
             ScratchWorkspace:       cmd is { ScratchWorkspace: true } ? true : prior?.Launch.ScratchWorkspace,
             WorktreeOwnsBranch:     agent.Worktree.OwnsBranch,
+            ApprovalsReviewer:      agent.ApprovalsReviewer,
             AccountLabel:           agent.Account?.Label,
             HandoffSource:          agent.HandoffSource);
 
@@ -461,6 +462,7 @@ internal partial class AgentOrchestrator {
             AccountId:              account?.AccountId,
             ScratchWorkspace:       cmd.ScratchWorkspace ? true : null,
             WorktreeOwnsBranch:     worktree.OwnsBranch,
+            ApprovalsReviewer:      cmd.CodexPosture?.ApprovalsReviewer,
             AccountLabel:           account?.Label,
             HandoffSource:          cmd.Handoff?.Source);
 
@@ -1554,7 +1556,9 @@ internal partial class AgentOrchestrator {
             Vendor:              entry.Vendor,
             FlowRunId:           launch.FlowRunId,
             FlowRole:            launch.FlowRole,
-            CodexPosture:        launch is { SandboxPolicy: { } sandbox, ApprovalPolicy: { } approval } ? new CodexLaunchPosture(sandbox, approval) : null,
+            CodexPosture:        launch is { SandboxPolicy: { } sandbox, ApprovalPolicy: { } approval }
+                ? new CodexLaunchPosture(sandbox, approval, launch.ApprovalsReviewer)
+                : null,
             RequesterUserId:     launch.RequesterUserId,
             RequesterDisplay:    launch.RequesterDisplay,
             AcpPermissionPreset: launch.PermissionPreset,

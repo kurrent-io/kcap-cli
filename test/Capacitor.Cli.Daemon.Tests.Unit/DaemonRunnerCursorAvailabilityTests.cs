@@ -323,6 +323,8 @@ public class DaemonRunnerCursorAvailabilityTests {
 
         await Assert.That(capabilities.Single(c => c.Vendor == "codex").SupportsLaunchPosture).IsTrue();
         await Assert.That(capabilities.Single(c => c.Vendor == "claude").SupportsLaunchPosture).IsFalse();
+        await Assert.That(capabilities.Single(c => c.Vendor == "codex").SupportsApprovalsReviewer).IsTrue();
+        await Assert.That(capabilities.Single(c => c.Vendor == "claude").SupportsApprovalsReviewer).IsFalse();
     }
 
     // === Trust-by-default borrowed-review advertisement ===

@@ -569,6 +569,25 @@ public class HomeViewModelTests {
         });
     }
 
+    /// Auto is not a Codex approval token: it launches on-request with Codex's auto-review deciding,
+    /// and is sent even on the default sandbox.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Auto_codex_approval_is_sent_as_on_request_with_auto_review() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var vm = Build(out var launch, out _, path);
+
+            await vm.SelectRepositoryAsync("/repo/a");
+            await vm.ChooseHarnessAsync("codex");
+            vm.SelectedCodexApproval = HostedHarnessCatalog.CodexAutoApproval;
+            await vm.StartCommand.Execute();
+
+            await Assert.That(launch.Last!.CodexPosture)
+                .IsEqualTo(new CodexLaunchPosture("workspace-write", "on-request", "auto_review"));
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_failed_start_surfaces_the_servers_reason() {

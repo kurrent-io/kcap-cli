@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.Cli.Daemon.Harness.Codex;
@@ -65,8 +66,27 @@ internal static class CodexPosturePolicy {
             return $"codex_posture_invalid: unknown approval policy '{posture.Approval}'. "
                  + "Valid values: untrusted, on-request, never.";
 
+        if (posture.ApprovalsReviewer is null || posture.ApprovalsReviewer == CodexApprovalsReviewers.User)
+            return null;
+
+        if (posture.ApprovalsReviewer != CodexApprovalsReviewers.AutoReview)
+            return $"codex_posture_invalid: unknown approvals reviewer '{posture.ApprovalsReviewer}'. "
+                 + "Valid values: user, auto_review.";
+
+        // Under `never` no approval is ever raised, so the reviewer would be a choice that does nothing.
+        if (posture.Approval == "never")
+            return "codex_posture_invalid: approvals reviewer 'auto_review' needs an approval policy that raises "
+                 + "requests; 'never' raises none.";
+
         return null;
     }
+
+    /// <summary>The reviewer the caller selected, or null to leave Codex's own configuration in charge.
+    /// Only a validated interactive posture can carry one.</summary>
+    public static string? Reviewer(CodexLaunchPosture? posture) =>
+        posture?.ApprovalsReviewer is CodexApprovalsReviewers.AutoReview or CodexApprovalsReviewers.User
+            ? posture.ApprovalsReviewer
+            : null;
 
     /// <summary>The effective sandbox/approval pair: the selected posture when one is present, else
     /// the derived containment defaults. Callers establish eligibility via

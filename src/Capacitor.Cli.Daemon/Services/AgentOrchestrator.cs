@@ -236,6 +236,9 @@ internal record AgentInstance(
     /// lets the value survive a server restart.</summary>
     public string?              SandboxPolicy     { get; init; }
     public string?              ApprovalPolicy    { get; init; }
+    /// <summary>The caller-selected Codex approvals reviewer, set alongside the posture pair; null when
+    /// approvals go to the user.</summary>
+    public string?              ApprovalsReviewer { get; init; }
 
     /// <summary>The applied ACP permission preset for a hosted interactive ACP launch that carried
     /// one; null everywhere else. Stored here (like the posture pair above) so initial registration
@@ -247,6 +250,10 @@ internal record AgentInstance(
     /// against the same documents the launch was reported with, whatever the files later say.
     /// Null when no provider was wired, or when the build failed.</summary>
     public PolicySnapshot?      PolicySnapshot    { get; init; }
+
+    /// <summary>The policy could not be built, so a null <see cref="PolicySnapshot"/> does not mean the run
+    /// has none: what it would have decided is unknown.</summary>
+    public bool                 PolicyUnavailable { get; init; }
 
     /// <summary>Launched fresh by this daemon process, so every permission it raised passed through this
     /// daemon's bridges; never for a resume or an adopted agent, whose earlier refusals this process never saw.</summary>
@@ -1170,6 +1177,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     /// <summary>Only the session a fresh agent reported as its own started under this daemon: a request naming another
     /// one, such as an older session resumed inside the agent, may carry refusals this daemon never saw.</summary>
+    AttributedAgent Attributed(AgentInstance agent, string canonicalSession) =>
+        new(agent.Id, agent.PolicySnapshot, agent.ApprovalsReviewer, PersonDeadlineOf(agent),
+            PolicyUnavailable: agent.PolicyUnavailable, BridgedSinceStart: FreshIn(agent, canonicalSession));
+
+    /// <summary>An app-server Codex on auto-review raises its person-lane prompts through the bridge rather
+    /// than its own approval bridge, so they keep that bridge's fail-closed deadline.</summary>
+    TimeSpan? PersonDeadlineOf(AgentInstance agent) =>
+        agent is { ApprovalsReviewer: Core.Harness.Codex.CodexApprovalsReviewers.AutoReview,
+                   RuntimeTransport: Harness.Codex.CodexTransportDecision.AppServer }
+            ? TimeSpan.FromSeconds(Math.Max(1, _config.CodexAppServerApprovalTimeoutSeconds))
+            : null;
+
     static bool FreshIn(AgentInstance agent, string canonicalSession) =>
         agent.BridgedSinceStart && agent.SessionId is { } own && PermissionWire.Canonical(own) == canonicalSession;
 
@@ -1184,21 +1203,21 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         if (query.AgentId is { Length: > 0 } rawId) {
             var raw = live.Where(a => string.Equals(a.Id, rawId, StringComparison.Ordinal)).ToList();
-            if (raw.Count == 1) return new AttributedAgent(raw[0].Id, raw[0].PolicySnapshot, FreshIn(raw[0], canonicalSession));
+            if (raw.Count == 1) return Attributed(raw[0], canonicalSession);
             if (PermissionWire.Canonical(rawId) is { } canonicalId) {
                 var canon = live.Where(a => PermissionWire.Canonical(a.Id) == canonicalId).ToList();
-                if (canon.Count == 1) return new AttributedAgent(canon[0].Id, canon[0].PolicySnapshot, FreshIn(canon[0], canonicalSession));
+                if (canon.Count == 1) return Attributed(canon[0], canonicalSession);
             }
         }
 
         var bySession = live.Where(a => a.SessionId is { } s && PermissionWire.Canonical(s) == canonicalSession).ToList();
-        if (bySession.Count == 1) return new AttributedAgent(bySession[0].Id, bySession[0].PolicySnapshot, FreshIn(bySession[0], canonicalSession));
+        if (bySession.Count == 1) return Attributed(bySession[0], canonicalSession);
 
         if (query.Cwd is { Length: > 0 } cwd) {
             var wanted = Path.TrimEndingDirectorySeparator(cwd);
             var byCwd = live.Where(a => string.Equals(
                 Path.TrimEndingDirectorySeparator(a.Worktree.Path), wanted, RepoPathStore.PathComparison)).ToList();
-            if (byCwd.Count == 1) return new AttributedAgent(byCwd[0].Id, byCwd[0].PolicySnapshot, FreshIn(byCwd[0], canonicalSession));
+            if (byCwd.Count == 1) return Attributed(byCwd[0], canonicalSession);
         }
 
         return null;
@@ -2929,10 +2948,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // one set of documents. A policy that cannot be built is not a launch failure: the launch
             // proceeds with no snapshot, and the permission seam falls back to prompting.
             PolicySnapshot? policySnapshot = null;
+            var policyUnavailable = false;
             try {
                 policySnapshot = _policySnapshots?.BuildFor(worktree.Path);
             } catch (Exception ex) {
                 LogPolicySnapshotBuildFailed(ex, agentId);
+                policyUnavailable = true;
             }
 
             // The documents this run is judged against, enqueued BEFORE the runtime starts: the ACP
@@ -3252,11 +3273,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 ScratchWorkspace    = cmd.ScratchWorkspace,
                 SandboxPolicy       = appliedPosture?.Sandbox,
                 ApprovalPolicy      = appliedPosture?.Approval,
+                ApprovalsReviewer   = appliedPosture is null ? null : cmd.CodexPosture?.ApprovalsReviewer,
                 // Echoed on AgentRegistered for the dashboard chip; carried verbatim from the command
                 // so a reconnect re-registration reports the same value. Only ever set for an
                 // interactive ACP launch (the policy above rejects any other shape).
                 PermissionPreset    = cmd.AcpPermissionPreset,
                 PolicySnapshot      = policySnapshot,
+                PolicyUnavailable   = policyUnavailable,
                 BridgedSinceStart   = resume is null && cmd.ResumeSessionId is null,
                 ReviewerBridgeToken = reviewerToken,
                 BorrowedSnapshotSource = borrowedSnapshotSource,

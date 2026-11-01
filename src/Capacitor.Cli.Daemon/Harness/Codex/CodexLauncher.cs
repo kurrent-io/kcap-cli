@@ -191,6 +191,11 @@ internal sealed partial class CodexLauncher(
             approval
         ]);
 
+        if (CodexPosturePolicy.Reviewer(ctx.CodexPosture) is { } reviewer) {
+            args.Add("-c");
+            args.Add($"approvals_reviewer={TomlString(reviewer)}");
+        }
+
         // codex 0.146+ parks the interactive session on a "Hooks need review" prompt for any hook
         // it hasn't persisted trust for. A hosted launch has no one to answer it, so it hangs at
         // "Waiting for session to start". kcap installs and owns these hooks (it vets the source),

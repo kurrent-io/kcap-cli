@@ -37,7 +37,7 @@ public class CodexHookCommandTests : IDisposable {
 
     Task<int> RunAsync(
             string payload, string? serverUrl = null, HostedAgent? hosted = null, ICapacitorHttpClient? http = null,
-            IWatcherSpawner? spawner = null, bool skip = false, bool hostedAppServer = false) {
+            IWatcherSpawner? spawner = null, bool skip = false, bool hostedAppServer = false, bool autoReview = false) {
         var profiles = Resolutions.At(serverUrl ?? _server.Url!, Config.Root);
         var client   = http ?? new FixedCapacitorHttpClient();
         var watchers = spawner is null
@@ -46,7 +46,7 @@ public class CodexHookCommandTests : IDisposable {
         var command = new CodexHookCommand(Config.Root, profiles, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home),
             hosted ?? HostedAgent.Terminal, client, watchers, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory));
 
-        return command.Handle(new StringReader(payload), new CodexHookEnvironment(_stdout, _stderr, skip, hostedAppServer));
+        return command.Handle(new StringReader(payload), new CodexHookEnvironment(_stdout, _stderr, skip, hostedAppServer, autoReview));
     }
 
     [Test]
@@ -496,6 +496,24 @@ public class CodexHookCommandTests : IDisposable {
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(Stdout.Trim()).IsEqualTo("{}");
         await Assert.That(bridge.LogEntries.Count).IsEqualTo(0);
+    }
+
+    /// <summary>On auto-review Codex's requestApproval goes to its own reviewer, never the app-server
+    /// runtime, so the hook asks the daemon bridge for kcap's policy decision and relays its answer.</summary>
+    [Test]
+    public async Task PermissionRequest_in_an_auto_review_app_server_session_asks_the_bridge() {
+        using var bridge = WireMockServer.Start();
+        var       token  = "abc123";
+        bridge.Given(Request.Create().WithPath($"/{token}/codex/permission-request").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
+        var hosted = new HostedAgent(null, IsRendered: true, DaemonBridge.Parse($"http://127.0.0.1:{bridge.Ports[0]}/{token}"));
+
+        var exit = await RunAsync("""{"hook_event_name":"PermissionRequest","session_id":"s1","tool_name":"shell","tool_input":{"command":"ls"}}""",
+            serverUrl: "http://server.example", hosted: hosted, hostedAppServer: true, autoReview: true);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(Stdout.Trim()).IsEqualTo("{}");
+        await Assert.That(bridge.LogEntries.Count).IsEqualTo(1);
     }
 
     [Test]

@@ -101,6 +101,49 @@ public class CodexPosturePolicyTests {
         await Assert.That(reason).StartsWith("codex_posture_not_overridable:");
     }
 
+    // === Approvals reviewer ===
+
+    [Test]
+    [Arguments("untrusted")]
+    [Arguments("on-request")]
+    public async Task Auto_review_is_accepted_with_an_approval_policy_that_raises_requests(string approval) {
+        var posture = new CodexLaunchPosture("workspace-write", approval, "auto_review");
+
+        await Assert.That(CodexPosturePolicy.RejectionReason(Cmd(posture: posture))).IsNull();
+        await Assert.That(CodexPosturePolicy.Reviewer(posture)).IsEqualTo("auto_review");
+    }
+
+    [Test]
+    public async Task Auto_review_under_never_is_rejected() {
+        var reason = CodexPosturePolicy.RejectionReason(
+            Cmd(posture: new("workspace-write", "never", "auto_review")));
+
+        await Assert.That(reason).StartsWith("codex_posture_invalid:");
+    }
+
+    [Test]
+    [Arguments("guardian_subagent")]
+    [Arguments("Auto_Review")]
+    [Arguments("")]
+    public async Task Unknown_approvals_reviewer_is_rejected(string reviewer) {
+        var reason = CodexPosturePolicy.RejectionReason(
+            Cmd(posture: new("workspace-write", "on-request", reviewer)));
+
+        await Assert.That(reason).StartsWith("codex_posture_invalid:");
+    }
+
+    /// An explicit user reviewer overrides a Codex config that selects auto-review; only an absent one
+    /// leaves that config in charge.
+    [Test]
+    public async Task An_explicit_user_reviewer_is_requested_and_an_absent_one_is_not() {
+        var posture = new CodexLaunchPosture("workspace-write", "on-request", "user");
+
+        await Assert.That(CodexPosturePolicy.RejectionReason(Cmd(posture: posture))).IsNull();
+        await Assert.That(CodexPosturePolicy.Reviewer(posture)).IsEqualTo("user");
+        await Assert.That(CodexPosturePolicy.Reviewer(new("workspace-write", "on-request"))).IsNull();
+        await Assert.That(CodexPosturePolicy.Reviewer(null)).IsNull();
+    }
+
     // === Token validation ===
 
     [Test]

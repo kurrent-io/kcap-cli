@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Capacitor.Cli.Core.Harness.Codex;
 
 namespace Capacitor.Cli.Daemon.Harness.Codex;
 
@@ -10,13 +11,18 @@ namespace Capacitor.Cli.Daemon.Harness.Codex;
 /// <para>Two invariants pinned by the app-server protocol spike and enforced here:
 /// (1) <c>approvalPolicy</c> is a plain kebab-case STRING — the granular <c>{granular:{…}}</c> object
 /// form crashes the app-server process on <c>turn/start</c> (immediate stdout EOF); and
-/// (2) approvals are always routed to the client (<c>approvalsReviewer = "user"</c>) so a user-config
-/// <c>approvals_reviewer = "auto_review"</c> Guardian can never auto-approve a sandbox escalation.</para>
+/// (2) <c>approvalsReviewer</c> is always sent, so a user-config <c>approvals_reviewer = "auto_review"</c>
+/// can never auto-approve a sandbox escalation; only a launch that selected auto-review gets it.</para>
 /// </summary>
 internal static class CodexAppServerPosture {
-    /// <summary>Approvals always route to the client, never Codex's own auto-review subagent.
-    /// Slotted into <c>thread/start</c>'s <c>approvalsReviewer</c>.</summary>
-    public const string ApprovalsReviewer = "user";
+    /// <summary>The <c>approvalsReviewer</c> for <c>thread/start</c> and <c>turn/start</c>: the selected
+    /// reviewer, else the client.</summary>
+    public static string RenderApprovalsReviewer(string? reviewer) => reviewer switch {
+        null or CodexApprovalsReviewers.User => CodexApprovalsReviewers.User,
+        CodexApprovalsReviewers.AutoReview   => CodexApprovalsReviewers.AutoReview,
+        _ => throw new ArgumentOutOfRangeException(nameof(reviewer), reviewer,
+            "Unknown Codex approvals reviewer; app-server posture accepts only user, auto_review."),
+    };
 
     /// <summary>The <c>sandboxPolicy</c> object for <c>turn/start</c>. <paramref name="writableRoots"/>
     /// applies only to <c>workspace-write</c> (the reviewer's owned worktree); it is ignored for the

@@ -59,10 +59,25 @@ public class CodexAppServerPostureTests {
             .Throws<ArgumentOutOfRangeException>();
     }
 
+    /// An unselected reviewer is sent as `user`, so a user-config auto_review never decides a launch
+    /// that did not choose it.
     [Test]
-    public async Task Approvals_reviewer_is_pinned_to_user() {
-        // The Guardian containment pin: approvals always route to the client, never Codex's
-        // own auto_review subagent.
-        await Assert.That(CodexAppServerPosture.ApprovalsReviewer).IsEqualTo("user");
+    public async Task Approvals_reviewer_defaults_to_user() {
+        await Assert.That(CodexAppServerPosture.RenderApprovalsReviewer(null)).IsEqualTo("user");
+        await Assert.That(CodexAppServerPosture.RenderApprovalsReviewer("user")).IsEqualTo("user");
+    }
+
+    [Test]
+    public async Task Selected_auto_review_is_sent() {
+        await Assert.That(CodexAppServerPosture.RenderApprovalsReviewer("auto_review")).IsEqualTo("auto_review");
+    }
+
+    [Test]
+    [Arguments("guardian_subagent")]
+    [Arguments("Auto_Review")]
+    [Arguments("")]
+    public async Task Unknown_approvals_reviewer_throws(string reviewer) {
+        await Assert.That(() => CodexAppServerPosture.RenderApprovalsReviewer(reviewer))
+            .Throws<ArgumentOutOfRangeException>();
     }
 }

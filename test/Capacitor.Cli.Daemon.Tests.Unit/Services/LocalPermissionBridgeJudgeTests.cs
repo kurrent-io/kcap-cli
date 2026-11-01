@@ -1,3 +1,4 @@
+using TUnit.Assertions.Enums;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Capacitor.Cli.Core;
@@ -41,15 +42,15 @@ public class LocalPermissionBridgeJudgeTests {
         public HttpClient             Client { get; } = new() { Timeout = TimeSpan.FromSeconds(30) };
         public LocalPermissionBridge  Bridge { get; }
 
-        public Harness(bool bridgedSinceStart = true) {
+        public Harness(bool bridgedSinceStart = true, string? approvalsReviewer = null) {
             var gateway = new PolicyJudgeGateway(
                 () => Task.FromResult(new AuthAttempt(new HttpClient(), AuthStatus.NoAuthRequired)), Judge.Url, TimeProvider.System);
             Bridge = new LocalPermissionBridge(Server, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance,
                 TimeProvider.System, Broker, new PermissionDecisionLog(Tmp.Path, NullLogger.Instance), gateway,
                 new ConfigRoot(Tmp.CreateDir("config").Path)) {
                 AttributeHandler = a => a.AgentId switch {
-                    "agent-1"          => new AttributedAgent("agent-1", Governed, bridgedSinceStart),
-                    "agent-ungoverned" => new AttributedAgent("agent-ungoverned", Ungoverned, bridgedSinceStart),
+                    "agent-1"          => new AttributedAgent("agent-1", Governed, approvalsReviewer, BridgedSinceStart: bridgedSinceStart),
+                    "agent-ungoverned" => new AttributedAgent("agent-ungoverned", Ungoverned, BridgedSinceStart: bridgedSinceStart),
                     _                  => null,
                 },
                 // Far above production's: a cold first consultation under a loaded suite can outlive
@@ -70,8 +71,9 @@ public class LocalPermissionBridgeJudgeTests {
         string Transcript() => _transcript ??= Tmp.CreateFile("t.jsonl",
             """{"type":"user","uuid":"11111111-1111-1111-1111-111111111111","promptId":"p1","message":{"role":"user","content":"go"}}""" + "\n");
 
-        public Task<HttpResponseMessage> PostAsync(string command, string toolUseId = "toolu_1", string agentId = "agent-1") =>
-            Client.PostAsync($"{Bridge.BaseUrl}/claude/permission-request",
+        public Task<HttpResponseMessage> PostAsync(
+                string command, string toolUseId = "toolu_1", string agentId = "agent-1", string vendor = "claude") =>
+            Client.PostAsync($"{Bridge.BaseUrl}/{vendor}/permission-request",
                 JsonContent.Create(new {
                     session_id = Session, tool_name = "Bash", tool_input = new { command },
                     agent_id = agentId, cwd = "/wt", tool_use_id = toolUseId, transcript_path = Transcript(),
@@ -187,6 +189,40 @@ public class LocalPermissionBridgeJudgeTests {
         var refusals = h.JudgeRequestFor("toolu_2").GetProperty("refusals");
         await Assert.That(refusals.GetProperty("complete").GetBoolean()).IsTrue();
         await Assert.That(refusals.GetProperty("entries").EnumerateArray().Single().GetProperty("tool_use_id").GetString()).IsEqualTo("toolu_1");
+    }
+
+    /// A call left to Codex auto-review may be refused where this bridge never sees it, so the session's
+    /// refusals are never complete afterwards.
+    [Test, NotInParallel(nameof(LocalPermissionBridgeJudgeTests))]
+    public async Task A_call_left_to_codex_auto_review_makes_later_refusals_incomplete() {
+        await using var h = new Harness(approvalsReviewer: "auto_review");
+        h.Answer("uncertain");
+        await h.StartAsync();
+
+        var yielded = await h.PostAsync("make release", "toolu_1", vendor: "codex");
+        await Assert.That(await yielded.Content.ReadAsStringAsync()).IsEqualTo("{}");
+
+        await h.PostAsync("make deploy", "toolu_2", vendor: "codex");
+
+        var complete = h.Judge.LogEntries
+            .Select(e => JsonDocument.Parse(e.RequestMessage.Body!).RootElement.GetProperty("refusals").GetProperty("complete").GetBoolean())
+            .ToArray();
+        await Assert.That(complete).IsEquivalentTo([true, false], CollectionOrdering.Matching);
+    }
+
+    /// A judge that failed has not judged: the call reaches a person rather than Codex's reviewer. An
+    /// uncertain judge did judge, so that call is left to Codex.
+    [Test, NotInParallel(nameof(LocalPermissionBridgeJudgeTests))]
+    public async Task A_failed_judge_keeps_an_auto_review_codex_call_for_a_person() {
+        await using var h = new Harness(approvalsReviewer: "auto_review");
+        h.Judge.Given(Request.Create().WithPath(PolicyJudgeClient.Route).UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(500));
+        await h.StartAsync();
+
+        var call = h.PostAsync("make release", "toolu_1", vendor: "codex");
+        h.Broker.TrySettle((await h.WaitPendingAsync()).RequestId, new PermissionDecision("allow", null, null), "allow", "app");
+
+        await Assert.That(await Harness.BehaviorOf(await call)).IsEqualTo("allow");
     }
 
     /// A resumed or adopted agent may have been refused before this daemon saw it, so its refusals are never complete.
