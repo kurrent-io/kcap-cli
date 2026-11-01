@@ -163,6 +163,9 @@ public sealed class LocalInstallController(
         _ = RememberDeclinedAsync();
     }
 
+    /// The install page's service option, left unticked: the answer the app's later offer would ask for again.
+    public void DeclineWindowsService() => _ = RememberDeclinedAsync();
+
     async Task RememberDeclinedAsync() {
         if (rememberWindowsServiceDeclined is null) return;
         try {

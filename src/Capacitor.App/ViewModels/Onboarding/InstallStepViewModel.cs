@@ -442,6 +442,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
 
         _installPressed = false;
         _startFailures.Clear();
+        if (WindowsServiceOffered && !RunAsWindowsService) _controller.DeclineWindowsService();
         await _controller.StartAsync(Search.Choice, ct, WindowsServiceOffered && RunAsWindowsService);
     }
 
