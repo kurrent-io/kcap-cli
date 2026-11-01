@@ -212,14 +212,16 @@ sealed class LocalServerTaskService(
         while (live(unit.Root) is not null && time.GetUtcNow() < deadline) await Task.Delay(ExitPollGap, time, ct);
 
         // Past the grace, /End and /Delete are still tried; one that times out fails the uninstall with the marker kept.
-        _schtasksQuick(LocalServerTaskUnit.EndArgs(unit));
+        // /End also fails for a task that is not running, so its failure only keeps the marker: a wrapper it could not
+        // end still checks the marker before launching again, and the next install clears it.
+        var ended = _schtasksQuick(LocalServerTaskUnit.EndArgs(unit)).ExitCode == 0;
 
         // A Task Scheduler that timed out answering the delete would stall the absence check too.
         var (exit, _, err) = _schtasksQuick(LocalServerTaskUnit.DeleteArgs(unit));
         if (exit != 0 && (exit == TimedOutExit || !ConfirmedAbsent(unit))) throw Failed(LocalServerTaskUnit.DeleteArgs(unit), exit, err);
 
         if (File.Exists(LocalServerTaskUnit.WrapperPath(home, unit))) File.Delete(LocalServerTaskUnit.WrapperPath(home, unit));
-        if (live(unit.Root) is null && _findServer(unit) is null) ClearStop(unit);
+        if (ended && live(unit.Root) is null && _findServer(unit) is null) ClearStop(unit);
     }
 
     const int TimedOutExit = -1;

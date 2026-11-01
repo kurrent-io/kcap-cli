@@ -116,6 +116,21 @@ public class LocalServerTaskServiceTests {
         await Assert.That(File.Exists(StopMarker)).IsTrue();
     }
 
+    /// <summary>A wrapper /End could not end may still be looping, so only an ended task lets the marker go, even with
+    /// the stack already down.</summary>
+    [Test]
+    [Arguments(0, false)]
+    [Arguments(1, true)]
+    public async Task A_quick_uninstall_keeps_the_marker_unless_the_task_was_ended(int endExit, bool markerKept) {
+        var schtasks = new Schtasks { Results = { ["/End"] = (endExit, "", endExit == 0 ? "" : "ERROR: The task is not running.") } };
+        Write(WrapperPath, WrapperText);
+
+        await Service(schtasks).UninstallWithinAsync(Unit, TimeSpan.FromMilliseconds(100), CancellationToken.None);
+
+        await Assert.That(File.Exists(StopMarker)).IsEqualTo(markerKept);
+        await Assert.That(File.Exists(WrapperPath)).IsFalse();
+    }
+
     /// <summary>A Task Scheduler too slow to answer the delete would be as slow to list its tasks, so the quick path
     /// fails at once rather than ask, and keeps the marker that stops the wrapper relaunching the server.</summary>
     [Test]
