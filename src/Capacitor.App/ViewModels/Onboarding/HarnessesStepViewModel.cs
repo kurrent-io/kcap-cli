@@ -155,10 +155,12 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
         ? " By default kcap leaves them out when it runs Claude or Codex for titles and summaries, so your subscription is used. Keep them if you pay per use."
         : " By default kcap leaves them out when it runs Claude or Codex for titles and summaries, so your subscription is used. Keep them if you pay per use.";
 
-    /// A local install keeps sessions on this machine, so there is no audience to choose.
-    public bool VisibilityVisible => _onLocalPath?.Invoke() != true;
+    /// A local server shares every session with its one user, so there is no audience to choose or store.
+    public bool VisibilityVisible => !Local;
 
     bool HasVisibilityChoice => Visibility is { } value && AppConfig.ValidVisibilities.Contains(value);
+
+    bool VisibilityAnswered => Local || HasVisibilityChoice;
 
     /// Set when the terminal exports a provider key a recording harness would otherwise have kcap scrub.
     public string? ProviderKeyNotice {
@@ -186,7 +188,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     public bool Idle => !Busy;
     public bool ChoicesEditable => Idle && !_installed;
     public bool ConnectionsSaved => _installed;
-    public bool CanContinue => _detected && Idle && HasVisibilityChoice;
+    public bool CanContinue => _detected && Idle && VisibilityAnswered;
     public bool CanSkip => CanContinue;
 
     public bool Satisfied {
@@ -222,7 +224,6 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
             }
             return;
         }
-        if (_onLocalPath?.Invoke() == true) Visibility = "private";
         this.RaisePropertyChanged(nameof(VisibilityVisible));
         Busy = true;
         try {
@@ -298,7 +299,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
         if (direction == WizardNavigation.Back) return true;
 
         if (!_detected || Busy) return false;
-        if (!HasVisibilityChoice) {
+        if (!VisibilityAnswered) {
             Message = PrivacyRequiredMessage;
             return false;
         }
@@ -334,7 +335,8 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     }
 
     async Task<bool> PersistAsync(CancellationToken ct) {
-        if (Visibility is not { } visibility || !AppConfig.ValidVisibilities.Contains(visibility)) return false;
+        if (!VisibilityAnswered) return false;
+        var visibility = Local ? null : Visibility;
         try {
             await ConfigMutator.MutateAsync(_config, c => {
                 var resolvedName = _resolveProfileName?.Invoke();
@@ -344,7 +346,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
                 var profile = c.Profiles.GetValueOrDefault(activeName) ?? new Profile();
 
                 profile = profile with {
-                    DefaultVisibility = visibility,
+                    DefaultVisibility = visibility ?? profile.DefaultVisibility,
                     // Only a question that was asked is answered: no key in the terminal leaves any
                     // earlier opt-in alone.
                     UseProviderApiKey = ProviderKeyNotice is null ? profile.UseProviderApiKey : UseProviderApiKey,

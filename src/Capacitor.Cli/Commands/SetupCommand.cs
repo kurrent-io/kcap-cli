@@ -959,8 +959,12 @@ sealed class SetupCommand(
 
         await Console.Out.WriteLineAsync();
 
+        // A local server records every session as shared with its one user, whatever the profile says,
+        // so there is no audience to ask about and no reason to overwrite what the profile holds.
+        var serverIsLocal = local is not null || LocalEndpoints.Read(localRoot).Classify(serverUrl) is LocalEndpointClass.Local;
+
         // Step 3: Default session visibility
-        AnsiConsole.Write(new Rule("[yellow]Step 3/6 — Default session visibility[/]").LeftJustified());
+        if (!serverIsLocal) AnsiConsole.Write(new Rule("[yellow]Step 3/6 — Default session visibility[/]").LeftJustified());
         _json?.Started(SetupJsonReport.Visibility);
 
         string defaultVisibility;
@@ -974,10 +978,13 @@ sealed class SetupCommand(
                   (await AppConfig.LoadProfileConfig(config))
                       .Profiles.GetValueOrDefault(activeProfile)?.DefaultVisibility ?? "org_public");
 
-        if (noPrompt) {
+        if (serverIsLocal) {
+            defaultVisibility = (GetArg(args, "--default-visibility")
+                              ?? (await AppConfig.LoadProfileConfig(config)).Profiles.GetValueOrDefault(activeProfile)?.DefaultVisibility
+                              ?? "org_public").ToLowerInvariant();
+        } else if (noPrompt) {
             defaultVisibility = (GetArg(args, "--default-visibility")
                               ?? (museAssistant ? MuseAssistantPosture.DefaultVisibility
-                                : local is not null ? LocalDefaultVisibility
                                 : VisibilityChoices(await ReadVisibilityOptionsAsync(serverUrl, activeProfile)).Preselected)).ToLowerInvariant();
 
             await Console.Out.WriteLineAsync($"  Default visibility: {defaultVisibility}");
@@ -1413,7 +1420,7 @@ sealed class SetupCommand(
 
         var grid = new Grid().AddColumn().AddColumn();
         grid.AddRow("[bold]Server[/]",     Markup.Escape(serverUrl));
-        grid.AddRow("[bold]Visibility[/]", Markup.Escape(defaultVisibility));
+        if (!serverIsLocal) grid.AddRow("[bold]Visibility[/]", Markup.Escape(defaultVisibility));
         grid.AddRow("[bold]Daemon[/]",     Markup.Escape(daemonName));
         if (museAssistant) grid.AddRow("[bold]Posture[/]", MuseAssistantPosture.SummaryValue);
 
@@ -2305,9 +2312,6 @@ sealed class SetupCommand(
 
         return [.. all.Where(h => h.Installed).Select(h => h.Id.VendorId)];
     }
-
-    /// <summary>A local installation has one user, so nobody else is there to read a shared session.</summary>
-    internal const string LocalDefaultVisibility = "private";
 
     internal const string MachineDaemonLine =
         "  [dim]No daemon service was set up: a service cannot carry the machine credential. Where "

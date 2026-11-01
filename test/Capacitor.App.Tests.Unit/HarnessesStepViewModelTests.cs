@@ -570,7 +570,8 @@ public class HarnessesStepViewModelTests {
     [Arguments(WizardNavigation.Skip, true)]
     [Arguments(WizardNavigation.Next, false)]
     [NotInParallel("AvaloniaSession")]
-    public async Task Local_agents_continue_skip_and_none_detected_all_pass_with_private(WizardNavigation direction, bool detectsAgents) {
+    public async Task Local_agents_continue_skip_and_none_detected_all_pass_keeping_the_stored_visibility(WizardNavigation direction, bool detectsAgents) {
+        ConfigMutator.Mutate(Config.Root, c => c with { Profiles = new() { ["default"] = new Profile { DefaultVisibility = "project" } } });
         var (left, visible, saved) = await AvaloniaSession.DispatchAsync(async () => {
             var h = new Harness(Config.Root, detectsAgents ? null : new Dictionary<HarnessId, DetectedAgent>(), local: true);
             await h.Vm.OnEnterAsync(CancellationToken.None);
@@ -588,7 +589,7 @@ public class HarnessesStepViewModelTests {
 
         await Assert.That(left).IsTrue();
         await Assert.That(visible).IsFalse();
-        await Assert.That(saved).IsEqualTo("private");
+        await Assert.That(saved).IsEqualTo("project");
     }
 
     [Test]

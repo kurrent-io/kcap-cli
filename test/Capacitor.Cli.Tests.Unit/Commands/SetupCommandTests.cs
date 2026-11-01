@@ -12,6 +12,7 @@ using WireMock.Server;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.Codex;
+using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.PrDetection;
 using Spectre.Console;
@@ -47,14 +48,14 @@ public class SetupCommandTests {
 
     SetupCommand Command(
             ISetupImportRunner imports, IBackgroundImportSpawner spawner, IHandoffAgentLauncher launcher,
-            string workdir, Func<IReadOnlyList<string>, string?>? pick = null) =>
+            string workdir, LocalRoot? localRoot = null, Func<IReadOnlyList<string>, string?>? pick = null) =>
         new(Config.Root, Resolutions.None(Config.Root),
             AuthFixtures.NewTokenStore(Config.Root), new RecordingBrowser(), Home,
             TestHarnesses.Under(Home, TestBinaries.Searching(Bin)),
             new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery,
             NoTelemetry.Facade, AuthEndpoints.Defaults, RealFacades(), imports, spawner, launcher,
             new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, NoLocalInstallation.Root), router: new GitProviderRouter(), workdir: new WorkingDirectory(workdir), TimeProvider.System,
-            TestBinaries.None, TestAccounts.None, TestPluginEnvironment.For(Home, Home.PathTo("plugin")), NoLocalInstallation.Root, FakeLocalInstallerFactory.Unused) {
+            TestBinaries.None, TestAccounts.None, TestPluginEnvironment.For(Home, Home.PathTo("plugin")), localRoot ?? NoLocalInstallation.Root, FakeLocalInstallerFactory.Unused) {
             PickHandoffVendor = pick ?? (_ => "Skip")
         };
 
@@ -1762,6 +1763,39 @@ public class SetupCommandTests {
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(runner.Captured?.DefaultVisibility).IsEqualTo(expected);
+    }
+
+    /// <summary>A server URL the local registry names is the local edition even without <c>--local</c>: setup asks it
+    /// for no visibility offer and leaves the profile's stored value in place</summary>
+    [Test]
+    [NotInParallel]
+    public async Task HandleAsync_NoPrompt_against_a_local_server_url_keeps_the_profiles_visibility() {
+        using var server = WireMockServer.Start();
+        StubAuthProviderNone(server);
+        server.Given(Request.Create().WithPath("/api/users/me/visibility-options").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json")
+                .WithBody("""{"options":[{"key":"private","label":"Only me"}],"default_visibility":"private"}"""));
+
+        var localRoot = new LocalRoot(Bin.CreateDir("local"));
+        LocalStateFiles.PublishRegistry(localRoot,
+            InstallRegistry.Empty.WithActive(new("0123456789abcdef0123456789abcdef", new Uri(server.Url!).Port, server.Url!, "1.3.0")));
+        await using var fixture = await HandleAsyncE2EFixture.CreateAsync("acme-local-visibility", "widgets", Config.Root);
+        await ConfigMutator.MutateAsync(Config.Root, c => c with {
+            Profiles = new Dictionary<string, Capacitor.Cli.Core.Config.Profile>(c.Profiles) {
+                [c.ActiveName] = (c.Profiles.GetValueOrDefault(c.ActiveName) ?? new Capacitor.Cli.Core.Config.Profile()) with { DefaultVisibility = "project" },
+            },
+        });
+
+        var runner = FakeImportRunner.Succeeding();
+        var exit = await Command(runner, FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(), fixture.RepoDir, localRoot)
+            .HandleAsync(BuildArgs("--server-url", server.Url!, "--no-prompt"));
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(runner.Captured?.DefaultVisibility).IsEqualTo("project");
+        await Assert.That(server.LogEntries.Select(e => e.RequestMessage.Path)).DoesNotContain("/api/users/me/visibility-options");
+
+        var saved = await AppConfig.LoadProfileConfig(Config.Root);
+        await Assert.That(saved.Profiles[saved.ActiveName].DefaultVisibility).IsEqualTo("project");
     }
 
     [Test]

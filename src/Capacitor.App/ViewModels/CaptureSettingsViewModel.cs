@@ -142,8 +142,10 @@ public sealed class CaptureSettingsViewModel : ReactiveObject, IDisposable {
 
     internal async Task SaveAsync() {
         if (Busy || Loading) return;
-        var visibility = !VisibilityVisible ? "private" : VisibilityEditable ? Visibility : _storedVisibility;
-        if (visibility is null || (VisibilityEditable && VisibilityVisible && !VisibilityOptions.Any(o => o.Value == visibility))) {
+        // No choice on screen saves none: a local server shares every session with its one user.
+        var keepVisibility = !VisibilityVisible || !VisibilityEditable;
+        var visibility = keepVisibility ? _storedVisibility : Visibility;
+        if (visibility is null || (!keepVisibility && !VisibilityOptions.Any(o => o.Value == visibility))) {
             Message = "Choose who can read new sessions.";
             return;
         }
@@ -164,8 +166,8 @@ public sealed class CaptureSettingsViewModel : ReactiveObject, IDisposable {
             await _store.SaveCaptureAsync(new Profile {
                 DefaultVisibility = visibility, AllowedRepos = allowedRepos, ExcludedRepos = excludedRepos,
                 AllowedPaths = allowedPaths, ExcludedPaths = excludedPaths,
-            }, _lifetime.Token, keepVisibility: VisibilityVisible && !VisibilityEditable);
-            if (VisibilityVisible && VisibilityEditable) {
+            }, _lifetime.Token, keepVisibility);
+            if (!keepVisibility) {
                 _storedVisibility = visibility;
                 _shownVisibility = visibility;
                 VisibilityNote = null;
