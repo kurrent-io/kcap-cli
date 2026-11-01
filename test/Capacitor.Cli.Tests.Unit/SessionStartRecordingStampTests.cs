@@ -65,6 +65,27 @@ public class SessionStartRecordingStampTests {
     }
 
     [Test]
+    public async Task A_machine_id_that_cannot_be_written_leaves_the_rest_of_the_identity() {
+        if (OperatingSystem.IsWindows()) return;
+
+        var work     = Home.CreateDir(".claude-work");
+        var dir      = Tmp.CreateDir("readonly-config");
+        var readOnly = new ConfigRoot(dir);
+        File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+        try {
+            var recording = SessionStartInventory.RecordingOf(
+                Body(Home.CreateFile(".claude-work/projects/-repo/abc.jsonl", "")), readOnly, TestHarnesses.Under(Home), HarnessId.Claude,
+                null, null, Env());
+
+            await Assert.That(recording.MachineId).IsNull();
+            await Assert.That(recording.ConfigDir).IsEqualTo(AccountDirectory.Normalize(work));
+        } finally {
+            File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    [Test]
     public async Task A_daemon_hosted_session_names_its_daemon() {
         var recording = SessionStartInventory.RecordingOf(
             Body(null), Config.Root, TestHarnesses.Under(Home), HarnessId.Claude, null, null,

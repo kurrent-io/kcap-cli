@@ -81,6 +81,28 @@ public class RecordingStoreTests {
     }
 
     [Test]
+    public async Task A_transcript_linked_into_another_store_names_that_store() {
+        Home.CreateDir(".claude/projects");
+        var other  = Home.CreateDir(".claude-work");
+        var target = Home.CreateDir(".claude-work/projects/-repo");
+        Directory.CreateSymbolicLink(Home.PathTo(".claude/projects/-repo"), target);
+        Home.CreateFile(".claude-work/projects/-repo/abc.jsonl", "");
+
+        var store = RecordingStore.Of(HarnessId.Claude, Home.PathTo(".claude/projects/-repo/abc.jsonl"), TestHarnesses.Under(Home));
+
+        await Assert.That(store).IsEqualTo(AccountDirectory.Normalize(other));
+    }
+
+    [Test]
+    public async Task An_acp_transcript_linked_out_of_its_root_is_unknown() {
+        Home.CreateDir(".copilot/session-state/abc");
+        var outside = Home.CreateFile("elsewhere/events.jsonl", "");
+        File.CreateSymbolicLink(Home.PathTo(".copilot/session-state/abc/events.jsonl"), outside);
+
+        await Assert.That(RecordingStore.Of(HarnessId.Copilot, Home.PathTo(".copilot/session-state/abc/events.jsonl"), TestHarnesses.Under(Home))).IsNull();
+    }
+
+    [Test]
     public async Task Acp_vendor_store_is_its_root() {
         var gemini = Home.CreateDir(".gemini");
 

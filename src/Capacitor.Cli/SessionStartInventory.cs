@@ -59,7 +59,16 @@ static class SessionStartInventory {
         var store      = RecordingStore.Of(vendor, transcript, harnesses);
         var account    = store is null ? null : RecordingStore.AccountFor(vendor, store, accounts?.TryLoad());
 
-        return new RecordingIdentity(new MachineId(config).Get(), DaemonName(env), account, store);
+        return new RecordingIdentity(MachineIdOrNull(config), DaemonName(env), account, store);
+    }
+
+    // A config directory nothing may write leaves the id unminted; the rest of the identity still stands.
+    static string? MachineIdOrNull(ConfigRoot config) {
+        try {
+            return new MachineId(config).Get();
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            return null;
+        }
     }
 
     // A terminal may export the daemon's name for its own use; only the pair a daemon launch sets marks a

@@ -72,7 +72,7 @@ public static class RecordingStore {
 
         if (store is null || Full(transcriptPath) is not { } path) return store;
 
-        var parent = Physical(Path.GetDirectoryName(path));
+        var parent = Path.GetDirectoryName(path);
         var cmp    = OperatingSystem.IsLinux() ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
 
         return parent is not null && (parent + Path.DirectorySeparatorChar).StartsWith(store + Path.DirectorySeparatorChar, cmp) ? store : null;
@@ -80,7 +80,8 @@ public static class RecordingStore {
 
     static bool IsJsonl(string path) => path.EndsWith(".jsonl", StringComparison.Ordinal);
 
-    static string? Full(string? path) => string.IsNullOrWhiteSpace(path) ? null : Path.GetFullPath(path);
+    // Resolved whole, so a transcript reached through a link into another store names that store.
+    static string? Full(string? path) => string.IsNullOrWhiteSpace(path) ? null : PhysicalPath.Of(path);
 
     static string? Physical(string? directory) => string.IsNullOrEmpty(directory) ? null : AccountDirectory.Normalize(directory);
 
