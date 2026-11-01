@@ -43,6 +43,7 @@ public sealed record DaemonRestartMarker(string RunningVersion, string Reason, D
 
     /// <summary>One-line status text for <c>kcap daemon status</c>.</summary>
     public string Describe() =>
-        $"restart pending: running {RunningVersion}, newer binary detected on disk "
-      + $"(queued {QueuedAt.LocalDateTime:yyyy-MM-dd HH:mm}, {Reason})";
+        $"restart pending: running {RunningVersion}, "
+      + (Reason == "self-detected" ? "newer binary detected on disk" : "restart requested")
+      + $" (queued {QueuedAt.LocalDateTime:yyyy-MM-dd HH:mm}, {Reason})";
 }

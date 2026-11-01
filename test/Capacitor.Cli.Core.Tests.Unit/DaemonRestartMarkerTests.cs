@@ -16,6 +16,14 @@ public class DaemonRestartMarkerTests {
     }
 
     [Test]
+    public async Task Only_a_self_detected_restart_claims_a_newer_binary() {
+        var when = DateTimeOffset.UnixEpoch;
+
+        await Assert.That(new DaemonRestartMarker("v1", "self-detected", when).Describe()).Contains("newer binary detected on disk");
+        await Assert.That(new DaemonRestartMarker("v1", "requested", when).Describe()).DoesNotContain("newer binary");
+    }
+
+    [Test]
     public async Task TryRead_returns_null_when_absent() {
         using var daemons = new TempDaemonStore();
 
