@@ -22,6 +22,7 @@ using Capacitor.Cli.Core.Instructions;
 using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.Mcp;
 using Capacitor.Cli.Core.Setup;
+using Capacitor.Cli.Core.Setup.Intelligence;
 using Capacitor.Cli.Core.Telemetry;
 using Capacitor.Cli.Core.Toml;
 using Capacitor.Cli.Harness.Antigravity;
@@ -561,6 +562,16 @@ sealed class SetupCommand(
     /// test so the handoff picker never opens a console prompt. A non-null result other than
     /// <c>"Skip"</c> must name one of the labels handed to it.</summary>
     internal Func<IReadOnlyList<string>, string?>? PickHandoffVendor { get; set; }
+
+    /// <summary>Null in production, where the terminal asks; set by a test.</summary>
+    internal IIntelligenceQuestions? IntelligenceQuestions { get; init; }
+
+    /// <summary>The harnesses to offer as the local agent, read from the daemon this run named.</summary>
+    internal Func<string, CancellationToken, Task<string[]>> HeadlessHarnesses {
+        get => field ??= (name, ct) =>
+            HeadlessHarnessSource.ReadAsync(DaemonStore.FromEnvironment(), name, time, () => HeadlessHarnessProbe.Detect(harnesses, binaries), ct);
+        init;
+    }
 
     /// <summary>Whether the edition choice offers the local edition, which runs on Apple silicon Macs and x64 Windows.</summary>
     internal bool LocalEditionAvailable { get; init; } = LocalPlatform.Current().SupportsLocalEdition;
@@ -1365,6 +1376,26 @@ sealed class SetupCommand(
 
         await Console.Out.WriteLineAsync();
 
+        // Unnumbered, like the browser leg: only the local edition asks it.
+        IntelligenceSetupResponse? intelligence = null;
+
+        if (local is not null) {
+            AnsiConsole.Write(new Rule("[yellow]Background intelligence[/]").LeftJustified());
+            _json?.Started(SetupJsonReport.Intelligence);
+
+            var canAskIntelligence = !noPrompt && !local.NoPrompt && AnsiConsole.Profile.Capabilities.Interactive;
+            intelligence = await new LocalIntelligenceStep(
+                request => IntelligenceSetupClient.ApplyAsync(http.Loopback(), serverUrl, request, CancellationToken.None),
+                () => HeadlessHarnesses(daemonName, CancellationToken.None),
+                Environment.GetEnvironmentVariable,
+                canAskIntelligence ? IntelligenceQuestions ?? new IntelligenceQuestions() : null,
+                line => AnsiConsole.MarkupLine($"  {Markup.Escape(line)}")).RunAsync(local);
+
+            _json?.Completed(outcome: intelligence?.Mode ?? "skipped");
+
+            await Console.Out.WriteLineAsync();
+        }
+
         // Step 6: Import past sessions
         AnsiConsole.Write(new Rule("[yellow]Step 6/6 — Import past sessions[/]").LeftJustified());
         _json?.Started(SetupJsonReport.Import);
@@ -1410,6 +1441,7 @@ sealed class SetupCommand(
             BrowserHandoffPrompt: browserAnswers.HandoffPrompt,
             BrowserBackground:   browserAnswers.Background,
             Skip:                importSkip,
+            Intelligence:        intelligence,
             // A run that cannot ask imports what the flags chose; it never opens a prompt to find out.
             ChooseProjects:      AnsiConsole.Profile.Capabilities.Interactive ? ChooseProjectsPrompt : null));
 
@@ -1707,6 +1739,7 @@ sealed class SetupCommand(
         BackgroundImportLaunch?       BrowserBackground = null,
         Func<bool>?                   PromptNameSessions = null,
         ImportSkip?                   Skip = null,
+        IntelligenceSetupResponse?    Intelligence = null,
         Func<IReadOnlyList<SetupImportChoice>, IReadOnlyList<SetupImportChoice>>? ChooseProjects = null);
 
     /// <summary><see cref="RunId"/> and <see cref="Handoff"/> are null whenever the foreground pass
@@ -1796,7 +1829,8 @@ sealed class SetupCommand(
             return new ImportStepResult(false, null, null, null);
         }
 
-        var skip = inputs.Skip ?? ImportSkip.None;
+        var skip    = inputs.Skip ?? ImportSkip.None;
+        var leftOut = 0;
 
         if (!inputs.NoPrompt && found is not null && inputs.ChooseProjects is { } choose) {
             var choices = SetupImportChoice.From(found, skip);
@@ -1812,8 +1846,13 @@ sealed class SetupCommand(
                 }
 
                 skip = SetupImportChoice.SkipFor(choices, kept, skip);
+                leftOut = choices.Where(c => !kept.Contains(c)).Sum(c => c.Sessions);
             }
         }
+
+        if (found is not null && inputs.Intelligence is { Mode: not IntelligenceModes.None } applied
+         && ImportCostLine(found.Repos.Sum(r => r.SessionCount) + found.UnmatchedCount - leftOut, applied) is { } cost)
+            AnsiConsole.MarkupLine($"  [dim]{Markup.Escape(cost)}[/]");
 
         if (!skip.IsEmpty) {
             AnsiConsole.MarkupLine($"  Leaving out of this import only: {Markup.Escape(string.Join(", ", skip.Labels))}.");
@@ -1847,7 +1886,8 @@ sealed class SetupCommand(
 
         var nameSessions = false;
 
-        if (inputs.PromptNameSessions is { } promptNameSessions) {
+        // The server titles them once a model resolves titles, so naming here would only spend the user's quota twice.
+        if (inputs.PromptNameSessions is { } promptNameSessions && inputs.Intelligence?.ResolvesTitles != true) {
             AnsiConsole.MarkupLine($"  [dim]{Markup.Escape(NameSessionsDisclosure)}[/]");
             nameSessions = promptNameSessions();
         }
@@ -1907,6 +1947,13 @@ sealed class SetupCommand(
 
         return new ImportStepResult(true, runId, handoff, pasteBlock);
     }
+
+    /// <summary>How long the server's background work on an import takes at its daily pace, or null when there is nothing
+    /// to say.</summary>
+    internal static string? ImportCostLine(int sessions, IntelligenceSetupResponse intelligence) =>
+        sessions <= 0 || intelligence.DaysFor(sessions) is not { } days ? null
+        : $"The server works through {sessions:N0} imported session{(sessions == 1 ? "" : "s")} at up to "
+        + $"{intelligence.BacklogSessionTouchesPerDay:N0} a day: about {days} day{(days == 1 ? "" : "s")}.";
 
     static void PrintDiscovery(int repos, int attributed, int unmatched) =>
         AnsiConsole.MarkupLine(

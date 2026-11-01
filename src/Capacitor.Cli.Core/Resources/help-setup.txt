@@ -71,6 +71,23 @@ Options:
                               runs the server while you are signed in. Under
                               --json that is a windows_service_declined or
                               windows_service_unavailable line, not a failure.
+  --intelligence <answer>     With --local: who runs the server's background
+                              model calls (titles, outcomes, evals). claude or
+                              codex runs your own agent through this machine's
+                              daemon; anthropic, openai, openrouter or cohere
+                              uses that provider with your API key, read from
+                              its variable (ANTHROPIC_API_KEY, OPENAI_API_KEY,
+                              OPENROUTER_API_KEY, COHERE_API_KEY) or asked for,
+                              never from the command line; none sets nothing up.
+                              Required by --no-prompt, which also needs a
+                              provider's key in its variable. A refused or
+                              unreachable answer never fails setup; kcap local
+                              intelligence answers it later.
+  --intelligence-model <m>    With --intelligence <provider>: the model to run.
+                              Without it the server's default runs.
+  --import-outcomes           With --local: imported sessions also get a summary
+                              of what each achieved (the default).
+                              --no-import-outcomes turns it off.
   --json                      With --no-prompt: write one JSON object per line
                               to stdout for the whole run, ending with "done"
                               or "failed", and the narration to stderr. See
@@ -231,7 +248,7 @@ Unattended setup: --no-prompt never asks. Each question has a flag; one with
 a safe default takes it, and one without is refused (exit 2) before anything
 changes.
 
-  kcap setup --local --single-user --yes --no-embeddings --no-prompt
+  kcap setup --local --single-user --yes --no-embeddings --intelligence claude --no-prompt
   KCAP_CLIENT_ID=… KCAP_CLIENT_SECRET=… \
     kcap setup --server-url https://acme.kcap.ai --no-prompt
 
@@ -246,6 +263,10 @@ changes.
                                         --no-embeddings
   Share usage data (local)              - (kcap config set      not shared,
                                         telemetry on first)     nothing saved
+  Who runs background intelligence      --intelligence,         required
+  (local)                               --intelligence-model
+  Summarise what imported sessions      --import-outcomes,      the server's
+  achieved (local)                      --no-import-outcomes    choice (yes)
   Default visibility                    --default-visibility    the workspace's
                                                                 default
                                                                 (org_public on
@@ -263,7 +284,8 @@ changes.
                                         --skip-import-folder
   Name imported sessions with your      -                       no
   coding agent (sends excerpts to its
-  model provider)
+  model provider; not asked once the
+  local server titles them)
   * except to reuse an installation  ** see Local edition below
 
   Signing in: a machine credential (KCAP_CLIENT_ID and KCAP_CLIENT_SECRET, from
@@ -281,11 +303,13 @@ changes.
   argument, or an answer a run that cannot ask needs); 130 interrupted.
 
   --json with --no-prompt: one JSON object per line on stdout, the narration
-  on stderr. Each step (server, sign_in, visibility, harnesses, daemon, import)
+  on stderr. Each step (server, sign_in, visibility, harnesses, daemon,
+  intelligence with --local, import)
   opens with step_started and closes with step_completed, carrying what it
   decided (server_url and provider; credential machine|stored|sign_in|none;
   visibility; harnesses; the daemon's name and service outcome, or skipped; the
-  import's outcome ran|skipped). With --local the install's own events come
+  intelligence mode the server applied, or skipped; the import's outcome
+  ran|skipped). With --local the install's own events come
   inside the server step. The last line is done (with server_url) or failed,
   naming its step and a code: the local install's codes, answer_required,
   invalid_arguments, server_unreachable, workspace_unavailable, sign_in_failed,
