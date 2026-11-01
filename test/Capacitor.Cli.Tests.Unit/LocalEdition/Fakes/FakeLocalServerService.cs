@@ -38,6 +38,9 @@ sealed class FakeLocalServerService(List<string> log, UserHome home) : ILocalSer
     /// <summary>Set by an install or start, cleared by a stop or uninstall.</summary>
     public bool Running { get; private set; }
 
+    /// <summary>What the last quick uninstall gave the server to stop.</summary>
+    public TimeSpan? StopGrace { get; private set; }
+
     public string Describe => "fake unit";
 
     void Log(string entry) {
@@ -96,6 +99,7 @@ sealed class FakeLocalServerService(List<string> log, UserHome home) : ILocalSer
     /// the caller to find.</summary>
     public Task UninstallWithinAsync(LocalServerUnit unit, TimeSpan grace, CancellationToken ct) {
         Log("uninstall-within");
+        StopGrace = grace;
         if (UninstallFailure is { } failure) throw failure;
 
         LoadedRoot = null;

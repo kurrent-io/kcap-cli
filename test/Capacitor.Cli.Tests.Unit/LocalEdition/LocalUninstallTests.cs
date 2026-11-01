@@ -538,6 +538,20 @@ public class LocalUninstallTests {
         await Assert.That(Directory.Exists(Dir("run"))).IsTrue();
     }
 
+    /// <summary>The waits before the stop come out of the same grace, so an app uninstaller's deadline holds; the server
+    /// still gets a moment to stop however long they took.</summary>
+    [Test]
+    public async Task The_waits_of_a_quick_uninstall_share_one_grace() {
+        await InstallAsync();
+
+        var uninstall = new LocalUninstall(Service, Home, Recorders) { QuickGrace = TimeSpan.FromSeconds(2) };
+        await Task.Delay(TimeSpan.FromMilliseconds(1500));
+        await Stack.RunAsync(_events, (lease, state, ct) => uninstall.RunAsync(lease, state, purge: false, force: true, Config.Directory, ct),
+            CancellationToken.None);
+
+        await Assert.That(Service.StopGrace).IsEqualTo(TimeSpan.FromSeconds(1));
+    }
+
     [Test]
     public async Task A_quick_uninstall_cannot_purge() {
         await InstallAsync();

@@ -12,9 +12,15 @@ namespace Capacitor.Cli.LocalEdition;
 /// (see <see cref="LocalPurge"/>).
 /// </summary>
 sealed class LocalUninstall(ILocalServerService service, UserHome home, IOutgoingRecorders recorders) {
-    /// <summary>Set, the server gets this long to stop before its unit is removed regardless, and what is still running
-    /// keeps <c>bin/</c> and <c>run/</c>. For an app uninstaller with a deadline; it cannot purge.</summary>
+    /// <summary>Set, the uninstall gets this long, counted from this object's creation and so including every wait for a
+    /// lock, before the server's unit is removed regardless; what is still running keeps <c>bin/</c> and <c>run/</c>.
+    /// For an app uninstaller with a deadline; it cannot purge.</summary>
     public TimeSpan? QuickGrace { get; init; }
+
+    readonly long _created = TimeProvider.System.GetTimestamp();
+
+    /// <summary>A server is asked to stop with at least this long, however much of the grace the locks took.</summary>
+    static readonly TimeSpan MinimumStopGrace = TimeSpan.FromSeconds(1);
 
     /// <summary>Throws <see cref="LocalLifecycleException"/> naming what stopped it; nothing is deleted before the
     /// stops are verified.</summary>
@@ -43,7 +49,12 @@ sealed class LocalUninstall(ILocalServerService service, UserHome home, IOutgoin
         var unit = LocalServerUnit.ForInstallation(lease.Root, installation.Port);
 
         if (QuickGrace is { } grace) {
-            if (!await LocalStackStop.RunWithinAsync(lease.Root, unit, service, home, grace, ct)) return LocalUninstallOutcome.Unloaded;
+            TimeSpan Left() {
+                var left = grace - TimeProvider.System.GetElapsedTime(_created);
+                return left > MinimumStopGrace ? left : MinimumStopGrace;
+            }
+
+            if (!await LocalStackStop.RunWithinAsync(lease.Root, unit, service, home, Left, ct)) return LocalUninstallOutcome.Unloaded;
 
             try {
                 LocalStackStop.Delete(lease.Root, "bin", "run");

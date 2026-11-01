@@ -43,16 +43,17 @@ static class LocalStackStop {
             throw new LocalLifecycleException($"The local server is stopped, but {live} under {root.Directory}. Nothing was removed.");
     }
 
-    /// <summary>Removes this root's unit after asking the server to stop and giving it <paramref name="grace"/>, without
-    /// waiting longer for it. A unit serving another root is left alone, as in <see cref="RunAsync"/>.</summary>
+    /// <summary>Removes this root's unit after asking the server to stop, without waiting past what <paramref name="left"/>
+    /// reports: the lock and the stop share that one budget. A unit serving another root is left alone, as in
+    /// <see cref="RunAsync"/>.</summary>
     /// <returns>Whether nothing of this root's stack is alive any more.</returns>
-    public static async Task<bool> RunWithinAsync(LocalRoot root, LocalServerUnit unit, ILocalServerService service, UserHome home, TimeSpan grace,
+    public static async Task<bool> RunWithinAsync(LocalRoot root, LocalServerUnit unit, ILocalServerService service, UserHome home, Func<TimeSpan> left,
         CancellationToken ct) {
-        using (await LocalUnitLock.AcquireAsync(home, grace, TimeProvider.System, ct)) {
+        using (await LocalUnitLock.AcquireAsync(home, left(), TimeProvider.System, ct)) {
             switch (LocalRootIdentity.Decide(root, service.Owner(unit))) {
                 case OwnerDecision.Ours:
                     try {
-                        await service.UninstallWithinAsync(unit, grace, CancellationToken.None);
+                        await service.UninstallWithinAsync(unit, left(), CancellationToken.None);
                     } catch (Exception ex) when (ex is not LocalLifecycleException) {
                         throw new LocalLifecycleException(
                             $"The {service.Describe} {service.Name(unit)} could not be unloaded ({ex.Message}). Nothing was removed.", ex);

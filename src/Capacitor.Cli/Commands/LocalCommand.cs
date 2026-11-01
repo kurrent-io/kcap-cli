@@ -16,8 +16,8 @@ sealed class LocalCommand(
 
     const string QuickFlag = "--quick";
 
-    /// <summary>What <c>--quick</c> gives the server to stop before its unit goes regardless. With the daemon's own step
-    /// before it, an app uninstaller's 30 seconds still cover it.</summary>
+    /// <summary>What <c>--quick</c> gives the whole uninstall, lock waits included, before the server's unit goes
+    /// regardless. With the app's daemon step before it, Velopack's 30-second uninstall hook still covers it.</summary>
     static readonly TimeSpan QuickGrace = TimeSpan.FromSeconds(10);
 
     public async Task<int> HandleAsync(string[] args) {
