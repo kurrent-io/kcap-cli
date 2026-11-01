@@ -46,15 +46,28 @@ public class SessionStartRecordingStampTests {
         accounts.Mutate(r => (r with { Accounts = [new VendorAccount("acct-1", HarnessId.Claude, AccountDirectory.Normalize(work), "Work", DateTimeOffset.UnixEpoch)] }, 0));
         var body = Body(Home.CreateFile(".claude-work/projects/-repo/abc.jsonl", ""));
 
-        var recording = SessionStartInventory.RecordingOf(body, Config.Root, TestHarnesses.Under(Home), HarnessId.Claude, accounts, Env());
+        var recording = SessionStartInventory.RecordingOf(body, Config.Root, TestHarnesses.Under(Home), HarnessId.Claude, null, accounts, Env());
 
         await Assert.That(recording.AccountId).IsEqualTo("acct-1");
+    }
+
+    /// <summary>An adapter that builds its own body passes the vendor's transcript separately; one outside
+    /// the vendor's root leaves the store unknown.</summary>
+    [Test]
+    public async Task A_transcript_passed_beside_the_body_is_checked_against_the_root() {
+        Home.CreateDir(".gemini");
+        var outside = Home.CreateFile("elsewhere/.gemini/tmp/p/chats/session.json", "");
+        var body    = Body(null);
+
+        SessionStartInventory.Stamp(body, Config.Root, TestHarnesses.Under(Home), HarnessId.Gemini, TimeProvider.System, outside);
+
+        await Assert.That(body["recording"]!.AsObject().ContainsKey("config_dir")).IsFalse();
     }
 
     [Test]
     public async Task A_daemon_hosted_session_names_its_daemon() {
         var recording = SessionStartInventory.RecordingOf(
-            Body(null), Config.Root, TestHarnesses.Under(Home), HarnessId.Claude, null,
+            Body(null), Config.Root, TestHarnesses.Under(Home), HarnessId.Claude, null, null,
             Env((HostedAgent.DaemonAgentIdVar, "agent-1"), (DaemonNameResolver.NameVar, "laptop")));
 
         await Assert.That(recording.DaemonName).IsEqualTo("laptop");
@@ -65,7 +78,7 @@ public class SessionStartRecordingStampTests {
     [Test]
     public async Task A_daemon_name_without_the_agent_marker_is_not_a_hosting_daemon() {
         var recording = SessionStartInventory.RecordingOf(
-            Body(null), Config.Root, TestHarnesses.Under(Home), HarnessId.Claude, null, Env((DaemonNameResolver.NameVar, "laptop")));
+            Body(null), Config.Root, TestHarnesses.Under(Home), HarnessId.Claude, null, null, Env((DaemonNameResolver.NameVar, "laptop")));
 
         await Assert.That(recording.DaemonName).IsNull();
     }

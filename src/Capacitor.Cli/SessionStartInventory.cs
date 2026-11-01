@@ -16,7 +16,8 @@ namespace Capacitor.Cli;
 /// </summary>
 static class SessionStartInventory {
     public static void Stamp(
-            JsonObject body, ConfigRoot config, HarnessRegistry harnesses, HarnessId vendor, TimeProvider time, AccountStore? accounts = null
+            JsonObject body, ConfigRoot config, HarnessRegistry harnesses, HarnessId vendor, TimeProvider time, string? transcriptPath = null,
+            AccountStore? accounts = null
         ) {
         try {
             var inv  = HarnessInventory.EvaluateCurrent(config, harnesses, time);
@@ -35,21 +36,26 @@ static class SessionStartInventory {
             // best-effort metadata — never break a hook
         }
 
-        StampRecording(body, config, harnesses, vendor, accounts);
+        StampRecording(body, config, harnesses, vendor, transcriptPath, accounts);
     }
 
-    public static void StampRecording(JsonObject body, ConfigRoot config, HarnessRegistry harnesses, HarnessId vendor, AccountStore? accounts = null) {
+    /// <param name="transcriptPath">The vendor's transcript when the body does not carry it as <c>transcript_path</c>:
+    /// without it, an ACP vendor's root is accepted unchecked.</param>
+    public static void StampRecording(
+            JsonObject body, ConfigRoot config, HarnessRegistry harnesses, HarnessId vendor, string? transcriptPath = null, AccountStore? accounts = null
+        ) {
         try {
-            body[RecordingIdentity.JsonName] = RecordingOf(body, config, harnesses, vendor, accounts, Environment.GetEnvironmentVariable).ToJson();
+            body[RecordingIdentity.JsonName] = RecordingOf(body, config, harnesses, vendor, transcriptPath, accounts, Environment.GetEnvironmentVariable).ToJson();
         } catch {
             // best-effort metadata — never break a hook
         }
     }
 
     internal static RecordingIdentity RecordingOf(
-            JsonObject body, ConfigRoot config, HarnessRegistry harnesses, HarnessId vendor, AccountStore? accounts, Func<string, string?> env
+            JsonObject body, ConfigRoot config, HarnessRegistry harnesses, HarnessId vendor, string? transcriptPath, AccountStore? accounts,
+            Func<string, string?> env
         ) {
-        var transcript = body["transcript_path"] is JsonValue v && v.TryGetValue<string>(out var path) ? path : null;
+        var transcript = transcriptPath ?? (body["transcript_path"] is JsonValue v && v.TryGetValue<string>(out var path) ? path : null);
         var store      = RecordingStore.Of(vendor, transcript, harnesses);
         var account    = store is null ? null : RecordingStore.AccountFor(vendor, store, accounts?.TryLoad());
 

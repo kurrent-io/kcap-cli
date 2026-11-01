@@ -37,6 +37,7 @@ public class RecordingStoreTests {
     [Arguments("elsewhere/abc.jsonl")]
     [Arguments(".claude/abc.jsonl")]
     [Arguments(".claude/history/-repo/abc.jsonl")]
+    [Arguments(".claude/projects/-repo/notes.txt")]
     public async Task An_unrecognised_claude_path_is_unknown(string relative) {
         Home.CreateDir(".claude");
         var transcript = Home.CreateFile(relative, "");
@@ -45,8 +46,11 @@ public class RecordingStoreTests {
     }
 
     [Test]
-    public async Task An_unrecognised_codex_path_is_unknown() {
-        var rollout = Home.CreateFile(".codex/sessions/rollout-abc.jsonl", "");
+    [Arguments(".codex/sessions/rollout-abc.jsonl")]
+    [Arguments(".codex/sessions/2026/10/30/rollout-notes.txt")]
+    [Arguments(".codex/sessions/2026/10/30/notes.jsonl")]
+    public async Task An_unrecognised_codex_path_is_unknown(string relative) {
+        var rollout = Home.CreateFile(relative, "");
 
         await Assert.That(RecordingStore.Of(HarnessId.Codex, rollout, TestHarnesses.Under(Home))).IsNull();
     }

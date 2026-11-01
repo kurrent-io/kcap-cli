@@ -363,7 +363,7 @@ sealed class CodexHookCommand(
             node["workspace_root"] = workspaceRoot;
         }
 
-        SessionStartInventory.Stamp(node.AsObject(), config, harnesses, HarnessId.Codex, clock.Time, accounts);
+        SessionStartInventory.Stamp(node.AsObject(), config, harnesses, HarnessId.Codex, clock.Time, accounts: accounts);
         var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, node.ToJsonString(), clock.Time);
 
         // Repo exclusion runs here (not above the event switch) so that the

@@ -45,7 +45,7 @@ public static class RecordingStore {
 
     // <store>/projects/<project>/<session>.jsonl
     static string? ClaudeStore(string? transcriptPath) {
-        if (Full(transcriptPath) is not { } path) return null;
+        if (Full(transcriptPath) is not { } path || !IsJsonl(path)) return null;
 
         var projects = Path.GetDirectoryName(Path.GetDirectoryName(path));
 
@@ -54,7 +54,7 @@ public static class RecordingStore {
 
     // <store>/sessions/YYYY/MM/DD/rollout-*.jsonl
     static string? CodexStore(string? rolloutPath) {
-        if (Full(rolloutPath) is not { } path || !Path.GetFileName(path).StartsWith("rollout-", StringComparison.Ordinal)) return null;
+        if (Full(rolloutPath) is not { } path || !Path.GetFileName(path).StartsWith("rollout-", StringComparison.Ordinal) || !IsJsonl(path)) return null;
 
         var day   = Path.GetDirectoryName(path);
         var month = Path.GetDirectoryName(day);
@@ -77,6 +77,8 @@ public static class RecordingStore {
 
         return parent is not null && (parent + Path.DirectorySeparatorChar).StartsWith(store + Path.DirectorySeparatorChar, cmp) ? store : null;
     }
+
+    static bool IsJsonl(string path) => path.EndsWith(".jsonl", StringComparison.Ordinal);
 
     static string? Full(string? path) => string.IsNullOrWhiteSpace(path) ? null : Path.GetFullPath(path);
 
