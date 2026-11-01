@@ -123,10 +123,62 @@ Done 2026-10-31: the published v1.4.1-beta.2 local bundle run in the foreground 
 
 - [x] Run a local-edition kcap-server with `Evals:ServerRunner:LocalAgent:Harness=claude`, a daemon from this branch against it, request a manual eval or title, and confirm the log no longer repeats `EvalQueue: the local agent did not start <runId>: no_daemon`. Record the result, or why it could not be run, in the PR
 
-## PR 2: setup asks who runs background intelligence (planned, not in PR 1)
+## PR 2: setup asks who runs background intelligence
 
-- Desktop app wizard step between Harnesses and Import: "who runs background intelligence" with my local agent (one radio per ticked harness the machine can run headlessly; the daemon's advertised list once it is connected, a local probe before), a provider with my API key (vendor, defaulted model, key; one-call probe before anything is recorded), and not now
-- `kcap setup --local` asks the same question, with flags for a run that cannot ask; a key is read from the environment or a prompt, never argv; `--no-prompt` without an answer refuses
-- Both post to the route kcap-server shipped in `src/Capacitor.Api.Public/Setup/IntelligenceSetupHandlers.cs`
-- Import step: drop "title with your local agent" when a vendor is configured, add "also summarise what each session achieved" (on by default, written through the same route), and a cost line with days at the daily budget
-- README sync for the new flags
+**Server contract:** `POST /api/admin/intelligence`, kcap-server `src/Capacitor.Api.Public.Abstractions/Setup/`. Request `{mode, harness?, vendor?, model?, api_key?, import_outcomes?}`; response `{mode, harness, vendor, import_outcomes, backlog_session_touches_per_day, resolving}`; a refusal is 400 with `{"error": "<code>"}` (`unknown_mode`, `not_offered`, `unknown_harness`, `unknown_vendor`, `key_required`, `model_required`, `key_rejected: …`, `key_pinned_above_store: …`, `import_outcomes_pinned_above_store`). The local edition authenticates nobody, so the CLI posts over the loopback lane with no bearer.
+
+**Answers:** one token names the whole answer: `claude` or `codex` (the local agent), `anthropic`, `openai`, `openrouter` or `cohere` (a provider), `none`. A provider's key is read from its own variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `COHERE_API_KEY`) or a hidden prompt, never from argv. OpenAI has no server default model, so it needs `--model`.
+
+### Task 7: Core contract and probe
+
+**Files:** Create `src/Capacitor.Cli.Core/Setup/Intelligence/` (`IntelligenceAnswer.cs`, `IntelligenceSetupRequest.cs`, `IntelligenceSetupResponse.cs`, `IntelligenceSetupOutcome.cs`, `IntelligenceSetupClient.cs`, `HeadlessHarnessProbe.cs`); modify `Models.cs` (`[JsonSerializable]`). Tests beside them in `test/Capacitor.Cli.Core.Tests.Unit/Setup/Intelligence/`.
+
+- [ ] Failing tests: an answer token parses to its mode, harness or vendor and refuses anything else; the request serializes snake_case; the client maps 200 to applied, 400 `{"error"}` to refused with the code, anything else to failed (WireMock); the probe lists `claude`/`codex` only where `LaunchCommand` resolves, ordinal-sorted
+- [ ] Implement; commit
+
+### Task 8: The daemon reports its headless harnesses locally
+
+**Files:** `src/Capacitor.Cli.Core/LocalIpc/StatusIpc.cs` (`DaemonInfoDto.HeadlessVendors`, trailing), `src/Capacitor.Cli.Daemon/Services/DaemonStatusIpc.cs`, `ServerConnection.cs` (`AdvertisedHeadlessVendors()`, shared with `BuildDaemonConnect`), `LocalControlCapabilities.cs` (`headless/1`). Tests: the status snapshot carries the list once the handler is wired and `[]` before; the capability pin.
+
+- [ ] Failing tests, implement, commit
+
+### Task 9: `kcap local intelligence`
+
+**Files:** Create `src/Capacitor.Cli/Commands/LocalIntelligenceCommand.cs`, `LocalIntelligenceArgs.cs`; modify `LocalCommand.cs`, `help-local.txt`.
+
+`kcap local intelligence <answer> [--model <model>] [--import-outcomes | --no-import-outcomes] [--json]` posts to the active local server. Exit 0 applied, 2 refused by the server or by the arguments, 1 unreachable or no local server. `--json` prints one line: `{"ok":true,"mode",…,"import_outcomes","backlog_session_touches_per_day","resolving"}` or `{"ok":false,"error"}`. A provider with no key in its variable prompts when interactive and not `--json`, else refuses naming the variable.
+
+- [ ] Failing tests: argument parsing (unknown answer, `--model` without a value, both outcome flags, a key-looking argument refused); key resolution (variable, prompt, refusal); the JSON line for each outcome
+- [ ] Implement; commit
+
+### Task 10: `kcap setup --local` asks
+
+**Files:** `LocalSetupArgs.cs` (`--intelligence`, `--intelligence-model`, `--import-outcomes`, `--no-import-outcomes`), `SetupCommand.cs` (a step between the daemon and the import), a `LocalIntelligenceStep.cs` holding the question; `help-setup.txt`.
+
+- Interactive: one choice per harness the machine runs headlessly (the daemon's `headless_vendors` when it is connected and advertises `headless/1`, the local probe before), "A provider, with my API key", "Not now". A provider asks the vendor, the model (defaulted, required for OpenAI) and the key. Any answer but not now then asks "Also summarise what each imported session achieved?" (default yes). A refusal is shown and the question asked again; an unreachable server warns and moves on
+- `--no-prompt` (or `--json --no-prompt`) without `--intelligence` is refused at parse time, before anything runs
+- The import step drops the naming question once a model resolves titles, and prints the cost line: "Background work on N sessions runs up to B a day: about D days"
+
+- [ ] Failing tests: parse refusals; the step's decision table (flag answer, interactive, cannot ask); the import step skips naming when titles resolve; the cost line's arithmetic
+- [ ] Implement; commit
+
+### Task 11: The desktop wizard step
+
+**Files:** `WizardStep.cs` (`Intelligence` between `Harnesses` and `Import`), create `ViewModels/Onboarding/IntelligenceStepViewModel.cs`, `IntelligenceOption.cs`, `Views/Onboarding/IntelligencePaneView.axaml`; `KcapCli.cs` (`LocalIntelligenceAsync`, the key in the child's environment), `WizardComposition.cs`, `OnboardingPaneView.axaml`.
+
+- Passes through off the local path. Radios: one per harness ticked on the Harnesses page that the machine runs headlessly, a provider (vendor, model defaulted, key), not now. Next posts; a refusal stays on the page with the server's reason, an unreachable server too
+- [ ] Failing tests: the offered harnesses (ticked ∩ headless, daemon list over probe); Next posts the answer and holds on a refusal; the key never reaches the argument list
+- [ ] Implement; commit
+
+### Task 12: The Import step follows the answer
+
+**Files:** `HistoryStepViewModel.cs`, `HistoryPaneView.axaml`, `WizardComposition.cs`.
+
+- Titling is no longer offered once the answer resolves titles; "Also summarise what each session achieved" shows when a model is configured, on by default, and is written through the same route before the import starts; a cost line gives days at the daily budget for the selected sessions
+- [ ] Failing tests; implement; commit
+
+### Task 13: Docs, suites, publish, end-to-end
+
+- [ ] README (`## Getting started` and the `setup` and `local` sections), help text
+- [ ] Core, Cli and App suites; `dotnet publish -c Release` with no IL2026/IL3050
+- [ ] End-to-end against an isolated local server (`KCAP_LOCAL_ROOT` under a short `/private/tmp` path, `Local__Port`): `kcap local intelligence claude --json` and `none`, and a refused provider key; record the result in the PR
