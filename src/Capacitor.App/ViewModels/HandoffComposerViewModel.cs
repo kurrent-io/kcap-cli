@@ -3,6 +3,7 @@ using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using Capacitor.App.Services;
+using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Handoff;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Remote.Models;
@@ -25,6 +26,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
     public const string ProbeFailed = "Your local kcap daemon didn't answer, so the starting point couldn't be checked";
     public const string InvalidTarget = "There's no branch or commit to start this hand-off from";
     public const string SignInToHandOff = "Sign in to your kcap server to hand off";
+    public const string DaemonOnAnotherServer = "Your local kcap daemon is connected to a different kcap server, so it can't take this hand-off";
     public const string Checking = "Checking where the new session would start…";
     public const string WaitingForDaemon = "Waiting for your local kcap daemon…";
     const string StripPrefix = "New session in a fresh worktree";
@@ -56,17 +58,21 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
     readonly Action<string> _closeFailedLaunch;
     readonly Func<string, PinPresentation, Task<bool>> _reopenSource;
     readonly IAppNotifier _notifier;
+    readonly string? _appServerUrl;
+    readonly Action<int>? _onUnauthorized;
     readonly CancellationToken _shutdown;
     readonly HandoffChoicesViewModel _choices;
     readonly CompositeDisposable _disposables = new();
 
     volatile AttachStatus? _attach;
+    volatile DaemonStatusDto? _snapshot;
     volatile bool _signedIn;
     volatile bool _serverConnected;
     volatile bool _signedOut;
+    volatile int _laneEpoch;
     bool _initialized;
     bool _disposed;
-    bool _sourceChangedWhileLaunching;
+    bool _recheckAfterLaunch;
     IReadOnlySet<string>? _features;
     HandoffContextDto? _context;
     string? _checkout;
@@ -80,14 +86,18 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
     /// <param name="reopenSource">MainWindowViewModel.ReopenServerSessionAsync, after a delayed
     /// failure; the reopened session's composer takes the draft back.</param>
     /// <param name="notifier">Says where the draft went when the source was not reopened.</param>
+    /// <param name="appServerUrl">The app's server: the local daemon must be connected to it, since the
+    /// launch reaches the daemon through that server.</param>
+    /// <param name="onUnauthorized">IServerLane's ParkSignedOut, for a 401 on an upload or a launch.</param>
     public HandoffComposerViewModel(
             RepoSessionDto session, IDaemonClientService daemon, ILaunchClient launch, IServerSessionsService sessions,
             ILocalControlOps ops, LocalCheckoutFinder finder, Func<CancellationToken, Task<IReadOnlyList<string>>> candidateRoots,
             HandoffDrafts drafts, IObservable<ServerLaneStatus> laneStatus, IAttachmentUploader uploader, IAgentDirectory? directory,
             Func<int> navigationGeneration, Action<string, AgentOrigin, int> openSessionIfCurrent,
             Action<string> closeFailedLaunch, Func<string, PinPresentation, Task<bool>> reopenSource, IAppNotifier notifier,
+            string? appServerUrl,
             IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null,
-            CancellationToken shutdown = default) {
+            Action<int>? onUnauthorized = null, CancellationToken shutdown = default) {
         _session = session;
         _daemon = daemon;
         _launch = launch;
@@ -103,33 +113,48 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
         _closeFailedLaunch = closeFailedLaunch;
         _reopenSource = reopenSource;
         _notifier = notifier;
+        _appServerUrl = appServerUrl;
+        _onUnauthorized = onUnauthorized;
         _shutdown = shutdown;
         _choices = new HandoffChoicesViewModel(daemon, session.Vendor, modelCatalog).DisposeWith(_disposables);
 
         daemon.Status.Subscribe(s => _attach = s).DisposeWith(_disposables);
+        daemon.Snapshots.Subscribe(s => _snapshot = s).DisposeWith(_disposables);
         var connected = laneStatus.Select(s => s.State == ServerLaneState.Connected);
         connected.Subscribe(c => _signedIn = _serverConnected = c).DisposeWith(_disposables);
-        laneStatus.Subscribe(s => _signedOut = s.State == ServerLaneState.SignedOut).DisposeWith(_disposables);
-        // An empty feature list read while disconnected says nothing about the server.
+        laneStatus.Subscribe(s => {
+            _signedOut = s.State == ServerLaneState.SignedOut;
+            _laneEpoch = s.Epoch;
+        }).DisposeWith(_disposables);
+        // A reconnect may reach an upgraded server or another account, so what the last connection
+        // read is read again.
         connected
             .DistinctUntilChanged()
             .Skip(1)
-            .Where(c => c)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(change => { if (_initialized && !IsLaunching) _ = ReevaluateAsync(CancellationToken.None); })
+            .Subscribe(c => {
+                if (c) {
+                    _features = null;
+                    _context = null;
+                }
+                Recheck();
+            })
             .DisposeWith(_disposables);
         // HandoffDrafts publishes on the UI thread.
         drafts.FailedFor
             .Where(id => id == session.SessionId)
             .Subscribe(_ => TakeBackFailedDraft())
             .DisposeWith(_disposables);
-        // A daemon that connects, restarts or updates under an open composer answers again.
+        // A daemon that connects, restarts, updates or moves server under an open composer answers again.
         daemon.Status
             .Select(s => (s.State, Handoff: HasHandoff(s)))
             .DistinctUntilChanged()
             .Skip(1)
+            .Select(_ => Unit.Default)
+            .Merge(daemon.Snapshots.Select(s => s.Daemon.ServerUrl).DistinctUntilChanged().Skip(1).Select(_ => Unit.Default))
+            .Merge(_choices.WhenAnyValue(x => x.Harnesses).Select(HasAvailableHarness).DistinctUntilChanged().Skip(1).Select(_ => Unit.Default))
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(change => { if (_initialized && !IsLaunching) _ = ReevaluateAsync(CancellationToken.None); })
+            .Subscribe(_ => Recheck())
             .DisposeWith(_disposables);
 
         // The upload gate Start re-runs, published on the UI thread for the attach button.
@@ -241,8 +266,10 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
         private set => this.RaiseAndSetIfChanged(ref _isLaunching, value);
     }
 
-    /// Takes back a draft a failed launch left for this session before anything is read.
+    /// Takes back what an earlier composer of this session left unsent, then a draft a failed launch
+    /// left, before anything is read.
     public Task InitializeAsync(CancellationToken ct) {
+        if (_drafts.TakeUnsent(_session.SessionId) is { } unsent) Apply(unsent);
         if (_drafts.TakeFailed(_session.SessionId) is { } failed) Apply(failed);
         _initialized = true;
         return ReevaluateAsync(ct);
@@ -254,8 +281,13 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
         if (_disposed || session == _session) return;
         _session = session;
         _context = null;
-        if (!_initialized) return;
-        if (IsLaunching) { _sourceChangedWhileLaunching = true; return; }
+        Recheck();
+    }
+
+    /// A check asked for during a launch runs once the launch returns.
+    void Recheck() {
+        if (!_initialized || _disposed) return;
+        if (IsLaunching) { _recheckAfterLaunch = true; return; }
         _ = ReevaluateAsync(CancellationToken.None);
     }
 
@@ -312,41 +344,59 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
             case { State: AttachState.Unreachable }: return new(DaemonNotRunning);
             case { } status when !HasHandoff(status): return new(DaemonTooOld);
         }
+        if (_snapshot is not { } snapshot) return new(null, Waiting: true);
+        if (!ServerIdentity.SameServer(snapshot.Daemon.ServerUrl, _appServerUrl)) return new(DaemonOnAnotherServer);
+        if (!HasAvailableHarness(_choices.Harnesses)) return new(HomeViewModel.NoHarnessesNotice(null));
 
         if (_context is null) {
             var read = await _sessions.ReadHandoffContextAsync(_session.SessionId, ct);
             if (read is not { Outcome: ServerReadOutcome.Ok, Context: { } fetched })
-                return new(accessUnknown && read.Outcome == ServerReadOutcome.Unavailable ? NeedsFullAccess : ContextUnavailable);
+                return new(read.Outcome switch {
+                    ServerReadOutcome.Unauthorized => SignInToHandOff,
+                    ServerReadOutcome.Unavailable when accessUnknown => NeedsFullAccess,
+                    _ => ContextUnavailable,
+                });
             _context = fetched;
         }
         if (_context is not { RepoOwner: { Length: > 0 } owner, RepoName: { Length: > 0 } name } context)
             return new(NoRepository);
 
         var candidates = await Task.Run(() => _candidateRoots(ct), ct);
-        if (await _finder.FindAsync(owner, name, _session.Cwd, candidates, ct) is not { } checkout)
-            return new(NoCheckout(owner, name));
+        var checkouts = await _finder.FindAllAsync(owner, name, _session.Cwd, candidates, ct);
+        if (checkouts.Count == 0) return new(NoCheckout(owner, name));
 
         var target = TargetFor(context, context.Branch ?? _session.Branch);
-        var request = new HandoffProbeRequestDto(
-            checkout, owner, name, target.Branch, target.PullRequestNumber, target.HeadIsFork, target.HeadOwner,
-            target.HeadRepo, context.SessionCommits);
-        HandoffProbeReplyDto? reply;
-        try {
-            reply = await Task.Run(() => _ops.ProbeHandoffAsync(request, ct), ct);
-        } catch (Exception ex) when (ex is not OperationCanceledException) {
-            reply = null;
-        }
+        // A checkout the daemon refuses as the wrong repository or out of bounds may have a sibling it takes.
+        Evaluation? refused = null;
+        foreach (var checkout in checkouts) {
+            var request = new HandoffProbeRequestDto(
+                checkout, owner, name, target.Branch, target.PullRequestNumber, target.HeadIsFork, target.HeadOwner,
+                target.HeadRepo, context.SessionCommits);
+            HandoffProbeReplyDto? reply;
+            try {
+                reply = await Task.Run(() => _ops.ProbeHandoffAsync(request, ct), ct);
+            } catch (Exception ex) when (ex is not OperationCanceledException) {
+                reply = null;
+            }
 
-        return reply switch {
-            { Refusal: HandoffRefusals.RepoMismatch } => new(NoCheckout(owner, name)),
-            { Refusal: HandoffRefusals.RepoNotAllowed } => new(NotAllowed(checkout)),
-            { Refusal: { } } => new(InvalidTarget),
-            { FetchError: { } detail } => new(OriginUnreachable(detail)),
-            { Start: { } start, Completeness: var completeness, MissingCommits: var missing } =>
-                new(null, start, checkout, StripLabelFor(start, target.Branch), CompletenessNoteFor(completeness, missing)),
-            _ => new(ProbeFailed),
-        };
+            switch (reply) {
+                case { Refusal: HandoffRefusals.RepoMismatch }:
+                    refused ??= new(NoCheckout(owner, name));
+                    continue;
+                case { Refusal: HandoffRefusals.RepoNotAllowed }:
+                    refused ??= new(NotAllowed(checkout));
+                    continue;
+                case { Refusal: { } }: return new(InvalidTarget);
+                case { FetchError: { } detail }: return new(OriginUnreachable(detail));
+                case { Start: { } start, Completeness: var completeness, MissingCommits: var missing }:
+                    return new(null, start, checkout, StripLabelFor(start, target.Branch), CompletenessNoteFor(completeness, missing));
+                default: return new(ProbeFailed);
+            }
+        }
+        return refused!;
     }
+
+    static bool HasAvailableHarness(IReadOnlyList<HarnessOption> options) => options.Any(o => o.Available);
 
     async Task StartAsync() {
         // Execute() does not gate on CanExecute.
@@ -356,13 +406,15 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
             var draft = _choices.Capture(Text, Tray.Snapshot());
             IReadOnlyList<string>? attachmentIds = null;
             if (draft.Attachments.Count > 0) {
-                if (!HomeViewModel.CanAttachTo(_signedIn, _attach?.Capabilities, [], null, _daemon.DaemonName, remote: false)) {
+                if (!CanAttachNow()) {
                     Error = HomeViewModel.AttachHintFor(_signedIn, false);
                     return;
                 }
+                var uploadEpoch = _laneEpoch;
                 UploadOutcome upload;
                 try { upload = await _uploader.UploadAsync(draft.Attachments, _shutdown); }
                 catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { return; }
+                if (upload.Kind == UploadKind.Unauthorized) _onUnauthorized?.Invoke(uploadEpoch);
                 var uploadError = upload.Kind switch {
                     UploadKind.Uploaded => null,
                     UploadKind.Unauthorized => HomeViewModel.SignInToAttach,
@@ -373,6 +425,11 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
                     return;
                 }
                 if (uploadError is not null) { Error = uploadError; return; }
+                // The upload is long enough for the daemon to have restarted without attachments.
+                if (!CanAttachNow()) {
+                    Error = HomeViewModel.AttachHintFor(_signedIn, false);
+                    return;
+                }
                 attachmentIds = upload.Ids;
             }
 
@@ -383,18 +440,27 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
                 Handoff: start with { SourceSessionId = _session.SessionId });
             // Captured before the call: a navigation while it is in flight must keep the launch from opening.
             var generation = _navigationGeneration();
+            var launchEpoch = _laneEpoch;
             var outcome = await _launch.StartAsync(request, _shutdown);
             // A composer torn down during the call keeps nothing: the source's next composer takes
             // whatever comes back.
             if (!outcome.Started) {
+                if (outcome.Unauthorized) _onUnauthorized?.Invoke(launchEpoch);
                 var refusal = outcome.Unauthorized ? SignInToHandOff : HandoffFailureText.For(outcome.Error);
                 if (_disposed) {
                     _drafts.HoldFailed(_session.SessionId, draft with { Error = refusal });
                     return;
                 }
                 Error = refusal;
+                // A refusal may be the source going away, which only a fresh context read shows.
+                _context = null;
                 await ReevaluateAsync(CancellationToken.None);
                 return;
+            }
+            // Accepted is spent, whatever comes back with it: a retry would start a second successor.
+            if (!_disposed) {
+                Error = null;
+                ClearSent(draft);
             }
             if (HomeViewModel.NormalizeAgentId(outcome.AgentId) is not { } agentId) {
                 if (!_disposed) Error = HomeViewModel.UnusableIdMessage;
@@ -427,11 +493,6 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
                 return;
             }
 
-            if (!_disposed) {
-                Error = null;
-                Text = "";
-                Tray.Clear();
-            }
             if (hold == HandoffHold.Pending)
                 _directory?.AddPlaceholder(agentId, draft.Vendor, checkout, AgentRow.TitleFromPrompt(draft.Text), draft.Model);
             var opens = _navigationGeneration() == generation;
@@ -439,11 +500,27 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
             if (opens) openedUnder = _navigationGeneration();
         } finally {
             IsLaunching = false;
-            if (_sourceChangedWhileLaunching && !_disposed) {
-                _sourceChangedWhileLaunching = false;
-                _ = ReevaluateAsync(CancellationToken.None);
+            if (!_disposed) {
+                // A failure of an earlier launch from this source that arrived during this one.
+                if (_drafts.TakeFailed(_session.SessionId) is { } failed) {
+                    Apply(failed);
+                    _recheckAfterLaunch = true;
+                }
+                if (_recheckAfterLaunch) {
+                    _recheckAfterLaunch = false;
+                    _ = ReevaluateAsync(CancellationToken.None);
+                }
             }
         }
+    }
+
+    bool CanAttachNow() =>
+        HomeViewModel.CanAttachTo(_signedIn, _attach?.Capabilities, [], null, _daemon.DaemonName, remote: false);
+
+    /// Only what the launch sent: text typed and files staged while it was in flight are the next one's.
+    void ClearSent(HandoffDraft draft) {
+        if (Text == draft.Text) Text = "";
+        Tray.RemoveAll([.. draft.Attachments.Select(f => f.Id)]);
     }
 
     public static string NotStartedNotice(string title, string reason) =>
@@ -525,14 +602,18 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
         };
     }
 
+    /// Only Complete proves all the work is there; a value this build does not know reads as unconfirmed.
     internal static string? CompletenessNoteFor(string? completeness, IReadOnlyList<string>? missingCommits) => completeness switch {
+        nameof(HandoffCompleteness.Complete) => null,
         nameof(HandoffCompleteness.PartlyMissing) => $"Part of the session's work is missing: {missingCommits?.Count ?? 0} commits",
-        nameof(HandoffCompleteness.Unconfirmed) => "The session may have left work that isn't pushed",
-        _ => null,
+        _ => "The session may have left work that isn't pushed",
     };
 
     public void Dispose() {
         if (_disposed) return;
+        // A launch in flight settles its own draft; anything else typed or staged waits for the next composer.
+        if (_initialized && !IsLaunching && (Text.Length > 0 || Tray.Count > 0))
+            _drafts.KeepUnsent(_session.SessionId, _choices.Capture(Text, Tray.Snapshot()));
         _disposed = true;
         _evaluation?.Cancel();
         _evaluation?.Dispose();

@@ -18,10 +18,12 @@ sealed class FakeHandoffProbeOps : ILocalControlOps {
     public HandoffProbeReplyDto? Next = Reply(AttachedStart);
     /// When set, a probe answers once the test completes it rather than with Next.
     public TaskCompletionSource<HandoffProbeReplyDto?>? Gate;
+    /// When set, answers each probe by its request instead of with Next.
+    public Func<HandoffProbeRequestDto, HandoffProbeReplyDto?>? Answer;
 
     public Task<HandoffProbeReplyDto?> ProbeHandoffAsync(HandoffProbeRequestDto request, CancellationToken ct) {
         Probes.Add(request);
-        return Gate is { } gate ? gate.Task : Task.FromResult(Next);
+        return Gate is { } gate ? gate.Task : Task.FromResult(Answer is { } answer ? answer(request) : Next);
     }
 
     public Task<StopAgentResult> StopAgentAsync(string agentId, bool force, CancellationToken ct) => throw new NotSupportedException();

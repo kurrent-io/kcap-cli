@@ -14,13 +14,13 @@
                            Foreground="{StaticResource KcapMutedBrush}"
                            IsVisible="{Binding StripLabel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 <views:LaunchChipsView x:Name="HandoffChips" DataContext="{Binding Choices}" />
-                <StackPanel x:Name="HandoffCompleteness" Orientation="Horizontal" Spacing="6"
-                            IsVisible="{Binding WorkMissingOrUnconfirmed}">
+                <Grid x:Name="HandoffCompleteness" ColumnDefinitions="Auto,*" ColumnSpacing="6"
+                      IsVisible="{Binding WorkMissingOrUnconfirmed}">
                     <views:AppIcon Kind="TriangleAlert" Size="12" VerticalAlignment="Center"
                                    Foreground="{StaticResource KcapWarningBrush}" />
-                    <TextBlock Text="{Binding CompletenessNote}" FontSize="12.5" TextWrapping="Wrap" VerticalAlignment="Center"
+                    <TextBlock Grid.Column="1" Text="{Binding CompletenessNote}" FontSize="12.5" TextWrapping="Wrap" VerticalAlignment="Center"
                                Foreground="{StaticResource KcapMutedBrush}" />
-                </StackPanel>
+                </Grid>
             </StackPanel>
 
             <views:AttachmentChipStrip x:Name="HandoffChipStrip" Tray="{Binding Tray}"

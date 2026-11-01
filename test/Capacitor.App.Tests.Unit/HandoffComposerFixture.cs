@@ -11,6 +11,7 @@ namespace Capacitor.App.Tests.Unit;
 /// handoff/1 and a checkout of acme/widgets the probe answers for.
 sealed class HandoffComposerFixture : IDisposable {
     public const string Checkout = "/w/widgets";
+    const string FakeDaemonServerUrl = "http://localhost:9999";
 
     public FakeDaemonClientService Daemon { get; } = new();
     public FakeHandoffLaunchClient Launch { get; } = new();
@@ -39,7 +40,7 @@ sealed class HandoffComposerFixture : IDisposable {
             _ => Task.FromResult<IReadOnlyList<string>>([Checkout]),
             Drafts, Lane, Uploader, Directory,
             () => 0, (_, _, _) => { }, _ => { },
-            (sessionId, _) => { Reopened.Add(sessionId); return Task.FromResult(true); }, Notifier);
+            (sessionId, _) => { Reopened.Add(sessionId); return Task.FromResult(true); }, Notifier, FakeDaemonServerUrl);
         Sessions.HandoffContext = new HandoffContextDto(row.SessionId ?? row.Id, "acme", "widgets", "feature/x", null, ["c1"]);
         Built.Add(vm);
         return vm;

@@ -7,9 +7,9 @@ namespace Capacitor.App.Services;
 public sealed class LocalCheckoutFinder(RepoIdentityResolver identities, Func<string, string?>? mainRoot = null) {
     readonly Func<string, string?> _mainRoot = mainRoot ?? MainRootOf;
 
-    /// The session's own checkout first, then the candidates in order. Reads git metadata, so it
-    /// runs on the thread pool.
-    public Task<string?> FindAsync(
+    /// Every checkout of the repository, the session's own first, then the candidates in order. Reads
+    /// git metadata, so it runs on the thread pool.
+    public Task<IReadOnlyList<string>> FindAllAsync(
             string owner, string name, string? sessionCwd, IEnumerable<string> candidates, CancellationToken ct) {
         var ordered = new List<string>();
         if (!string.IsNullOrEmpty(sessionCwd)) ordered.Add(sessionCwd);
@@ -17,16 +17,17 @@ public sealed class LocalCheckoutFinder(RepoIdentityResolver identities, Func<st
         return Task.Run(() => Find($"repo:{owner}/{name}".ToLowerInvariant(), ordered, ct), ct);
     }
 
-    string? Find(string key, IReadOnlyList<string> paths, CancellationToken ct) {
+    IReadOnlyList<string> Find(string key, IReadOnlyList<string> paths, CancellationToken ct) {
         var seen = new HashSet<string>(PlatformPaths.Comparer);
+        var found = new List<string>();
         foreach (var path in paths) {
             ct.ThrowIfCancellationRequested();
             if (_mainRoot(path) is not { Length: > 0 } root) continue;
             var normalized = PlatformPaths.Normalize(root);
             if (!seen.Add(normalized)) continue;
-            if (identities.ForLocalRoot(normalized).Key == key) return normalized;
+            if (identities.ForLocalRoot(normalized).Key == key) found.Add(normalized);
         }
-        return null;
+        return found;
     }
 
     static string? MainRootOf(string path) =>

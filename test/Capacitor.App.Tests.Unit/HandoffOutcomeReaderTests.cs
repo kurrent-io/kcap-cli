@@ -109,14 +109,37 @@ public class HandoffOutcomeReaderTests {
     }
 
     [Test]
-    public async Task A_daemon_without_handoff_is_never_read() {
+    public async Task A_daemon_without_handoff_is_read_once_it_gains_it() {
         using var rig = new Rig(capable: false);
+        rig.Answers.Enqueue(Outcome("done"));
         rig.Watch();
 
-        await WaitUntilAsync(() => rig.Completed, what: "completion");
         rig.Time.Advance(TimeSpan.FromMinutes(3));
-
+        await Task.Delay(50);
         await Assert.That(rig.Reads).IsEqualTo(0);
-        await Assert.That(rig.Seen).IsEmpty();
+        await Assert.That(rig.Completed).IsFalse();
+
+        rig.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["input/1", HandoffWire.Capability]));
+        await WaitUntilAsync(() => rig.Completed, what: "completion on done");
+
+        await Assert.That(rig.Seen.Select(o => o.State)).IsEquivalentTo(["done"]);
+    }
+
+    /// The daemon reruns an interrupted takeover when it resumes the successor.
+    [Test]
+    public async Task An_interrupted_outcome_is_followed_to_its_rerun() {
+        using var rig = new Rig();
+        rig.Answers.Enqueue(Outcome("interrupted"));
+        rig.Answers.Enqueue(Outcome("running"));
+        rig.Answers.Enqueue(Outcome("done"));
+        rig.Watch();
+
+        await WaitUntilAsync(() => rig.Seen.Count == 1, what: "interrupted");
+        await Assert.That(rig.Completed).IsFalse();
+        await rig.NextReadAsync();
+        await rig.NextReadAsync();
+        await WaitUntilAsync(() => rig.Completed, what: "completion on done");
+
+        await Assert.That(rig.Seen.Select(o => o.State)).IsEquivalentTo(["interrupted", "running", "done"]);
     }
 }

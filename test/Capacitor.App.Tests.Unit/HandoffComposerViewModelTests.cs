@@ -1,5 +1,6 @@
 using System.Collections.Frozen;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Reactive.Subjects;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
@@ -46,6 +47,17 @@ public class HandoffComposerViewModelTests {
         public RecordingNotifier Notifier { get; } = new();
         /// What ReopenServerSessionAsync answers: false is a pin that failed or a navigation while it read.
         public bool ReopenOpens = true;
+        /// The repositories this machine knows besides the session's own checkout.
+        public List<string> Candidates { get; } = [];
+        /// The app's server, which FakeDaemonClientService.Snap's daemon is connected to by default.
+        public string? AppServerUrl = "http://localhost:9999";
+        /// The epochs ParkSignedOut was asked to park, which signs the lane out as the real one does.
+        public List<int> Parked { get; } = [];
+
+        void Park(int epoch) {
+            Parked.Add(epoch);
+            Lane.OnNext(new ServerLaneStatus(ServerLaneState.SignedOut, Epoch: epoch + 1));
+        }
         public RepoSessionDto Session = new() {
             SessionId = SessionId, Status = "ended", AccessLevel = "full", Vendor = "codex", Cwd = Checkout, Title = "Fix the widgets",
             Branch = "feature/x", StartedAt = DateTimeOffset.UnixEpoch, LastActivityAt = DateTimeOffset.UnixEpoch,
@@ -98,10 +110,10 @@ public class HandoffComposerViewModelTests {
             var vm = new HandoffComposerViewModel(
                 Session, Daemon, Launch, Sessions, Ops,
                 new LocalCheckoutFinder(new RepoIdentityResolver(root => Origins.GetValueOrDefault(root)), mainRoot: p => p),
-                _ => Task.FromResult<IReadOnlyList<string>>([]),
+                _ => Task.FromResult<IReadOnlyList<string>>(Candidates),
                 Drafts, Lane, Uploader, Directory,
                 () => Generation, Open,
-                Close, Reopen, Notifier);
+                Close, Reopen, Notifier, AppServerUrl, onUnauthorized: Park);
             _built.Add(vm);
             return vm;
         }
@@ -777,5 +789,260 @@ public class HandoffComposerViewModelTests {
         await Assert.That(rig.Closed).IsEquivalentTo([LaunchedId]);
         await Assert.That(rig.Reopened).IsEmpty();
         await Assert.That((await rig.ReadyAsync()).Text).IsEqualTo("carry on");
+    });
+
+    // ---- review follow-ups ----
+
+    const string SignIn = "Sign in to your kcap server to hand off";
+    const string OtherCheckout = "/w/widgets-2";
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_reconnect_reads_the_servers_features_again() => Run(async rig => {
+        rig.Launch.Features = FrozenSet.Create("launch/1");
+        var vm = await rig.ReadyAsync();
+        await Assert.That(vm.DisabledReason).IsEqualTo("Your kcap server doesn't support hand-off yet");
+
+        rig.Launch.Features = FrozenSet.Create("handoff/1");
+        rig.Lane.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
+        rig.Lane.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+        await vm.PendingEvaluationForTesting;
+
+        await Assert.That(vm.DisabledReason).IsNull();
+        await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsTrue();
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Losing_the_server_disables_a_ready_start() => Run(async rig => {
+        var vm = await rig.ReadyAsync();
+        rig.Lane.OnNext(new ServerLaneStatus(ServerLaneState.SignedOut));
+        await vm.PendingEvaluationForTesting;
+
+        await Assert.That(vm.DisabledReason).IsEqualTo(SignIn);
+        await Assert.That(vm.ProbedStart).IsNull();
+        await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsFalse();
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task An_unauthorized_context_read_asks_for_a_sign_in() => Run(async rig => {
+        rig.Sessions.HandoffContextOutcome = ServerReadOutcome.Unauthorized;
+        var vm = await rig.ReadyAsync();
+
+        await Assert.That(vm.DisabledReason).IsEqualTo(SignIn);
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task An_unknown_completeness_reads_as_unconfirmed() => Run(async rig => {
+        rig.Ops.Next = Reply(AttachedStart, "SomethingNewer");
+        var vm = await rig.ReadyAsync();
+        await Assert.That(vm.WorkMissingOrUnconfirmed).IsTrue();
+
+        rig.Ops.Next = Reply(AttachedStart, nameof(HandoffCompleteness.Complete));
+        await Assert.That((await rig.ReadyAsync()).WorkMissingOrUnconfirmed).IsFalse();
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Unsent_text_and_attachments_come_back_after_navigating_away() => Run(async rig => {
+        var vm = await rig.ReadyAsync();
+        vm.Text = "not yet";
+        var chip = Chip("a.png");
+        vm.Tray.AddAll([chip]);
+        vm.Dispose();
+
+        var next = await rig.ReadyAsync();
+
+        await Assert.That(next.Text).IsEqualTo("not yet");
+        await Assert.That(next.Tray.Items.Single()).IsSameReferenceAs(chip);
+        await Assert.That(next.Error).IsNull();
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_daemon_on_another_server_is_disabled_with_the_reason() => Run(async rig => {
+        rig.AppServerUrl = "https://kcap.example.com";
+        var vm = await rig.ReadyAsync();
+
+        await Assert.That(vm.DisabledReason).IsEqualTo(HandoffComposerViewModel.DaemonOnAnotherServer);
+        await Assert.That(rig.Ops.Probes).IsEmpty();
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_daemon_hosting_no_agent_is_disabled_with_the_reason() => Run(async rig => {
+        rig.Daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(supportedVendors: []));
+        var vm = await rig.ReadyAsync();
+
+        await Assert.That(vm.DisabledReason).IsEqualTo(HomeViewModel.NoHarnessesNotice(null));
+        await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsFalse();
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Edits_made_while_the_launch_is_in_flight_stay() => Run(async rig => {
+        var vm = await rig.ReadyAsync();
+        vm.Text = "carry on";
+        vm.Tray.AddAll([Chip("sent.png")]);
+        var later = Chip("later.png");
+        rig.Launch.During = _ => {
+            rig.Navigate();
+            vm.Text = "and then this";
+            vm.Tray.AddAll([later]);
+        };
+
+        await vm.StartCommand.Execute();
+
+        await Assert.That(vm.Text).IsEqualTo("and then this");
+        await Assert.That(vm.Tray.Items.Single()).IsSameReferenceAs(later);
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task An_unauthorized_upload_signs_the_lane_out() => Run(async rig => {
+        rig.Lane.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Epoch: 4));
+        rig.Uploader.Next = UploadOutcome.Unauthorized("401");
+        var vm = await rig.ReadyAsync();
+        vm.Tray.AddAll([Chip("a.png")]);
+
+        await vm.StartCommand.Execute();
+        await vm.PendingEvaluationForTesting;
+
+        await Assert.That(rig.Parked).IsEquivalentTo([4]);
+        await Assert.That(vm.DisabledReason).IsEqualTo(SignIn);
+        await Assert.That(rig.Launch.Requests).IsEmpty();
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task An_unauthorized_launch_signs_the_lane_out() => Run(async rig => {
+        rig.Lane.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Epoch: 4));
+        rig.Launch.Next = new LaunchOutcome(false, null, null, Unauthorized: true);
+        var vm = await rig.ReadyAsync();
+
+        await vm.StartCommand.Execute();
+        await vm.PendingEvaluationForTesting;
+
+        await Assert.That(rig.Parked).IsEquivalentTo([4]);
+        await Assert.That(vm.DisabledReason).IsEqualTo(SignIn);
+        await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsFalse();
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task An_accepted_launch_with_an_unusable_id_spends_what_it_sent() => Run(async rig => {
+        rig.Launch.Next = new LaunchOutcome(true, " ", null);
+        var vm = await rig.ReadyAsync();
+        vm.Text = "carry on";
+        vm.Tray.AddAll([Chip("a.png")]);
+
+        await vm.StartCommand.Execute();
+
+        await Assert.That(vm.Text).IsEqualTo("");
+        await Assert.That(vm.Tray.Count).IsEqualTo(0);
+        await Assert.That(vm.Error).IsEqualTo(HomeViewModel.UnusableIdMessage);
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_source_refusal_reads_the_context_again() => Run(async rig => {
+        rig.Launch.Next = new LaunchOutcome(false, null, "handoff_source_unavailable");
+        rig.Launch.During = _ => rig.Sessions.HandoffContextOutcome = ServerReadOutcome.Failed;
+        var vm = await rig.ReadyAsync();
+
+        await vm.StartCommand.Execute();
+
+        await Assert.That(vm.DisabledReason).IsEqualTo("Couldn't load this session's details from your kcap server");
+        await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsFalse();
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Attachments_withdrawn_during_the_upload_stop_the_launch() => Run(async rig => {
+        var upload = new TaskCompletionSource<UploadOutcome>();
+        rig.Uploader.Pending = upload;
+        var vm = await rig.ReadyAsync();
+        vm.Tray.AddAll([Chip("a.png")]);
+
+        var starting = vm.StartCommand.Execute().ToTask();
+        rig.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["input/1", HandoffWire.Capability]));
+        upload.SetResult(new UploadOutcome(UploadKind.Uploaded, ["u1"], null));
+        await starting;
+
+        await Assert.That(rig.Launch.Requests).IsEmpty();
+        await Assert.That(vm.Error).IsEqualTo(HomeViewModel.AttachHintFor(true, false));
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_failure_arriving_during_another_launch_is_taken_back_after_it() => Run(async rig => {
+        var vm = await rig.ReadyAsync();
+        vm.Text = "first";
+        rig.Launch.During = _ => rig.Navigate();
+        await vm.StartCommand.Execute();
+
+        const string second = "fedcba9876543210fedcba9876543210";
+        rig.Launch.Next = new LaunchOutcome(true, second, null);
+        rig.Launch.During = _ => {
+            rig.Navigate();
+            rig.Failures.OnNext(new LaunchFailure(LaunchedId, "handoff_start_changed: moved"));
+        };
+        vm.Text = "second";
+        await vm.StartCommand.Execute();
+
+        await Assert.That(vm.Text).IsEqualTo("first");
+        await Assert.That(vm.Error).IsEqualTo(StartChanged);
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_reopened_source_takes_back_a_failure_held_after_its_old_composer_went() => Run(async rig => {
+        var upload = new TaskCompletionSource<UploadOutcome>();
+        rig.Uploader.Pending = upload;
+        var vm = await rig.ReadyAsync();
+        vm.Text = "carry on";
+        vm.Tray.AddAll([Chip("a.png")]);
+        var starting = vm.StartCommand.Execute().ToTask();
+        vm.Dispose();
+        var next = await rig.ReadyAsync();
+
+        upload.SetResult(new UploadOutcome(UploadKind.Unreachable, [], "the upload failed"));
+        await starting;
+
+        await Assert.That(next.Text).IsEqualTo("carry on");
+        await Assert.That(next.Error).IsEqualTo("the upload failed");
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Another_checkout_is_probed_after_one_the_daemon_refuses() => Run(async rig => {
+        rig.Origins[OtherCheckout] = "https://github.com/acme/widgets.git";
+        rig.Candidates.Add(OtherCheckout);
+        rig.Ops.Answer = request => request.RepoPath == Checkout
+            ? new HandoffProbeReplyDto(HandoffRefusals.RepoNotAllowed, null, null, null, [])
+            : Reply(AttachedStart);
+        var vm = await rig.ReadyAsync();
+
+        await Assert.That(vm.DisabledReason).IsNull();
+        await vm.StartCommand.Execute();
+        await Assert.That(rig.Launch.Requests.Single().RepoPath).IsEqualTo(OtherCheckout);
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task An_early_failure_waits_for_a_slow_launch_call() => Run(async rig => {
+        rig.Launch.During = _ => {
+            rig.Failures.OnNext(new LaunchFailure(LaunchedId, "handoff_start_changed"));
+            rig.Time.Advance(TimeSpan.FromMinutes(2));
+        };
+        var vm = await rig.ReadyAsync();
+        vm.Text = "carry on";
+        await vm.StartCommand.Execute();
+
+        await Assert.That(vm.Text).IsEqualTo("carry on");
+        await Assert.That(vm.Error).IsEqualTo(StartChanged);
+        await Assert.That(rig.Directory.Placeholders).IsEmpty();
     });
 }

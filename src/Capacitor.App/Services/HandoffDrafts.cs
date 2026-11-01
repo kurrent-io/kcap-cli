@@ -13,8 +13,9 @@ namespace Capacitor.App.Services;
 /// session's next composer. Failures are buffered from construction, because one can arrive before
 /// the launch call returns and the hold that would match it is made.
 public sealed class HandoffDrafts : IDisposable {
+    /// How long a launch stays unsettled, and how long a failure waits for the hold of a launch call
+    /// still in flight: that call has no deadline of its own.
     static readonly TimeSpan PendingTtl = TimeSpan.FromMinutes(10);
-    static readonly TimeSpan RecentFailureTtl = TimeSpan.FromSeconds(30);
 
     sealed record Held(string SourceSessionId, HandoffDraft Draft, DateTimeOffset At, Action<string>? OnFailed);
 
@@ -22,6 +23,7 @@ public sealed class HandoffDrafts : IDisposable {
     readonly Dictionary<string, Held> _pending = new(StringComparer.Ordinal);
     readonly Dictionary<string, (string Reason, DateTimeOffset At)> _recentFailures = new(StringComparer.Ordinal);
     readonly Dictionary<string, HandoffDraft> _failed = new(StringComparer.Ordinal);
+    readonly Dictionary<string, HandoffDraft> _unsent = new(StringComparer.Ordinal);
     readonly IAgentDirectory? _directory;
     readonly TimeProvider _time;
     readonly CompositeDisposable _subscriptions = new();
@@ -54,7 +56,7 @@ public sealed class HandoffDrafts : IDisposable {
         if (RowExists(id)) return HandoffHold.AlreadyStarted;
         lock (_lock) {
             var now = _time.GetUtcNow();
-            if (_recentFailures.Remove(id, out var failure) && now - failure.At <= RecentFailureTtl) {
+            if (_recentFailures.Remove(id, out var failure) && now - failure.At <= PendingTtl) {
                 _failed[sourceSessionId] = draft with { Error = HandoffFailureText.For(failure.Reason) };
                 return HandoffHold.AlreadyFailed;
             }
@@ -70,13 +72,24 @@ public sealed class HandoffDrafts : IDisposable {
     /// hold's onFailed. Whichever composer calls TakeFailed first gets the draft.
     public IObservable<string> FailedFor => _failedFor;
 
-    /// A draft whose composer is gone before its launch settled, for the source's next composer.
+    /// A draft whose composer is gone before its launch settled, for the source's next composer. Called
+    /// on the UI thread, so a composer the source already reopened hears of it through FailedFor.
     public void HoldFailed(string sourceSessionId, HandoffDraft draft) {
         lock (_lock) _failed[sourceSessionId] = draft;
+        _failedFor.OnNext(sourceSessionId);
     }
 
     public HandoffDraft? TakeFailed(string sourceSessionId) {
         lock (_lock) return _failed.Remove(sourceSessionId, out var draft) ? draft : null;
+    }
+
+    /// What a composer torn down before Start held, for the source's next composer.
+    public void KeepUnsent(string sourceSessionId, HandoffDraft draft) {
+        lock (_lock) _unsent[sourceSessionId] = draft;
+    }
+
+    public HandoffDraft? TakeUnsent(string sourceSessionId) {
+        lock (_lock) return _unsent.Remove(sourceSessionId, out var draft) ? draft : null;
     }
 
     public void Confirm(string agentId) {
@@ -101,7 +114,7 @@ public sealed class HandoffDrafts : IDisposable {
                 };
             }
             _recentFailures[id] = (failure.Reason, now);
-            foreach (var stale in _recentFailures.Where(kv => now - kv.Value.At > RecentFailureTtl).Select(kv => kv.Key).ToList())
+            foreach (var stale in _recentFailures.Where(kv => now - kv.Value.At > PendingTtl).Select(kv => kv.Key).ToList())
                 _recentFailures.Remove(stale);
             foreach (var stale in _pending.Where(kv => now - kv.Value.At > PendingTtl).Select(kv => kv.Key).ToList())
                 _pending.Remove(stale);

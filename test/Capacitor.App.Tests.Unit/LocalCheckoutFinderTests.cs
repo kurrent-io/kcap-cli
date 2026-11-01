@@ -15,7 +15,7 @@ public class LocalCheckoutFinderTests {
         new(new RepoIdentityResolver(root => origins.GetValueOrDefault(root)));
 
     [Test]
-    public async Task Prefers_the_sessions_own_checkout() {
+    public async Task Lists_the_sessions_own_checkout_first() {
         var own = Checkout("own");
         var other = Checkout("other");
         var finder = Finder(new() {
@@ -23,9 +23,9 @@ public class LocalCheckoutFinderTests {
             [other] = "git@github.com:acme/widgets.git",
         });
 
-        var found = await finder.FindAsync("acme", "widgets", Path.Combine(own, "src"), [other], CancellationToken.None);
+        var found = await finder.FindAllAsync("acme", "widgets", Path.Combine(own, "src"), [other, own], CancellationToken.None);
 
-        await Assert.That(found).IsEqualTo(own);
+        await Assert.That(found).IsEquivalentTo([own, other], TUnit.Assertions.Enums.CollectionOrdering.Matching);
     }
 
     [Test]
@@ -37,8 +37,8 @@ public class LocalCheckoutFinderTests {
             [widgets] = "https://github.com/Acme/Widgets.git",
         });
 
-        var found = await finder.FindAsync("acme", "widgets", Tmp.PathTo("gone"), [unrelated, widgets], CancellationToken.None);
+        var found = await finder.FindAllAsync("acme", "widgets", Tmp.PathTo("gone"), [unrelated, widgets], CancellationToken.None);
 
-        await Assert.That(found).IsEqualTo(widgets);
+        await Assert.That(found).IsEquivalentTo([widgets]);
     }
 }

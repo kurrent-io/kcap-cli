@@ -259,8 +259,12 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
 
     public async Task<HandoffContextFetch> ReadHandoffContextAsync(string sessionId, CancellationToken ct) {
         if (_fetchHandoffContext is null) return new(ServerReadOutcome.Failed, null);
+        int laneEpoch;
+        lock (_lock) laneEpoch = _laneEpoch;
         try {
-            return await _fetchHandoffContext(sessionId, ct).ConfigureAwait(false);
+            var fetch = await _fetchHandoffContext(sessionId, ct).ConfigureAwait(false);
+            if (fetch.Outcome == ServerReadOutcome.Unauthorized) _onUnauthorized?.Invoke(laneEpoch);
+            return fetch;
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             throw;
         } catch (Exception) {

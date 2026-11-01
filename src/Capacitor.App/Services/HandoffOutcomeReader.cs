@@ -13,16 +13,13 @@ public sealed class HandoffOutcomeReader(IDaemonClientService daemon, ILocalCont
 
     /// Emits each outcome that differs in value from the last: every read deserializes fresh lists,
     /// so reference equality would re-emit each poll. An answer of null (nothing stored yet, or a
-    /// failed read) is retried for <see cref="NullWindow"/>; a running outcome is followed without limit.
-    /// Completes on a terminal state or when the window lapses, and emits nothing for a daemon
-    /// without handoff/1.
+    /// failed read) is retried for <see cref="NullWindow"/>; a running outcome is followed without limit,
+    /// and so is an interrupted one, which the daemon reruns when it resumes the successor.
+    /// Completes on a terminal state or when the window lapses, and waits for a daemon with handoff/1.
     public IObservable<HandoffOutcomeDto> Watch(string sessionId) =>
         daemon.Status
-            .SkipWhile(status => status.State != AttachState.Connected)
-            .Take(1)
-            .SelectMany(status => status.Capabilities?.Contains(HandoffWire.Capability) == true
-                ? Poll(sessionId)
-                : Observable.Empty<HandoffOutcomeDto>());
+            .FirstAsync(status => status.State == AttachState.Connected && status.Capabilities?.Contains(HandoffWire.Capability) == true)
+            .SelectMany(_ => Poll(sessionId));
 
     /// The chat card's stream for one session id, inside a Switch over ids: it opens with null so a
     /// card from the previous id is cleared rather than carried over.
@@ -43,7 +40,7 @@ public sealed class HandoffOutcomeReader(IDaemonClientService daemon, ILocalCont
                         seen = true;
                         if (!Same(outcome, last)) observer.OnNext(outcome);
                         last = outcome;
-                        if (outcome.State != "running") break;
+                        if (outcome.State is not ("running" or "interrupted")) break;
                     } else if (!seen && time.GetElapsedTime(started) >= NullWindow) {
                         break;
                     }
