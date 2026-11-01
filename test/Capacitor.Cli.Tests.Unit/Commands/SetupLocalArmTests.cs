@@ -137,7 +137,7 @@ internal sealed class SetupLocalArmTests : IDisposable {
 
     [Test]
     public async Task Json_success_ends_with_committed_and_exit_0() {
-        // The visibility step under --no-prompt would write org_public over it.
+        // A local setup leaves the stored visibility alone, so a non-default value must survive the run.
         File.WriteAllText(AppConfig.GetConfigPath(Config.Root),
             """{"version":2,"active_profile":"default","profiles":{"default":{"default_visibility":"private"}}}""");
 
@@ -300,11 +300,15 @@ internal sealed class SetupLocalArmTests : IDisposable {
         await Assert.That(string.Join('\n', stdout) + spectre).Contains("No sign-in needed for a local installation.");
     }
 
-    /// <summary>A local installation has one user, so its sessions default to private, as the app's local path does.</summary>
+    /// <summary>A local server records every session as shared with its one user, so a scripted local setup writes no
+    /// default of its own over the profile's: only an explicit flag changes it.</summary>
     [Test]
-    [Arguments(null, "private")]
+    [Arguments(null, "project")]
     [Arguments("org_public", "org_public")]
-    public async Task No_prompt_local_visibility_defaults_to_private(string? flag, string expected) {
+    public async Task No_prompt_local_setup_keeps_the_profiles_visibility(string? flag, string expected) {
+        File.WriteAllText(AppConfig.GetConfigPath(Config.Root),
+            """{"version":2,"active_profile":"default","profiles":{"default":{"default_visibility":"project"}}}""");
+
         var (exit, stdout, spectre, stderr) = await Run([
             "setup", "--local", "--single-user", "--yes", "--no-prompt", "--skip-import", .. SetupCommandTests.SkipAllAgentInstallFlags,
             .. flag is null ? Array.Empty<string>() : ["--default-visibility", flag],
@@ -312,6 +316,25 @@ internal sealed class SetupLocalArmTests : IDisposable {
 
         await Assert.That(exit).IsEqualTo(SetupExit.Done).Because(string.Join('\n', stdout) + spectre + stderr);
         await Assert.That(ActiveProfile().DefaultVisibility).IsEqualTo(expected);
+        await Assert.That(spectre).DoesNotContain("Default session visibility");
+    }
+
+    /// <summary>An interactive local setup goes from sign-in to harnesses without asking who may read new sessions.</summary>
+    [Test]
+    public async Task Interactive_local_setup_asks_no_visibility_question() {
+        File.WriteAllText(AppConfig.GetConfigPath(Config.Root),
+            """{"version":2,"active_profile":"default","profiles":{"default":{"default_visibility":"project"}}}""");
+        using var console = new ScriptedConsole().Line("no").Enter();
+
+        var (exit, stdout, spectre, stderr) = await RunWith(null, () => console.Text, [
+            "setup", "--local", "--single-user", "--yes", "--skip-import", .. SetupCommandTests.SkipAllAgentInstallFlags,
+        ]);
+
+        await Assert.That(exit).IsEqualTo(SetupExit.Done).Because(string.Join('\n', stdout) + spectre + stderr);
+        await Assert.That(spectre).Contains("Step 4/6");
+        await Assert.That(spectre).DoesNotContain("Default session visibility");
+        await Assert.That(spectre).DoesNotContain("readable by other users");
+        await Assert.That(ActiveProfile().DefaultVisibility).IsEqualTo("project");
     }
 
     [Test]

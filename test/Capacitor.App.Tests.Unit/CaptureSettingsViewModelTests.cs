@@ -98,7 +98,7 @@ public class CaptureSettingsViewModelTests {
     });
 
     [Test]
-    public Task Local_capture_keeps_sessions_private_without_requesting_an_audience() => AvaloniaSession.RunOnUiAsync(async () => {
+    public Task Local_capture_keeps_the_stored_audience_without_requesting_one() => AvaloniaSession.RunOnUiAsync(async () => {
         var store = Seed();
         await store.SaveCaptureAsync(new Profile { DefaultVisibility = "public" }, CancellationToken.None);
         using var vm = new CaptureSettingsViewModel(store, isLocal: true,
@@ -107,7 +107,7 @@ public class CaptureSettingsViewModelTests {
         await Assert.That(vm.VisibilityVisible).IsFalse();
         vm.AllowedRepos = "team/repo";
         await vm.SaveAsync();
-        await Assert.That(store.LoadProfile().DefaultVisibility).IsEqualTo("private");
+        await Assert.That(store.LoadProfile().DefaultVisibility).IsEqualTo("public");
         await Assert.That(store.LoadProfile().AllowedRepos).IsEquivalentTo(new[] { "team/repo" });
     });
 
