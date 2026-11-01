@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using TUnit.Core.Enums;
 
 namespace Capacitor.Cli.Core.Tests.Unit;
 
@@ -209,6 +210,31 @@ public class AgentsSkillsInstallerTests {
 
         await Assert.That(failure!.PluginIncomplete).IsTrue();
         await Assert.That(failure.Reason).Contains("pages");
+    }
+
+    /// <summary>A skill the process may not read reads as absent to <c>File.Exists</c>; a reinstall would not fix that,
+    /// so it is not reported as kcap's plugin being incomplete. Root reads through the mode, so the test needs another user.</summary>
+    [Test, ExcludeOn(OS.Windows)]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public async Task TryInstall_reports_an_unreadable_skill_as_access_not_a_broken_plugin() {
+        Skip.When(Environment.UserName == "root", "root reads through the file mode");
+        using var src = new TempDir();
+        using var dst = new TempDir();
+
+        foreach (var name in SourceNames) src.CreateFile([name, "SKILL.md"], $"---\nname: {name}\n---\nbody");
+        var locked = src.PathTo("pages");
+        File.SetUnixFileMode(locked, UnixFileMode.None);
+
+        SkillsInstallFailure? failure;
+        try {
+            failure = AgentsSkillsInstaller.TryInstall(src.Path, dst.Path);
+        } finally {
+            File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        await Assert.That(failure).IsNotNull();
+        await Assert.That(failure!.PluginIncomplete).IsFalse();
+        await Assert.That(failure.Reason).Contains("cannot be read");
     }
 
     [Test]
