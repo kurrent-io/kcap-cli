@@ -111,11 +111,16 @@ public partial class App : Application {
     readonly UninstallMode? _uninstallMode = Program.Uninstall;
     UninstallRunViewModel? _uninstallRun;
 
+    /// <summary>The machines a local edition bundle is built for, as the CLI's preflight decides it.</summary>
+    static bool LocalEditionSupported =>
+        (OperatingSystem.IsMacOS() && RuntimeInformation.OSArchitecture == Architecture.Arm64)
+     || (OperatingSystem.IsWindows() && RuntimeInformation.OSArchitecture == Architecture.X64);
+
     public App() {
         // A live facade creates the device id and the spool under the config root being removed.
         _telemetry   = CliTelemetry.Start(
             DesktopTelemetry(_uninstallMode, _endpoints.SignupUrl,
-                UsageDataEdition.ForDesktop(_config, _localRoot, OperatingSystem.IsMacOS() && RuntimeInformation.OSArchitecture == Architecture.Arm64)),
+                UsageDataEdition.ForDesktop(_config, _localRoot, LocalEditionSupported)),
             _config, _time);
         _usageNotice = new UsageDataNotice(_telemetry, _config);
         _foreignHttp = new ServiceCollection().AddAppForeignHttp(_config, _serverEnv).BuildValidated();
@@ -256,6 +261,8 @@ public partial class App : Application {
     // One per app run, shared by every wizard so a reopened one shows the settled outcome; every
     // close and a quit settle it before moving on.
     LocalInstallController? _localInstall;
+    // One fetch per app run, so a reopened wizard never fetches the bundle a second time.
+    LocalBundlePrefetch? _localPrefetch;
     Window? _wizardWindow;
     // The onboarding window once its flow has finished, waiting for BuildAndShowMainWindow to take
     // it over so the main surface opens in place rather than in a second window.
@@ -1155,7 +1162,7 @@ public partial class App : Application {
         var localServer = new LocalServerRecoveryViewModel(
             serverLane.Status, isLocalServer, lifecycleCli.LocalStartAsync, () => serverLane.RestartAsync(), _shutdown.Token,
             busy: stackOwnsStart, readCondition: ct => LocalServerConditions.ReadAsync(_localRoot, ct),
-            canStart: OperatingSystem.IsMacOS() || OperatingSystem.IsLinux());
+            canStart: OperatingSystem.IsMacOS() || OperatingSystem.IsLinux() || OperatingSystem.IsWindows());
         _localServer = localServer;
         var webWorkspace = new WebWorkspaceViewModel(profiles?.Resolution.ServerUrl, opener, notifier.Notify,
             _shutdown.Token, localServer);
@@ -1709,6 +1716,7 @@ public partial class App : Application {
             shimInstaller is not null, shimTarget, ct => probe.KcapOnPathAsync(ct), _shutdown.Token);
         var bridges = WizardComposition.BuildBridges(action => Dispatcher.UIThread.Post(action), _telemetry, _endpoints);
         var surface = new WizardLifecycleSurface(ConfirmLifecyclePromptAsync, action => Dispatcher.UIThread.Post(action));
+        _localPrefetch ??= new LocalBundlePrefetch(() => NewWizardCli(_config, _serverEnv, _localRoot, runner, cliPath, probe), _shutdown.Token);
 
         var options = new WizardGraphOptions(
             _config,
@@ -1743,7 +1751,7 @@ public partial class App : Application {
             Time: _time,
             ShutdownToken: _shutdown.Token,
             LocalRoot: _localRoot,
-            LocalEditionSupported: OperatingSystem.IsMacOS() && RuntimeInformation.OSArchitecture == Architecture.Arm64,
+            LocalEditionSupported: LocalEditionSupported,
             AlreadyAuthenticated: alreadyAuthenticated,
             ConfiguredDaemonName: () => ResolveConfiguredDaemonName(_config, _serverEnv, _localRoot),
             HeldDaemonNames: HeldDaemonNamesAsync,
@@ -1751,11 +1759,14 @@ public partial class App : Application {
             UsageNotice: _usageNotice,
             ReportCliSetup: ReportWizardCliSetupAsync,
             ReadVisibilityOptions: ReadWizardVisibilityOptionsAsync,
-            RepairClients: StaleClientRepair.ForApp(runner, probe, shimTarget, _userHome).RunAsync,
+            // The repair relinks through a login shell and an administrator prompt, neither of which it has on Windows.
+            RepairClients: OperatingSystem.IsWindows() ? null : StaleClientRepair.ForApp(runner, probe, shimTarget, _userHome).RunAsync,
             MailSupport: report => FeedbackMail.Send(
                 new FeedbackSubmission(FeedbackCategory.Bug, report, Guid.NewGuid(), FeedbackSource.Desktop),
                 SystemBrowser.Instance, Capacitor.Cli.Core.Auth.Clipboard.TryCopy),
-            ResumeWebSignUp: WizardComposition.ResumesWebSignUp(await _appState.LoadAsync(), _time.GetUtcNow()));
+            ResumeWebSignUp: WizardComposition.ResumesWebSignUp(await _appState.LoadAsync(), _time.GetUtcNow()),
+            Prefetch: _localPrefetch,
+            OffersWindowsService: OperatingSystem.IsWindows());
         _localInstall ??= WizardComposition.NewInstallController(options);
         var graph = WizardComposition.BuildGraph(options with { Install = _localInstall });
 

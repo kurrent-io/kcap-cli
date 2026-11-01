@@ -12,7 +12,8 @@ namespace Capacitor.Cli.LocalEdition;
 /// </summary>
 public static class LocalBundleUnpacker {
     const UnixFileMode DirectoryMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
-    const string ServerName          = "kcap-server";
+
+    static string ServerName => LocalServerConditions.ServerFileName;
 
     public static async Task UnpackAsync(string archive, string destination, CancellationToken ct) {
         var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(destination));

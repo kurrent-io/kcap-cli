@@ -7,9 +7,9 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 layout=(
   "Local/kcap/Update.exe"
   "Local/kcap/current/kcap-desktop.exe"
-  "Local/kcap/current/kcap.exe"
-  "Local/kcap/current/kcap-daemon.exe"
-  "Local/kcap/current/kcap-service.exe"
+  "Local/kcap/current/bin/kcap.exe"
+  "Local/kcap/current/bin/kcap-daemon.exe"
+  "Local/kcap/current/bin/kcap-service.exe"
   "Roaming/Microsoft/Windows/Start Menu/Programs/kcap.lnk"
 )
 

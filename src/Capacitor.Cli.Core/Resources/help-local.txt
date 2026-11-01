@@ -20,7 +20,11 @@ Subcommands:
                             selected and stopped, and kcap local start tries again.
       --json                One JSON object per line on stdout, for the desktop app.
       --if-installed        Print nothing when there is no installation.
-  uninstall [--purge] [--force] [--yes]
+  fetch [--json]            Download and verify this kcap's server bundle into the cache under the
+                            installation's root, so the next `kcap setup --local` installs it without
+                            downloading. Installs nothing; the cache is emptied once an install uses it.
+      --json                One JSON object per line on stdout, for the desktop app.
+  uninstall [--purge] [--force] [--yes] [--quick]
                             Stop every kcap daemon and watcher and the local server, then remove the
                             server's service and binaries. Its data and identity are kept, so
                             `kcap setup --local` brings it back on the same URL.
@@ -29,13 +33,23 @@ Subcommands:
                             and a new installation gets a new port.
       --force               Uninstall even while a daemon is running agents; they end with it.
       --yes, -y             Do not ask for confirmation.
+      --quick               Windows only. Give the server about 8 seconds to stop, then remove its
+                            service whether or not it has finished, for an app uninstaller with a deadline.
+                            Files a server still stopping holds open stay behind. Cannot be
+                            combined with --purge.
   help                      Show this help
 
 status exits 0 only when the server is running and ready. start, stop, restart, upgrade and uninstall wait for
 any other kcap changing the installation, and first finish or undo a setup, upgrade or purge that was interrupted.
 
 upgrade exits 0 when it upgraded, 1 when it failed before the switch, 2 when it failed after the switch, 3
-when there was nothing to do, and 4 when no bundle is published for this version yet.
+when there was nothing to do, and 4 when no bundle is published for this version yet. fetch exits 0 when the
+bundle is in the cache, 1 when it failed, 3 when the installation already runs this version, and 4 when no
+bundle is published for it yet.
+
+On Windows the server runs under the kcap-service Windows service when that is installed (`kcap setup
+--local --windows-service`, or `kcap daemon service install --system`, moves it there), and otherwise as a
+per-user Scheduled Task named kcap-local that runs while you are signed in.
 
 The installation lives in ~/.config/kcap/local, or in KCAP_LOCAL_ROOT when it is set; its logs are
 in the logs directory under it. The root must leave room for the stack's sockets: the longest,

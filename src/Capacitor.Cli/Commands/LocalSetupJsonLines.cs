@@ -4,7 +4,8 @@ using Capacitor.Cli.LocalEdition;
 
 namespace Capacitor.Cli.Commands;
 
-/// <summary>The JSON lines the desktop app reads from <c>kcap setup --local --json</c> and <c>kcap local upgrade --json</c>.</summary>
+/// <summary>The JSON lines the desktop app reads from <c>kcap setup --local --json</c>, <c>kcap local upgrade --json</c> and
+/// <c>kcap local fetch --json</c>.</summary>
 static class LocalSetupJsonLines {
     public static string Line(LocalInstallEvent e) => Render(e switch {
         LocalInstallEvent.PreflightPassed p  => new() { Event = "preflight_passed", Plan = p.Plan.ToString().ToLowerInvariant(), Version = p.Version, Root = p.Root },
@@ -38,6 +39,9 @@ static class LocalSetupJsonLines {
         LocalInstallEvent.EmbeddingBuiltinDownloading d => new() { Event = "embeddings_builtin_downloading", Bytes = d.Bytes },
         LocalInstallEvent.EmbeddingBuiltinProgress p    => new() { Event = "embeddings_builtin_progress", Received = p.Received, Bytes = p.Bytes },
         LocalInstallEvent.EmbeddingBuiltinConfigured c  => new() { Event = "embeddings_configured", Provider = "builtin", ReplacedModel = c.Replaced },
+        LocalInstallEvent.WindowsServiceDeclined      => new() { Event = "windows_service_declined" },
+        LocalInstallEvent.WindowsServiceUnavailable u => new() { Event = "windows_service_unavailable", Message = u.Message },
+        LocalInstallEvent.Fetched f                   => new() { Event = "fetched", Version = f.Version, Path = f.Path },
         _                                    => throw new ArgumentOutOfRangeException(nameof(e), e, null),
     });
 

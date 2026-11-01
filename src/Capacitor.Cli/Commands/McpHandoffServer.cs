@@ -126,7 +126,7 @@ sealed class McpHandoffServer(ConfigRoot config, ProfileContext profiles, TokenS
             var force    = OptionalBool(arguments, "force");
 
             var result = await new SessionTakeover(AgentSessions.OnThisMachine(config), time)
-                .RunAsync(client, baseUrl, previous, currentSessionId, force);
+                .RunAsync(client, baseUrl, previous, currentSessionId, force ? TakeoverAdmission.Forced : TakeoverAdmission.Judged);
 
             return result switch {
                 TakeoverResult.Completed { CredentialRejected: true } c
@@ -134,6 +134,7 @@ sealed class McpHandoffServer(ConfigRoot config, ProfileContext profiles, TokenS
                 TakeoverResult.Completed c    => BuildToolResult(id, c.Outcome.ToJsonString(), isError: c.Unsuccessful),
                 TakeoverResult.Refused r      => BuildToolResult(id, $"Error: {r.Reason}", isError: true),
                 TakeoverResult.Failed f       => BuildToolResult(id, $"Error: {f.Reason}", isError: true),
+                TakeoverResult.Interrupted i  => BuildToolResult(id, $"Error: the takeover was interrupted ({i.Code}).\n\n{i.Outcome.ToJsonString()}", isError: true),
                 TakeoverResult.Unauthorized   => BuildToolResult(id, await UnauthorizedNoticeAsync(baseUrl), isError: true),
                 _                             => throw new InvalidOperationException(result.GetType().Name),
             };

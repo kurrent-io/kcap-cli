@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Handoff;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -363,6 +364,57 @@ public class WorktreeManagerHandoffTests {
 
     static Task<HandoffWork> CheckAsync(Fixture f, string startSha, IReadOnlyList<string>? commits, bool mayHaveUnpushedWork = false) =>
         Manager().CheckHandoffWorkAsync(f.Clone, startSha, commits, mayHaveUnpushedWork);
+
+    /// <summary>Each commit costs a git process on the launch lane, so only the first ones are checked.</summary>
+    [Test]
+    public async Task only_the_first_capped_session_commits_are_listed_as_missing() {
+        using var f       = Fixture.Create();
+        var       start   = await ResolveAsync(f, new HandoffTarget("main", null, false));
+        var       commits = Enumerable.Range(0, WorktreeManager.HandoffCommitCheckCap + 1).Select(i => $"not-a-sha-{i}").ToList();
+
+        var work = await CheckAsync(f, start.Sha, commits);
+
+        await Assert.That(work.Completeness).IsEqualTo(HandoffCompleteness.PartlyMissing);
+        await Assert.That(work.MissingCommits).IsEquivalentTo(commits.Take(WorktreeManager.HandoffCommitCheckCap));
+    }
+
+    /// <summary>The check runs on the launch lane, so a stop or shutdown must end it rather than wait out every commit.</summary>
+    [Test]
+    public async Task a_cancelled_commit_check_stops_before_reading_a_commit() {
+        using var f     = Fixture.Create();
+        var       first = f.CommitOnOrigin("feature", "b.txt");
+        var       start = await ResolveAsync(f, new HandoffTarget("feature", null, false));
+
+        await Assert.That(async () => await Manager().CheckHandoffWorkAsync(
+                f.Clone, start.Sha, [first], mayHaveUnpushedWork: false, ct: new CancellationToken(canceled: true)))
+            .Throws<OperationCanceledException>();
+    }
+
+    /// <summary>A cancelled launch leaves the user's checkout as it found it.</summary>
+    [Test]
+    public async Task a_cancelled_creation_adds_no_worktree() {
+        using var f = Fixture.Create();
+        f.CommitOnOrigin("feature", "b.txt");
+        var start = await ResolveAsync(f, new HandoffTarget("feature", null, false));
+
+        await Assert.That(async () => await Manager().CreateHandoffAsync(f.Clone, start, "handoff", new CancellationToken(canceled: true)))
+            .Throws<OperationCanceledException>();
+
+        await Assert.That(Directory.Exists(Path.Combine(f.Clone.Path, ".capacitor", "worktrees", "handoff"))).IsFalse();
+        await Assert.That(f.Clone.Do("branch", "--list", "feature").Text).IsEmpty();
+    }
+
+    [Test]
+    public async Task commits_past_the_cap_leave_the_work_unconfirmed() {
+        using var f     = Fixture.Create();
+        var       first = f.CommitOnOrigin("feature", "b.txt");
+        var       start = await ResolveAsync(f, new HandoffTarget("feature", null, false));
+
+        var work = await Manager().CheckHandoffWorkAsync(f.Clone, start.Sha, [first, "not-a-sha"], mayHaveUnpushedWork: false, checkCap: 1);
+
+        await Assert.That(work.Completeness).IsEqualTo(HandoffCompleteness.Unconfirmed);
+        await Assert.That(work.MissingCommits).IsEmpty();
+    }
 
     [Test]
     public async Task all_session_commits_reachable_and_nothing_unpushed_is_complete() {

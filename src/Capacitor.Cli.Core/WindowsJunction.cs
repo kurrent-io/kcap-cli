@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Microsoft.Win32.SafeHandles;
 
-namespace Capacitor.Cli.Daemon.Services;
+namespace Capacitor.Cli.Core;
 
 /// <summary>
 /// A directory junction made through the reparse-point API. A junction needs no privilege, unlike a
@@ -36,6 +36,21 @@ internal static partial class WindowsJunction {
                 throw new IOException($"could not point '{link}' at '{fullTarget}': {Marshal.GetLastPInvokeErrorMessage()}");
         } catch {
             try { Directory.Delete(link); } catch (IOException) { }
+            throw;
+        }
+    }
+
+    /// <summary>Points <paramref name="link"/> at <paramref name="target"/>, replacing whatever junction is there.
+    /// Windows has no atomic replace for a junction, so there is a moment with none; when the new one cannot be
+    /// made, the previous one is put back and the original error thrown.</summary>
+    public static void Replace(string link, string target) {
+        var previous = new DirectoryInfo(link).LinkTarget;
+        if (Directory.Exists(link) || File.Exists(link)) Directory.Delete(link);
+
+        try {
+            Create(link, target);
+        } catch (IOException) when (previous is not null) {
+            try { Create(link, previous); } catch (IOException) { }
             throw;
         }
     }

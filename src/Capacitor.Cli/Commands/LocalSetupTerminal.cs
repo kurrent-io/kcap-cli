@@ -8,7 +8,9 @@ namespace Capacitor.Cli.Commands;
 /// <summary>The install of <c>kcap setup --local</c> in a terminal: the preflight, the two answers, then the install
 /// rendered as status lines.</summary>
 /// <param name="report">The whole run's JSON report, which takes every install event and failure as well.</param>
-sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs args, SetupJsonReport? report = null) {
+/// <param name="beforeInstall">Runs once every answer is in, before anything is installed.</param>
+sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs args, SetupJsonReport? report = null,
+    Func<IProgress<LocalInstallEvent>, Task>? beforeInstall = null) {
     public const string SingleUserNotice =
         "This first version is for a machine with one user: on a shared machine, other users can open the web UI and act as its admin.";
 
@@ -79,6 +81,17 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
             embeddings = await EmbeddingsAsync(installer, builtin, canAsk);
         } catch (Exception ex) {
             return await FailAsync(LocalSetupJsonLines.Classify(ex));
+        }
+
+        if (beforeInstall is not null) {
+            await beforeInstall(progress);
+
+            // An installer built before would still pick the supervisor the machine had then.
+            try {
+                installer = factory.Create();
+            } catch (Exception ex) {
+                return await FailAsync(LocalSetupJsonLines.Classify(ex));
+            }
         }
 
         // Taken after the questions, so a Ctrl+C at a prompt still exits at once: nothing exists yet to roll back.
@@ -230,8 +243,13 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
                 $"Semantic search uses the built-in model; everything embedded with {old} is embedded again in the background",
             LocalInstallEvent.EmbeddingBuiltinConfigured    => "Semantic search uses the built-in model",
             LocalInstallEvent.EmbeddingsSkipped k      => k.Message,
+            LocalInstallEvent.WindowsServiceDeclined   => $"The administrator prompt was declined; {TaskFallback}",
+            LocalInstallEvent.WindowsServiceUnavailable u => $"{u.Message.TrimEnd('.')}; {TaskFallback}",
+            LocalInstallEvent.Fetched f                => $"kcap local {f.Version} is downloaded and verified in {f.Path}",
             _                                   => null,
         };
+
+    const string TaskFallback = "the local server runs as a Scheduled Task while you are signed in.";
 
     /// <summary>The percentage when it is a multiple of ten, so a terminal shows a pull in ten lines.</summary>
     static long? Tenth(long received, long bytes) => bytes > 0 && received * 100 / bytes % 10 == 0 ? received * 100 / bytes : null;

@@ -60,7 +60,7 @@ static class LocalSetupRollback {
                 try {
                     await service.UninstallAsync(unit, CancellationToken.None);
                 } catch (Exception ex) {
-                    throw Stopped($"Setup could not be undone: the {service.Describe} {unit.Label} could not be unloaded ({ex.Message}). Nothing was removed.");
+                    throw Stopped($"Setup could not be undone: the {service.Describe} {service.Name(unit)} could not be unloaded ({ex.Message}). Nothing was removed.");
                 }
 
                 break;
@@ -70,17 +70,12 @@ static class LocalSetupRollback {
                 break;
 
             default:
-                throw Stopped($"Setup could not be undone: it cannot tell which installation the {service.Describe} {unit.Label} ({service.UnitFile(unit)}) belongs to. Nothing was removed.");
+                throw Stopped($"Setup could not be undone: it cannot tell which installation the {service.Describe} {service.Name(unit)} ({service.UnitFile(unit)}) belongs to. Nothing was removed.");
         }
     }
 
-    // Directory.Delete removes a symlink, at the top or anywhere in the tree, without following it.
     static void Delete(string path) {
-        if (new DirectoryInfo(path).LinkTarget is not null || File.Exists(path)) File.Delete(path);
-        else if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
-        else return;
-
-        FaultPoints.Hit($"unlink:{path}");
+        if (LocalTree.Remove(path)) FaultPoints.Hit($"unlink:{path}");
     }
 
     static LocalInstallFailure Stopped(string message) => new(LocalInstallFailureCode.RecoveryFailed, message);

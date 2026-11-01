@@ -1,7 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
 using Capacitor.Cli.Core.LocalEdition;
-using TUnit.Core.Enums;
 
 namespace Capacitor.Cli.Core.Tests.Unit.LocalEdition;
 
@@ -33,15 +32,6 @@ public class LocalServerConditionsTests {
     public async Task An_installation_with_its_binary_is_installed() {
         await PublishAsync(InstallRegistry.Empty.WithActive(Active));
         CreateBinary();
-
-        await Assert.That(LocalServerConditions.Read(Root)).IsEqualTo(LocalServerCondition.Installed);
-    }
-
-    [Test, RunOn(OS.Windows)]
-    public async Task A_windows_server_binary_counts_as_installed() {
-        await PublishAsync(InstallRegistry.Empty.WithActive(Active));
-        Directory.CreateDirectory(Path.GetDirectoryName(LocalServerConditions.ServerBinary(Root))!);
-        File.WriteAllText(LocalServerConditions.ServerBinary(Root) + ".exe", "");
 
         await Assert.That(LocalServerConditions.Read(Root)).IsEqualTo(LocalServerCondition.Installed);
     }

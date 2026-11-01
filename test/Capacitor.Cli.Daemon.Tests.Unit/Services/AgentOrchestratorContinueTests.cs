@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Handoff;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Resume;
@@ -101,7 +102,7 @@ public class AgentOrchestratorContinueTests : IDisposable {
 
     ResumeLedgerEntry Entry(
             Fixture f, bool isPrivate = false, bool standalone = false, string? vendorSession = null,
-            WorkLocation work = WorkLocation.OwnedWorktree) {
+            WorkLocation work = WorkLocation.OwnedWorktree, HandoffSourceContext? handoffSource = null) {
         var stamp    = TimeProvider.System.GetUtcNow();
         var worktree = Tmp.CreateDir("wt-old");
         if (standalone) Directory.CreateDirectory(Path.Combine(worktree, ".git"));
@@ -112,7 +113,8 @@ public class AgentOrchestratorContinueTests : IDisposable {
             McpConfigPath: null, Title: "the thing", IsPrivate: isPrivate, Origin: "server",
             RequesterUserId: "user-1", RequesterDisplay: "User One", ConsentSource: "default",
             ConsentAt: stamp.ToString("O"), FlowRunId: null, FlowRole: null,
-            WorktreeBranch: "capacitor/custom-old", WorktreeIsStandalone: standalone, WorktreeSourceRepo: f.Repo);
+            WorktreeBranch: "capacitor/custom-old", WorktreeIsStandalone: standalone, WorktreeSourceRepo: f.Repo,
+            HandoffSource: handoffSource);
         var entry = new ResumeLedgerEntry(
             ResumeLedgerEntry.CurrentSchemaVersion, OldAgent, "daemon-1", stamp, stamp, f.Factory.Vendor, "acp",
             OldSession, vendorSession, launch, ResumeState.Resuming, Attempts: 0, LastError: null,
@@ -226,6 +228,24 @@ public class AgentOrchestratorContinueTests : IDisposable {
         var declare = Declares().Single();
         await Assert.That(declare["session_id"]!.GetValue<string>()).IsEqualTo(NewSession);
         await Assert.That(declare["work_item_id"]!.GetValue<string>()).IsEqualTo("w1");
+    }
+
+    /// <summary>The server admits a repeated hand-off begin only for the session it continued the source as, so a
+    /// successor under a new session takes over the interrupted session's work, never the hand-off source.</summary>
+    [Test]
+    public async Task A_continued_handoff_successor_does_not_take_over_the_handoff_source() {
+        var f = Build();
+        await using var _ = f.Orch;
+        f.Server.BeginHandoff = (_, _) => new HandoffTakeoverAdmission("lease-token-1", null, 60);
+        var entry = Entry(f, handoffSource: new HandoffSourceContext(
+            "session-ended-1", "Wire the widget", "User One", "acme", "widgets", "feature", null, null, "build it", "now test it"));
+
+        await f.Orch.ContinueEntryAsync(entry, "native_resume_unsupported", CancellationToken.None);
+        var successor = f.Factory.Starts.Single().Ctx.AgentId;
+
+        await Assert.That(f.Orch.GetAgentForTest(successor)!.HandoffSource).IsNull();
+        await Assert.That(f.Orch.ResumeLedger!.TryRead(successor)!.Launch.HandoffSource).IsNull();
+        await Assert.That(f.Server.HandoffBegins).IsEmpty();
     }
 
     [Test]

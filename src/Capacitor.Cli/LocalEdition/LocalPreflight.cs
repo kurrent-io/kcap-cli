@@ -73,9 +73,10 @@ sealed class LocalPreflight(
     void CheckPlatform() {
         if (platform.SupportsLocalEdition) return;
         if (platform.IsMacOS) throw Refuse(LocalInstallFailureCode.UnsupportedPlatform, "There is no Intel Mac build of the local edition; it needs an Apple silicon Mac.");
+        if (platform.IsWindows) throw Refuse(LocalInstallFailureCode.UnsupportedPlatform, "There is no Arm build of the local edition for Windows; it needs an x64 PC.");
         if (platform.IsLinux && platform.IsMusl) throw Refuse(LocalInstallFailureCode.MuslUnsupported, "The musl builds of kcap do not support a local installation.");
 
-        throw Refuse(LocalInstallFailureCode.UnsupportedPlatform, "The local edition runs on macOS for now.");
+        throw Refuse(LocalInstallFailureCode.UnsupportedPlatform, "The local edition runs on Apple silicon Macs and x64 Windows for now.");
     }
 
     void CheckClients() {

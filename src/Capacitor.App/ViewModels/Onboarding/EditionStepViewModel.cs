@@ -1,5 +1,6 @@
 using System.Reactive;
 using System.Reactive.Linq;
+using Capacitor.App.Services.LocalSetup;
 using Capacitor.Cli.Core.Telemetry;
 using ReactiveUI.Reactive;
 
@@ -19,24 +20,34 @@ public sealed class EditionStepViewModel : ReactiveObject, IWizardStep {
     public const string ExistingTitle = "Sign in to a workspace";
     public const string ExistingDetail =
         "Connect to a workspace you created or one your team invited you to.";
-    public const string UnsupportedPlatform = "The local edition runs only on Apple silicon Macs for now, so it isn't available on this machine.";
+    public const string UnsupportedPlatform = "The local edition runs only on Apple silicon Macs and x64 Windows PCs for now, so it isn't available on this machine.";
     public const string CloudProfilePresent =
         "This machine is set up for a cloud workspace. Switching to local setup isn't supported yet.";
 
     readonly SetupFunnel   _funnel;
     readonly Func<string?> _localUnavailableReason;
     readonly Func<bool>    _locked;
+    readonly Func<bool>    _leadWithLocal;
+    readonly LocalBundlePrefetch? _prefetch;
     bool                   _offered;
+    bool                   _preselected;
     EditionChoice?         _choice;
     string?                _unavailable;
     string?                _notice;
 
     /// <param name="localUnavailableReason">Why Local cannot be chosen, or null when it can.</param>
     /// <param name="locked">True once this machine is committed to the local edition, so the page has nothing to ask.</param>
-    public EditionStepViewModel(SetupFunnel funnel, Func<string?> localUnavailableReason, Func<bool>? locked = null) {
+    /// <param name="leadWithLocal">True while nothing local is installed: an available local edition is preselected
+    /// and its bundle fetched ahead of the install.</param>
+    /// <param name="prefetch">Fetches the local bundle; cancelled once another edition is chosen.</param>
+    public EditionStepViewModel(
+            SetupFunnel funnel, Func<string?> localUnavailableReason, Func<bool>? locked = null,
+            Func<bool>? leadWithLocal = null, LocalBundlePrefetch? prefetch = null) {
         _funnel                 = funnel;
         _localUnavailableReason = localUnavailableReason;
         _locked                 = locked ?? (() => false);
+        _leadWithLocal          = leadWithLocal ?? (() => false);
+        _prefetch               = prefetch;
         _unavailable            = localUnavailableReason();
 
         ChooseLocalCommand = ReactiveCommand.Create(
@@ -69,6 +80,12 @@ public sealed class EditionStepViewModel : ReactiveObject, IWizardStep {
 
     public bool LocalUnavailableVisible => LocalUnavailableReason is not null;
 
+    /// The page leads with the local card: shown selected and focused, so Enter takes it.
+    public bool LocalPreselected {
+        get => _preselected;
+        private set => this.RaiseAndSetIfChanged(ref _preselected, value);
+    }
+
     /// A line from a later step that sent the user back here; the next choice clears it.
     public string? Notice {
         get => _notice;
@@ -90,6 +107,8 @@ public sealed class EditionStepViewModel : ReactiveObject, IWizardStep {
 
     public Task OnEnterAsync(CancellationToken ct) {
         LocalUnavailableReason = _localUnavailableReason();
+        LocalPreselected       = LocalUnavailableReason is null && !_locked() && _leadWithLocal();
+        if (LocalPreselected) _prefetch?.Start();
 
         if (!_offered) {
             _offered = true;
@@ -102,6 +121,7 @@ public sealed class EditionStepViewModel : ReactiveObject, IWizardStep {
     public Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) => Task.FromResult(true);
 
     void Choose(EditionChoice choice) {
+        if (choice != EditionChoice.Local) _prefetch?.Cancel();
         Notice = null;
         Choice = choice;
         _funnel.EditionChosen(choice.Wire());

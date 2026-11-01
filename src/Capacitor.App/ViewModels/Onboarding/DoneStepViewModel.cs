@@ -17,8 +17,6 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
     public const string ServiceTitle = "Background service";
     public const string FirstSessionLine = "Your next session will be the first one stored";
 
-    static readonly string ThisDevice = OperatingSystem.IsMacOS() ? "this Mac" : "this computer";
-
     readonly Func<DoneFacts> _facts;
     readonly IUrlOpener?     _opener;
     readonly Func<bool, Task<WorkspaceReadiness>>? _prepare;
@@ -117,7 +115,7 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
 
     public string ActivityLine => Import switch {
         { Processed: 0 } => "Looking through your history…",
-        { } run          => $"{run.ProcessedOfExpected} sessions checked",
+        { } run          => $"{run.ProcessedOfExpected} {run.SessionsNoun} checked",
         null             => "",
     };
 
@@ -168,7 +166,7 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
     /// Starting agents remotely goes through a cloud workspace, so the local edition does not offer it.
     public string ServiceBody => _current.Local
         ? "Keeps kcap storing sessions when the app is closed"
-        : $"Keeps kcap storing sessions when the app is closed, and lets you start agents on {ThisDevice} from anywhere";
+        : $"Keeps kcap storing sessions when the app is closed, and lets you start agents on {ThisDevice.Name} from anywhere";
 
     public string ServiceStatus => ServiceState switch {
         BackgroundServiceState.Running    => "Running",

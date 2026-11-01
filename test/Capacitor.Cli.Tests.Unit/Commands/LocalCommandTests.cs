@@ -3,6 +3,7 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.LocalEdition;
 using Capacitor.Cli.Tests.Unit.LocalEdition.Fakes;
+using TUnit.Core.Enums;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -30,9 +31,22 @@ public class LocalCommandTests {
     public async Task A_trailing_argument_is_refused_before_anything_runs(string sub) {
         using var stderr = ConsoleOutput.StartErrorCapture();
 
-        var exit = await new LocalCommand(new NoStack(), new LocalUpgradeCommand(new NoStack()), new NoBrowser(), new FakeOutgoingRecorders([]), new ConfigRoot("/no-config"), new UserHome("/no-home")).HandleAsync(["local", sub, "--bogus"]);
+        var exit = await new LocalCommand(new NoStack(), new LocalUpgradeCommand(new NoStack()), new LocalFetchCommand(new NoStack()), new NoBrowser(), new FakeOutgoingRecorders([]), new ConfigRoot("/no-config"), new UserHome("/no-home")).HandleAsync(["local", sub, "--bogus"]);
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(stderr.GetCapturedError()).Contains("takes no arguments: --bogus");
+    }
+
+    /// <summary>Only the Windows supervisors bound the server's stop, so the promise of a deadline is refused elsewhere
+    /// before anything runs.</summary>
+    [Test]
+    [ExcludeOn(OS.Windows)]
+    public async Task A_quick_uninstall_is_refused_off_Windows() {
+        using var stderr = ConsoleOutput.StartErrorCapture();
+
+        var exit = await new LocalCommand(new NoStack(), new LocalUpgradeCommand(new NoStack()), new LocalFetchCommand(new NoStack()), new NoBrowser(), new FakeOutgoingRecorders([]), new ConfigRoot("/no-config"), new UserHome("/no-home")).HandleAsync(["local", "uninstall", "--quick", "--yes"]);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(stderr.GetCapturedError()).Contains("--quick is for the Windows app's uninstaller");
     }
 }

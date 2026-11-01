@@ -61,10 +61,10 @@ assert "cli that never refuses" 1 "$tmp/ungated.app" "$tmp/daemon.sha256"
 make_bundle "$tmp/locked.app" "daemon-bytes" "$digest" locked
 assert "cli that fails before the gate" 1 "$tmp/locked.app" "$tmp/daemon.sha256"
 
-# An extracted Velopack Windows package: the binaries sit in current/ with .exe names.
+# An installed Velopack Windows package: the binaries sit in current/bin/ with .exe names.
 make_win_bundle() { # <dir> <daemon-content> <embedded-digest>
-  make_bundle "$1.src" "$2" "$3"; mkdir -p "$1/current"
-  mv "$1.src/Contents/MacOS/kcap" "$1/current/kcap.exe"; mv "$1.src/Contents/MacOS/kcap-daemon" "$1/current/kcap-daemon.exe"
+  make_bundle "$1.src" "$2" "$3"; mkdir -p "$1/current/bin"
+  mv "$1.src/Contents/MacOS/kcap" "$1/current/bin/kcap.exe"; mv "$1.src/Contents/MacOS/kcap-daemon" "$1/current/bin/kcap-daemon.exe"
 }
 make_win_bundle "$tmp/win" "daemon-bytes" "$digest"
 assert "windows matching pair" 0 "$tmp/win" "$tmp/daemon.sha256"

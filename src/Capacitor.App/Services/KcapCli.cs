@@ -101,8 +101,14 @@ public interface IKcapCli {
     /// `setup --local --json --single-user --yes` and the embedding choice's flag, streamed live via onLine. No
     /// internal timeout: <paramref name="ct"/> bounds only the work before the spawn; once running, the child stops
     /// only through <paramref name="interrupt"/>, which lets the CLI roll back before a tree kill.
+    /// <paramref name="windowsService"/> adds `--windows-service`, which asks for administrator approval first.
     Task<StreamingResult> SetupLocalAsync(
-        LocalEmbeddingChoice embeddings, Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct);
+        LocalEmbeddingChoice embeddings, Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct,
+        bool windowsService = false);
+
+    /// `local fetch --json`: downloads and verifies the local bundle into the CLI's cache, streamed live via onLine.
+    /// <paramref name="interrupt"/> asks it to stop, then the tree is killed after a grace.
+    Task<StreamingResult> LocalFetchAsync(Action<StreamedLine> onLine, CancellationToken interrupt);
 
     /// `local upgrade --json --no-update-check`, streamed live via onLine, with the same cancellation
     /// contract as <see cref="SetupLocalAsync"/>.
@@ -349,12 +355,25 @@ public sealed class KcapCli : IKcapCli {
     }
 
     public async Task<StreamingResult> SetupLocalAsync(
-            LocalEmbeddingChoice embeddings, Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct) {
+            LocalEmbeddingChoice embeddings, Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct,
+            bool windowsService = false) {
         if (CliPath is not { } cliPath)
             return new StreamingResult(-1, false, [new StreamedLine(ProcessStreamKind.Stderr, "kcap CLI not found")]);
 
-        return await _runner.RunStreamingAsync(cliPath, ["setup", "--local", "--json", "--single-user", "--yes", .. embeddings.Args],
+        List<string> args = ["setup", "--local", "--json", "--single-user", "--yes", .. embeddings.Args];
+        if (windowsService) args.Add("--windows-service");
+
+        return await _runner.RunStreamingAsync(cliPath, args.ToArray(),
             new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Interrupt: interrupt, InterruptGrace: SetupInterruptGrace),
+            onLine, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    public async Task<StreamingResult> LocalFetchAsync(Action<StreamedLine> onLine, CancellationToken interrupt) {
+        if (CliPath is not { } cliPath)
+            return new StreamingResult(-1, false, [new StreamedLine(ProcessStreamKind.Stderr, "kcap CLI not found")]);
+
+        return await _runner.RunStreamingAsync(cliPath, ["local", "fetch", "--json"],
+            new RunOptions(EnvOverlay: await SpawnEnvAsync(interrupt).ConfigureAwait(false), Interrupt: interrupt),
             onLine, CancellationToken.None).ConfigureAwait(false);
     }
 

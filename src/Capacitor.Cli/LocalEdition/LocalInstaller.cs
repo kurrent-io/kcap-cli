@@ -153,7 +153,7 @@ sealed class LocalInstaller(
 
             if (recorded) LocalEmbeddingStep.Applied(previous, setting!, _progress);
 
-            _progress.Report(new LocalInstallEvent.Starting(unit.Label));
+            _progress.Report(new LocalInstallEvent.Starting(service.Name(unit)));
 
             await LocalServerReadiness.WaitAsync(local, unit, LocalServerReadiness.StartBudget, time, ct);
             _progress.Report(new LocalInstallEvent.Ready(unit.BaseUrl));
@@ -207,7 +207,7 @@ sealed class LocalInstaller(
         var details = new SetupDetails(existing.Id, existing.Port, existing.Version, existing.ServerUrl, Path.GetFullPath(config.Directory), ActiveProfile());
 
         LocalInstallFailure NotOurs() => new(LocalInstallFailureCode.NotOurServer,
-            $"The {service.Describe} {unit.Label} ({service.UnitFile(unit)}) is not provably this installation's, so it was left alone and the profile was not changed.");
+            $"The {service.Describe} {service.Name(unit)} ({service.UnitFile(unit)}) is not provably this installation's, so it was left alone and the profile was not changed.");
 
         try {
             if (!File.Exists(unit.ServerBinary)) {
@@ -224,7 +224,7 @@ sealed class LocalInstaller(
             unitLock.Dispose();
         }
 
-        _progress.Report(new LocalInstallEvent.Starting(unit.Label));
+        _progress.Report(new LocalInstallEvent.Starting(service.Name(unit)));
 
         await LocalServerReadiness.WaitAsync(local, unit, LocalServerReadiness.StartBudget, time, ct);
         _progress.Report(new LocalInstallEvent.Ready(unit.BaseUrl));

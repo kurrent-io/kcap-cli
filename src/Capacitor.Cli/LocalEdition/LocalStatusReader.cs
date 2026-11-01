@@ -59,7 +59,7 @@ sealed class LocalStatusReader(LocalStack stack, string cliVersion, Func<int, Po
             new("Version", installation.Version),
             new("Installation", installation.Id),
             new("Root", stack.Root.Directory),
-            new("Service", $"{service.Describe} {Label(unit)} ({service.UnitFile(unit)})"),
+            new("Service", $"{service.Describe} {service.Name(unit)} ({service.UnitFile(unit)})"),
             new("Search", (unit.Embedding is { Provider: LocalEmbeddingProvider.Ollama, Model: { } model }
                 ? $"by meaning through Ollama with {model} while it answers, and by keyword"
                 : unit.Embedding is { Provider: LocalEmbeddingProvider.Builtin }
@@ -82,7 +82,7 @@ sealed class LocalStatusReader(LocalStack stack, string cliVersion, Func<int, Po
         switch (state.Owner) {
             case OwnerDecision.NotOurs:
                 var others = Roots(state.Readings).ToList();
-                return Down($"Not running: the {service.Describe} {Label(unit)} serves another installation.", fields, notes,
+                return Down($"Not running: the {service.Describe} {service.Name(unit)} serves another installation.", fields, notes,
                     [$"It runs the installation in {string.Join(" and ", others)}. One user has one unit, so only one installation runs at a time; "
                   + $"manage that one with KCAP_LOCAL_ROOT={others.FirstOrDefault() ?? "<its root>"} kcap local …."]);
 
@@ -252,8 +252,6 @@ sealed class LocalStatusReader(LocalStack stack, string cliVersion, Func<int, Po
         File.Exists(unit.ServerBinary)
             ? [$"kcap local start {startDoes}."]
             : [$"The server's files are missing ({unit.ServerBinary}). Run kcap setup --local to restore them."];
-
-    static string Label(LocalServerUnit unit) => OperatingSystem.IsLinux() ? unit.SystemdName : unit.Label;
 
     static string ExitCode(int? code) => code is { } c ? $" with code {c}" : "";
 
