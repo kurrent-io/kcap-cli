@@ -17,7 +17,8 @@ sealed partial class ClaudeHeadlessHarness(HarnessRegistry harnesses, ProfileCon
 
     public Task<ClaudeCliOutcome> RunAsync(RunHeadlessPromptArgs args, TimeSpan timeout, CancellationToken ct) =>
         ClaudeCliRunner.RunDetailedAsync(args.Prompt, timeout, time, Log, profiles.Resolution.Profile, harnesses,
-            model: args.Model, maxTurns: args.MaxTurns, promptViaStdin: true, jsonSchema: args.JsonSchema,
+            model: args.Model, maxTurns: args.MaxTurns, promptViaStdin: true,
+            jsonSchema: string.IsNullOrWhiteSpace(args.JsonSchema) ? null : args.JsonSchema,
             maxBudgetUsd: args.MaxBudgetUsd, systemPrompt: args.SystemPrompt, ct: ct);
 
     void Log(string message) => LogRunner(logger, message);
