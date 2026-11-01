@@ -33,7 +33,7 @@ Subcommands:
                             and a new installation gets a new port.
       --force               Uninstall even while a daemon is running agents; they end with it.
       --yes, -y             Do not ask for confirmation.
-      --quick               Windows only. Give the server about 10 seconds to stop, then remove its
+      --quick               Windows only. Give the server about 8 seconds to stop, then remove its
                             service whether or not it has finished, for an app uninstaller with a deadline.
                             Files a server still stopping holds open stay behind. Cannot be
                             combined with --purge.

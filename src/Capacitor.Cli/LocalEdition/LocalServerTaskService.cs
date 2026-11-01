@@ -36,7 +36,12 @@ sealed class LocalServerTaskService(
 
     static readonly TimeSpan ExitPollGap = TimeSpan.FromMilliseconds(250);
 
+    /// <summary>Each schtasks call of a quick uninstall, which an app uninstaller's deadline bounds; schtasks answers in
+    /// well under a second when it answers at all.</summary>
+    static readonly TimeSpan QuickCommandBudget = TimeSpan.FromSeconds(2);
+
     readonly Func<string[], (int ExitCode, string StdOut, string StdErr)> _schtasks = schtasks ?? (args => ServiceProcess.Run("schtasks", args));
+    readonly Func<string[], (int ExitCode, string StdOut, string StdErr)> _schtasksQuick = schtasks ?? (args => Bounded(args, QuickCommandBudget));
     readonly UnitFileWriter _writeUnit = writeUnit ?? ((path, content, encoding) => ServiceFiles.WriteOwnerOnly(path, content, encoding, durable: true, home: home));
     readonly Func<LocalServerUnit, int?> _findServer = findServer ?? FindTaskServer;
     readonly Func<int, TimeSpan, string?> _breakConsole = breakConsole ?? BreakThroughHelper;
@@ -198,7 +203,7 @@ sealed class LocalServerTaskService(
         var live     = findLive ?? LocalStackProbe.FindLive;
         var deadline = time.GetUtcNow() + grace;
 
-        _schtasks(LocalServerTaskUnit.DisableArgs(unit));
+        _schtasksQuick(LocalServerTaskUnit.DisableArgs(unit));
         _writeUnit(StopMarker(unit), "", null);
 
         // The sender's wait comes out of the grace too, or a hung sender would outlast the caller's deadline.
@@ -206,13 +211,19 @@ sealed class LocalServerTaskService(
 
         while (live(unit.Root) is not null && time.GetUtcNow() < deadline) await Task.Delay(ExitPollGap, time, ct);
 
-        _schtasks(LocalServerTaskUnit.EndArgs(unit));
+        // Past the grace, /End and /Delete are still tried; one that times out fails the uninstall with the marker kept.
+        _schtasksQuick(LocalServerTaskUnit.EndArgs(unit));
 
-        var (exit, _, err) = _schtasks(LocalServerTaskUnit.DeleteArgs(unit));
+        var (exit, _, err) = _schtasksQuick(LocalServerTaskUnit.DeleteArgs(unit));
         if (exit != 0 && !ConfirmedAbsent(unit)) throw Failed(LocalServerTaskUnit.DeleteArgs(unit), exit, err);
 
         if (File.Exists(LocalServerTaskUnit.WrapperPath(home, unit))) File.Delete(LocalServerTaskUnit.WrapperPath(home, unit));
         if (live(unit.Root) is null && _findServer(unit) is null) ClearStop(unit);
+    }
+
+    static (int ExitCode, string StdOut, string StdErr) Bounded(string[] args, TimeSpan budget) {
+        var (exit, stdout, stderr, timedOut) = ServiceProcess.RunBounded("schtasks", args, budget);
+        return timedOut ? (-1, stdout, $"schtasks did not answer within {budget.TotalSeconds:0}s") : (exit, stdout, stderr);
     }
 
     void Check(string[] args) {
