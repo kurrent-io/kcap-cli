@@ -10,6 +10,7 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.GitHubHtml;
+using Capacitor.App.Services;
 using MarkView.Avalonia;
 using MarkView.Avalonia.Rendering.Inlines;
 using MarkView.Avalonia.SyntaxHighlighting;
@@ -32,6 +33,13 @@ public sealed class MarkdownView : ContentControl {
     public static readonly StyledProperty<string?> ReferenceBaseProperty =
         AvaloniaProperty.Register<MarkdownView, string?>(nameof(ReferenceBase));
 
+    /// Titles for links to the app server's agent pages. Inherited, so the window sets it once for
+    /// every view inside it; unset, those links keep their URL.
+    public static readonly AttachedProperty<AgentLinkLabels?> AgentLinksProperty =
+        AvaloniaProperty.RegisterAttached<MarkdownView, Control, AgentLinkLabels?>("AgentLinks", inherits: true);
+
+    public static void SetAgentLinks(Control control, AgentLinkLabels? value) => control.SetValue(AgentLinksProperty, value);
+
     /// Takes a code block's text. Left unset on a surface with nowhere to run it, which is what
     /// withdraws the offer from the block.
     public static readonly StyledProperty<ICommand?> RunCodeProperty =
@@ -50,6 +58,12 @@ public sealed class MarkdownView : ContentControl {
     readonly DetailsExtension _detailsExtension;
     readonly CodeBlockActions _codeActions;
     readonly ReferenceLinks _referenceLinks;
+    readonly AgentLinkTitles _agentLinkTitles;
+    // Agents linked under their short-id stand-in, whose title arriving redraws the view.
+    readonly HashSet<string> _untitledAgents = new(StringComparer.Ordinal);
+    AgentLinkLabels? _watchedLinks;
+    bool _attached;
+    IDisposable? _titledWatch;
     readonly MarkdownLinkKeys _linkKeys;
     bool _nonLeftRelease;
 
@@ -61,12 +75,14 @@ public sealed class MarkdownView : ContentControl {
         RunCodeProperty.Changed.AddClassHandler<MarkdownView>((view, _) => view._codeActions.ApplyRunCode());
         FlavorProperty.Changed.AddClassHandler<MarkdownView>((view, _) => view.ApplyFlavor());
         ReferenceBaseProperty.Changed.AddClassHandler<MarkdownView>((view, _) => view.Render());
+        AgentLinksProperty.Changed.AddClassHandler<MarkdownView>((view, _) => view.Render());
     }
 
     public MarkdownView() {
         _detailsExtension = new(_details, OnDetailsToggled);
         _codeActions = new(this);
         _referenceLinks = new(this);
+        _agentLinkTitles = new(this);
         _linkKeys = MarkdownLinkKeys.Attach(_viewer, () => OpenLink);
         ApplyFlavor();
         // The viewer's template owns a ScrollViewer; the list around it is what scrolls.
@@ -107,11 +123,15 @@ public sealed class MarkdownView : ContentControl {
         base.OnAttachedToVisualTree(e);
         _selectionHost = this.FindAncestorOfType<ChatTabView>();
         _selectionHost?.UpdateSelection(this);
+        _attached = true;
+        WatchTitles();
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e) {
         _selectionHost?.RemoveSelection(this);
         _selectionHost = null;
+        _attached = false;
+        WatchTitles();
         base.OnDetachedFromVisualTree(e);
     }
 
@@ -197,6 +217,7 @@ public sealed class MarkdownView : ContentControl {
     /// change cannot re-throw.
     void Render() {
         _linkKeys.Clear();
+        _untitledAgents.Clear();
         if (ToolTip.GetTip(_viewer) is not null) ToolTip.SetTip(_viewer, null);
         if (_viewer.Markdown == Text) _viewer.Markdown = null;
         try {
@@ -207,6 +228,24 @@ public sealed class MarkdownView : ContentControl {
             Content = new SelectableTextBlock { Text = Text, TextWrapping = TextWrapping.Wrap };
         }
         _selectionHost?.UpdateSelection(this);
+        WatchTitles();
+    }
+
+    internal string? AgentLinkLabel(string url) {
+        if (GetValue(AgentLinksProperty)?.For(url) is not { } label) return null;
+        if (!label.IsTitle) _untitledAgents.Add(label.AgentId);
+        return label.Text;
+    }
+
+    /// Watches only while attached and holding a stand-in, so a chat of settled messages subscribes to nothing.
+    void WatchTitles() {
+        var links = _untitledAgents.Count == 0 || !_attached ? null : GetValue(AgentLinksProperty);
+        if (ReferenceEquals(links, _watchedLinks)) return;
+        _titledWatch?.Dispose();
+        _watchedLinks = links;
+        _titledWatch = links?.Titled.Subscribe(id => {
+            if (_untitledAgents.Contains(id)) Render();
+        });
     }
 
     internal string? KeyboardLinkUrl => _linkKeys.CurrentUrl;
@@ -247,6 +286,7 @@ public sealed class MarkdownView : ContentControl {
         } else {
             _viewer.Extensions.Add(KcapMarkdownExtension.Chat);
         }
+        _viewer.Extensions.Add(_agentLinkTitles);
         _viewer.Extensions.Add(Highlighting);
         // After the highlighter, whose code block renderer this one wraps.
         _viewer.Extensions.Add(_codeActions);

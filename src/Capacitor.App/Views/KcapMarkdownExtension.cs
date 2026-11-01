@@ -51,7 +51,7 @@ public sealed partial class KcapMarkdownExtension(MarkdownFlavor flavor) : IMark
         return new MarkdownImage(image.Url ?? "", ImageLabel.For(Label(image), image.Url), ImageSize.Of(image), target, inline);
     }
 
-    static string Label(ContainerInline container) =>
+    internal static string Label(ContainerInline container) =>
         string.Concat(container.Select(inline => inline switch {
             LiteralInline literal   => literal.Content.ToString(),
             CodeInline code         => code.Content,
