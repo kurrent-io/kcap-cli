@@ -235,8 +235,9 @@
         <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentBrush}" />
         <Setter Property="Foreground" Value="{StaticResource OnboardingTextBrush}" />
     </Style>
-    <!-- The edition the page leads with reads as selected: a selection mark, never an outcome colour. The padding
-         gives back the wider border, so the cards stay aligned. -->
+    <!-- The edition the page leads with reads as selected: a selection mark, never an outcome colour. A border alone
+         is what hover and focus already draw on any card, so the wash and the label carry it. The padding gives back
+         the wider border, so the cards stay aligned. -->
     <Style Selector="Button#LocalEditionButton" x:DataType="vm:EditionStepViewModel">
         <Setter Property="onboarding:EditionPreselect.IsPreselected" Value="{Binding LocalPreselected}" />
     </Style>
@@ -244,8 +245,23 @@
         <Setter Property="BorderThickness" Value="2" />
         <Setter Property="Padding" Value="19,17" />
     </Style>
-    <Style Selector="Button.onboardingEditionCard.preselected /template/ ContentPresenter#PART_ContentPresenter">
+    <Style Selector="Button.onboardingEditionCard.preselected /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.onboardingEditionCard.preselected:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.onboardingEditionCard.preselected:pressed /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.onboardingEditionCard.preselected:focus-visible /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource OnboardingAccentWashBrush}" />
         <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentBrush}" />
+    </Style>
+    <Style Selector="Border.onboardingRecommended">
+        <Setter Property="CornerRadius" Value="10" />
+        <Setter Property="Padding" Value="8,2" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentBrush}" />
+        <Setter Property="Background" Value="{StaticResource OnboardingAccentWashBrush}" />
+    </Style>
+    <Style Selector="Border.onboardingRecommended TextBlock">
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingAccentBrush}" />
     </Style>
     <!-- An edition this machine cannot take: the head fades, the footer saying why stays legible. -->
     <Style Selector="Button.onboardingEditionCard:disabled Grid.onboardingEditionHead">

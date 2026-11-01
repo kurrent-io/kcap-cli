@@ -20,11 +20,15 @@
                             AutomationProperties.HelpText="{Binding LocalUnavailableReason}"
                             ToolTip.Tip="{Binding LocalUnavailableReason}" ToolTip.ShowOnDisabled="True">
                         <StackPanel>
-                            <Grid Classes="onboardingEditionHead" ColumnDefinitions="20,*" RowDefinitions="Auto,Auto" ColumnSpacing="14" RowSpacing="4">
+                            <Grid Classes="onboardingEditionHead" ColumnDefinitions="20,*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="14" RowSpacing="4">
                                 <app:AppIcon Kind="Laptop" Size="20" />
                                 <TextBlock Grid.Column="1" Classes="onboardingLabel" VerticalAlignment="Center"
                                            Text="{x:Static vm:EditionStepViewModel.LocalTitle}" />
-                                <TextBlock Grid.Row="1" Grid.Column="1" Classes="onboardingDetail" Text="{x:Static vm:EditionStepViewModel.LocalDetail}" />
+                                <Border Grid.Column="2" x:Name="LocalRecommendedTag" Classes="onboardingRecommended" VerticalAlignment="Center"
+                                        IsVisible="{Binding LocalPreselected}">
+                                    <TextBlock Text="Recommended" />
+                                </Border>
+                                <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Classes="onboardingDetail" Text="{x:Static vm:EditionStepViewModel.LocalDetail}" />
                             </Grid>
                             <StackPanel Classes="onboardingEditionFooter" IsVisible="{Binding LocalUnavailableVisible}">
                                 <Border Classes="onboardingDivider" />
