@@ -44,7 +44,7 @@ public class CodexHookCommandTests : IDisposable {
             ? TestWatchers.For(Config.Root, profiles, client)
             : TestWatchers.For(Config.Root, profiles, client, spawner);
         var command = new CodexHookCommand(Config.Root, profiles, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home),
-            hosted ?? HostedAgent.Terminal, client, watchers, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory));
+            hosted ?? HostedAgent.Terminal, client, watchers, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None);
 
         return command.Handle(new StringReader(payload), new CodexHookEnvironment(_stdout, _stderr, skip, hostedAppServer));
     }

@@ -1,19 +1,23 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Recording;
 using Capacitor.Cli.Core.Setup;
 
 namespace Capacitor.Cli;
 
 /// <summary>
-/// Stamps this machine's harness inventory and platform onto a SessionStart body, so a daemonless
-/// machine still reports them through the hook carrier. The inventory is serialized through the same
-/// <see cref="CapacitorJsonContext"/> as the daemon's copy, so both carriers are byte-identical.
-/// Never throws — a probe failure just omits the field (must never break a hook).
+/// Stamps this machine's harness inventory, platform and the session's recording identity onto a
+/// SessionStart body, so a daemonless machine still reports them through the hook carrier. The inventory is
+/// serialized through the same <see cref="CapacitorJsonContext"/> as the daemon's copy, so both carriers are
+/// byte-identical. Never throws — a probe failure just omits the field (must never break a hook).
 /// </summary>
 static class SessionStartInventory {
-    public static void Stamp(JsonObject body, ConfigRoot config, HarnessRegistry harnesses, TimeProvider time) {
+    public static void Stamp(
+            JsonObject body, ConfigRoot config, HarnessRegistry harnesses, HarnessId vendor, TimeProvider time, AccountStore? accounts = null
+        ) {
         try {
             var inv  = HarnessInventory.EvaluateCurrent(config, harnesses, time);
             var json = JsonSerializer.Serialize(inv, CapacitorJsonContext.Default.HarnessInventory);
@@ -30,5 +34,30 @@ static class SessionStartInventory {
         } catch {
             // best-effort metadata — never break a hook
         }
+
+        StampRecording(body, config, harnesses, vendor, accounts);
     }
+
+    public static void StampRecording(JsonObject body, ConfigRoot config, HarnessRegistry harnesses, HarnessId vendor, AccountStore? accounts = null) {
+        try {
+            body[RecordingIdentity.JsonName] = RecordingOf(body, config, harnesses, vendor, accounts, Environment.GetEnvironmentVariable).ToJson();
+        } catch {
+            // best-effort metadata — never break a hook
+        }
+    }
+
+    internal static RecordingIdentity RecordingOf(
+            JsonObject body, ConfigRoot config, HarnessRegistry harnesses, HarnessId vendor, AccountStore? accounts, Func<string, string?> env
+        ) {
+        var transcript = body["transcript_path"] is JsonValue v && v.TryGetValue<string>(out var path) ? path : null;
+        var store      = RecordingStore.Of(vendor, transcript, harnesses);
+        var account    = store is null ? null : RecordingStore.AccountFor(vendor, store, accounts?.TryLoad());
+
+        return new RecordingIdentity(new MachineId(config).Get(), DaemonName(env), account, store);
+    }
+
+    // A terminal may export the daemon's name for its own use; only the pair a daemon launch sets marks a
+    // session the daemon hosts.
+    static string? DaemonName(Func<string, string?> env) =>
+        env(HostedAgent.DaemonAgentIdVar) is { Length: > 0 } && env(DaemonNameResolver.NameVar) is { Length: > 0 } name ? name : null;
 }

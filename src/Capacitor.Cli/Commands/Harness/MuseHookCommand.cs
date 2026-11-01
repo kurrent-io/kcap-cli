@@ -160,7 +160,7 @@ sealed class MuseHookCommand(
         if (agentHostId is not null) forwarded["agent_host_id"] = agentHostId;
         if (activeProfile?.DefaultVisibility is { } visibility) forwarded["default_visibility"] = visibility;
 
-        SessionStartInventory.Stamp(forwarded, config, harnesses, clock.Time);
+        SessionStartInventory.Stamp(forwarded, config, harnesses, HarnessId.Muse, clock.Time);
         var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(
             router, config, forwarded.ToJsonString(), clock.Time, budget.Remaining, detectPullRequest: false);
 

@@ -80,6 +80,7 @@ sealed class GrokHookCommand(
         if ((Str(node, "workspaceRoot") ?? (cwd is null ? null : GitRepository.FindRoot(cwd))) is { } root) forwarded["workspace_root"] = root;
         if (Timestamp(node) is { } startedAt) forwarded["started_at"]         = startedAt.ToString("O");
         if (activeProfile?.DefaultVisibility is { } visibility) forwarded["default_visibility"] = visibility;
+        SessionStartInventory.StampRecording(forwarded, config, harnesses, HarnessId.Grok);
 
         var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, forwarded.ToJsonString(), clock.Time);
 

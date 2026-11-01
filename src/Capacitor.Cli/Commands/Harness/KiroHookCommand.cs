@@ -313,7 +313,7 @@ sealed class KiroHookCommand(
             forwarded["subagent_session_ids"] = KiroCrewParentResolver.SessionIdArray(children.Take(KiroCrewParentResolver.MaxChildrenPerStart));
         }
 
-        SessionStartInventory.Stamp(forwarded, config, harnesses, clock.Time);
+        SessionStartInventory.Stamp(forwarded, config, harnesses, HarnessId.Kiro, clock.Time);
         var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, forwarded.ToJsonString(), clock.Time);
 
         if (await RepoExclusion.IsOutOfScopeAsync(router, config, enriched,

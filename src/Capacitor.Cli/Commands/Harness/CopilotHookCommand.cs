@@ -262,7 +262,7 @@ sealed class CopilotHookCommand(
             forwarded["default_visibility"] = visibility;
         }
 
-        SessionStartInventory.Stamp(forwarded, config, harnesses, clock.Time);
+        SessionStartInventory.Stamp(forwarded, config, harnesses, HarnessId.Copilot, clock.Time);
         var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, forwarded.ToJsonString(), clock.Time);
 
         // Repo exclusion after enrichment (fast in-payload path) — mark the

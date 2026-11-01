@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.SessionStartMemory;
 using Capacitor.Cli.Core.Harness;
@@ -45,7 +46,7 @@ namespace Capacitor.Cli.Commands.Harness;
 sealed class CodexHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
         HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
-        GitProviderRouter router, WorkingDirectory workdir) {
+        GitProviderRouter router, WorkingDirectory workdir, AccountStore accounts) {
     readonly SessionStartAudience audience = SessionStartAudience.From(hosted);
 
     AgentHookPoster Poster(CodexHookEnvironment env) => new(config, profiles, http, watchers, clock.Time, env.Stderr);
@@ -362,7 +363,7 @@ sealed class CodexHookCommand(
             node["workspace_root"] = workspaceRoot;
         }
 
-        SessionStartInventory.Stamp(node.AsObject(), config, harnesses, clock.Time);
+        SessionStartInventory.Stamp(node.AsObject(), config, harnesses, HarnessId.Codex, clock.Time, accounts);
         var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, node.ToJsonString(), clock.Time);
 
         // Repo exclusion runs here (not above the event switch) so that the
