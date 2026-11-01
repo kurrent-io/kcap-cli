@@ -1195,7 +1195,8 @@ public partial class App : Application {
         };
         // Workspace links only: the explicit "Open in web" actions keep the browser.
         var workspaceOpener = new AgentLinkOpener(opener, profiles?.Resolution.ServerUrl,
-            agentId => _coordinator?.Window?.DataContext is MainWindowViewModel vm && vm.OpenSession(agentId));
+            agentId => _coordinator?.Window?.DataContext is MainWindowViewModel vm
+                && vm.OpenSession(AgentLinkLabels.HeldIdOf(directory.Rows, agentId) ?? agentId));
         var drafts = new ComposerDrafts();
         var workContextLayout = new WorkContextLayout();
         var transcripts = new LocalTranscripts();
@@ -2228,6 +2229,11 @@ public partial class App : Application {
         var window = adopt?.Window ?? new MainWindow();
         window.DataContext = vm;
         window.Closed += (_, _) => vm.Search?.Dispose();
+        // An adopted window still holds the labels over the directory it was built with.
+        window.GetValue(MarkdownView.AgentLinksProperty)?.Dispose();
+        var agentLinks = new AgentLinkLabels(appServerUrl, resolvedDirectory.Rows, RxSchedulers.MainThreadScheduler);
+        MarkdownView.SetAgentLinks(window, agentLinks);
+        window.Closed += (_, _) => agentLinks.Dispose();
         window.Notifier = notifier;
         window.ContentScale = uiScale;
         window.Onboarding = null;
