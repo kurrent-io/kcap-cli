@@ -53,5 +53,5 @@ per-user Scheduled Task named kcap-local that runs while you are signed in.
 
 The installation lives in ~/.config/kcap/local, or in KCAP_LOCAL_ROOT when it is set; its logs are
 in the logs directory under it. The root must leave room for the stack's sockets: the longest,
-data/kurrentdb/kurrent.sock under it, must fit in 103 bytes on macOS (107 on Linux), so setup refuses
-a longer root before it installs anything.
+data/kurrentdb/kurrent.sock under it (data\kurrentdb\kurrent.sock on Windows), must fit in 103 bytes
+on macOS and 107 on Linux and Windows, so setup refuses a longer root before it installs anything.
