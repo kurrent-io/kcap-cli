@@ -57,7 +57,7 @@ public sealed class HandoffDrafts : IDisposable {
         lock (_lock) {
             var now = _time.GetUtcNow();
             if (_recentFailures.Remove(id, out var failure) && now - failure.At <= PendingTtl) {
-                _failed[sourceSessionId] = draft with { Error = HandoffFailureText.For(failure.Reason) };
+                StoreFailed(sourceSessionId, draft with { Error = HandoffFailureText.For(failure.Reason) });
                 return HandoffHold.AlreadyFailed;
             }
             _pending[id] = new Held(sourceSessionId, draft, now, onFailed);
@@ -75,9 +75,13 @@ public sealed class HandoffDrafts : IDisposable {
     /// A draft whose composer is gone before its launch settled, for the source's next composer. Called
     /// on the UI thread, so a composer the source already reopened hears of it through FailedFor.
     public void HoldFailed(string sourceSessionId, HandoffDraft draft) {
-        lock (_lock) _failed[sourceSessionId] = draft;
+        lock (_lock) StoreFailed(sourceSessionId, draft);
         _failedFor.OnNext(sourceSessionId);
     }
+
+    /// Under _lock. A source can have several launches fail before any composer takes one back.
+    void StoreFailed(string sourceSessionId, HandoffDraft draft) =>
+        _failed[sourceSessionId] = _failed.TryGetValue(sourceSessionId, out var earlier) ? earlier.MergedWith(draft) : draft;
 
     public HandoffDraft? TakeFailed(string sourceSessionId) {
         lock (_lock) return _failed.Remove(sourceSessionId, out var draft) ? draft : null;
@@ -106,7 +110,7 @@ public sealed class HandoffDrafts : IDisposable {
             var now = _time.GetUtcNow();
             if (_pending.Remove(id, out var held) && now - held.At <= PendingTtl) {
                 var worded = HandoffFailureText.For(failure.Reason);
-                _failed[held.SourceSessionId] = held.Draft with { Error = worded };
+                StoreFailed(held.SourceSessionId, held.Draft with { Error = worded });
                 return () => {
                     _directory?.RemovePlaceholder(id);
                     held.OnFailed?.Invoke(worded);

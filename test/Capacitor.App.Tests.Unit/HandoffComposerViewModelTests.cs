@@ -743,7 +743,7 @@ public class HandoffComposerViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public Task A_restored_draft_keeps_text_typed_since() => Run(async rig => {
+    public Task A_restored_draft_keeps_text_typed_since_and_the_sent_prompt() => Run(async rig => {
         rig.Launch.During = _ => rig.Navigate();
         var vm = await rig.ReadyAsync();
         vm.Text = "carry on";
@@ -755,7 +755,7 @@ public class HandoffComposerViewModelTests {
 
         rig.Failures.OnNext(new LaunchFailure(LaunchedId, "handoff_start_changed: moved"));
 
-        await Assert.That(vm.Text).IsEqualTo("a new idea");
+        await Assert.That(vm.Text).IsEqualTo("a new idea\n\ncarry on");
         await Assert.That(vm.Tray.Items.Single()).IsSameReferenceAs(chip);
         await Assert.That(vm.Choices.SelectedVendor).IsEqualTo("claude");
         await Assert.That(vm.Error).IsEqualTo(StartChanged);
@@ -1044,5 +1044,23 @@ public class HandoffComposerViewModelTests {
         await Assert.That(vm.Text).IsEqualTo("carry on");
         await Assert.That(vm.Error).IsEqualTo(StartChanged);
         await Assert.That(rig.Directory.Placeholders).IsEmpty();
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Two_failed_launches_from_one_source_both_come_back() => Run(async rig => {
+        const string second = "fedcba9876543210fedcba9876543210";
+        var a = Chip("a.png");
+        var b = Chip("b.png");
+        rig.Drafts.Hold(SessionId, LaunchedId, new HandoffDraft("first", [a], "codex", "", null, null, null, null));
+        rig.Drafts.Hold(SessionId, second, new HandoffDraft("second", [b], "claude", "", null, null, null, null));
+        rig.Failures.OnNext(new LaunchFailure(LaunchedId, "handoff_start_changed: moved"));
+        rig.Failures.OnNext(new LaunchFailure(second, "handoff_start_changed: moved"));
+
+        var vm = await rig.ReadyAsync();
+
+        await Assert.That(vm.Text).IsEqualTo("first\n\nsecond");
+        await Assert.That(vm.Tray.Items.ToArray()).IsEquivalentTo([a, b], TUnit.Assertions.Enums.CollectionOrdering.Matching);
+        await Assert.That(vm.Choices.SelectedVendor).IsEqualTo("claude");
     });
 }

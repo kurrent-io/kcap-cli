@@ -547,9 +547,9 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
         _ = ReevaluateAsync(CancellationToken.None);
     }
 
-    /// Text typed since the launch stays; the sent text comes back only into an empty box.
+    /// Text typed since the launch stays, with the returned prompt after it.
     void Apply(HandoffDraft draft) {
-        if (Text.Length == 0) Text = draft.Text;
+        Text = HandoffDraft.JoinText(Text, draft.Text);
         if (Tray.Count == 0) Tray.Restore(draft.Attachments);
         else Tray.AddAll([.. draft.Attachments.Where(f => Tray.Items.All(staged => staged.Id != f.Id))]);
         _choices.Restore(draft);
