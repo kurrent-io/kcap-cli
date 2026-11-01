@@ -36,5 +36,6 @@ public sealed record ResumeLaunchDescriptor(
     bool? ScratchWorkspace = null,
     // Null for an entry written before the field, which owned its branch.
     bool? WorktreeOwnsBranch = null,
+    string? ApprovalsReviewer = null,
     string? AccountLabel = null
 );

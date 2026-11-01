@@ -202,6 +202,7 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
             Approval:      approval,
             WritableRoots: [ctx.Worktree.Path],
             ClientVersion: string.IsNullOrEmpty(_config.Version) ? "0.0.0" : _config.Version,
+            ApprovalsReviewer: CodexPosturePolicy.Reviewer(ctx.CodexPosture),
             // Non-null only for a parked reviewer relaunch: the runtime reopens this thread via
             // thread/resume instead of thread/start (and the orchestrator suppresses the second
             // SessionStarted, since the resumed thread keeps its canonical id).

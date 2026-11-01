@@ -141,12 +141,16 @@ public static class HostedHarnessCatalog {
     ];
 
     /// Codex CLI approval tokens, most → least prompting. The daemon rejects on-failure, so it is
-    /// not offered.
+    /// not offered. <see cref="CodexAutoApproval"/> is the launcher's own token, not Codex's: it
+    /// launches on-request with Codex's auto-review deciding each request instead of the user.
     public static readonly IReadOnlyList<PermissionModeChoice> CodexApprovals = [
         new("untrusted", "Untrusted"),
         new("on-request", "On request"),
+        new(CodexAutoApproval, "Auto"),
         new("never", "Never"),
     ];
+
+    public const string CodexAutoApproval = "auto";
 
     /// What the daemon applies to an interactive owned-worktree launch that names no posture.
     public const string DefaultCodexSandbox = "workspace-write";

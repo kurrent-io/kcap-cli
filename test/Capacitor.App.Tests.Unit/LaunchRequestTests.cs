@@ -89,6 +89,17 @@ public class LaunchRequestTests {
     }
 
     [Test]
+    public async Task An_auto_review_posture_adds_the_approvals_reviewer_key() {
+        var json = Payload(new LaunchRequest("kcap-dev", "/repo", "codex", "go",
+            CodexPosture: new CodexLaunchPosture("workspace-write", "on-request", "auto_review")));
+        var posture = json.GetProperty("codex_posture");
+
+        await Assert.That(posture.EnumerateObject().Select(p => p.Name).ToArray())
+            .IsEquivalentTo(["sandbox", "approval", "approvals_reviewer"]);
+        await Assert.That(posture.GetProperty("approvals_reviewer").GetString()).IsEqualTo("auto_review");
+    }
+
+    [Test]
     public async Task No_codex_posture_is_sent_as_null() {
         var json = Payload(new LaunchRequest("kcap-dev", "/repo", "codex", "go"));
         await Assert.That(json.GetProperty("codex_posture").IsNull).IsTrue();

@@ -1763,9 +1763,16 @@ public readonly record struct LaunchAgentCommand(
 
 /// <summary>Caller-selected Codex launch posture. Valid ONLY for interactive, daemon-owned-worktree
 /// launches (<see cref="LaunchKind.Default"/> and not borrowed); the daemon fails closed on any other
-/// launch shape. Both fields are required — a partial block is malformed. Values are the Codex CLI's
-/// own lowercase tokens, compared ordinally (see the daemon's CodexPosturePolicy).</summary>
-public sealed record CodexLaunchPosture(string Sandbox, string Approval);
+/// launch shape. Sandbox and approval are both required — a partial block is malformed. Values are the
+/// Codex CLI's own lowercase tokens, compared ordinally (see the daemon's CodexPosturePolicy).
+/// <see cref="ApprovalsReviewer"/> is optional: an older daemon drops it and launches with approvals
+/// routed to the user, never the other way round.</summary>
+public sealed record CodexLaunchPosture(
+    string Sandbox,
+    string Approval,
+    [property: JsonPropertyName("approvals_reviewer"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? ApprovalsReviewer = null
+);
 
 public sealed record ReviewerCertificationRequirement(
     string Vendor,
@@ -2328,6 +2335,9 @@ public sealed record UnattendedVendorCapability(
     // never widened to "supported" by any fallback, so the server refuses posture selection rather
     // than sending a block that would be silently ignored.
     bool SupportsLaunchPosture = false,
+    // Whether a launch posture may carry an approvals reviewer. False from an older daemon, which
+    // would drop the field and prompt the user instead, so the server refuses the selection.
+    bool SupportsApprovalsReviewer = false,
     // The transport this daemon hosts an INTERACTIVE launch of this vendor on ("pty" | "app-server").
     // The server records it as the launch's expected runtime transport and refuses a registration
     // that claims anything else, so it must come from the same decision the launch router uses.

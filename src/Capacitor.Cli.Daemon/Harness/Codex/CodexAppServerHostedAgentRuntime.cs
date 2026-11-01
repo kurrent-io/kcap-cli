@@ -47,7 +47,8 @@ internal sealed record CodexAppServerLaunch(
     string                Approval,
     IReadOnlyList<string> WritableRoots,
     string                ClientVersion,
-    string?               ResumeSessionId = null);
+    string?               ApprovalsReviewer = null,
+    string?               ResumeSessionId   = null);
 
 /// <summary>
 /// A <see cref="IHostedAgentRuntime"/> that hosts a Codex agent over the <c>codex app-server</c>
@@ -429,7 +430,7 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
             // is the load-bearing containment.
             ["sandbox"]           = CodexAppServerPosture.RenderSandboxMode(_launch.Sandbox),
             ["approvalPolicy"]    = CodexAppServerPosture.RenderApprovalPolicy(_launch.Approval),
-            ["approvalsReviewer"] = CodexAppServerPosture.ApprovalsReviewer,
+            ["approvalsReviewer"] = CodexAppServerPosture.RenderApprovalsReviewer(_launch.ApprovalsReviewer),
         };
         // Honor the "default" no-override sentinel exactly as the PTY path does (CodexLauncher.AddModelArg):
         // sending model:"default" to Codex on a ChatGPT account is rejected (400) and fails the turn.
@@ -476,7 +477,7 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
             ["input"]             = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = text }),
             ["sandboxPolicy"]     = CodexAppServerPosture.RenderSandboxPolicy(_launch.Sandbox, _launch.WritableRoots),
             ["approvalPolicy"]    = CodexAppServerPosture.RenderApprovalPolicy(_launch.Approval),
-            ["approvalsReviewer"] = CodexAppServerPosture.ApprovalsReviewer,
+            ["approvalsReviewer"] = CodexAppServerPosture.RenderApprovalsReviewer(_launch.ApprovalsReviewer),
         };
         if (CodexLauncher.IsConcreteModel(_launch.Model)) turnParams["model"]  = _launch.Model; // omit the "default" sentinel (see thread/start)
         if (!string.IsNullOrEmpty(_launch.Effort))        turnParams["effort"] = MapEffort(_launch.Effort);

@@ -229,6 +229,9 @@ internal record AgentInstance(
     /// lets the value survive a server restart.</summary>
     public string?              SandboxPolicy     { get; init; }
     public string?              ApprovalPolicy    { get; init; }
+    /// <summary>The caller-selected Codex approvals reviewer, set alongside the posture pair; null when
+    /// approvals go to the user.</summary>
+    public string?              ApprovalsReviewer { get; init; }
 
     /// <summary>The applied ACP permission preset for a hosted interactive ACP launch that carried
     /// one; null everywhere else. Stored here (like the posture pair above) so initial registration
@@ -3218,6 +3221,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 ScratchWorkspace    = cmd.ScratchWorkspace,
                 SandboxPolicy       = appliedPosture?.Sandbox,
                 ApprovalPolicy      = appliedPosture?.Approval,
+                ApprovalsReviewer   = appliedPosture is null ? null : cmd.CodexPosture?.ApprovalsReviewer,
                 // Echoed on AgentRegistered for the dashboard chip; carried verbatim from the command
                 // so a reconnect re-registration reports the same value. Only ever set for an
                 // interactive ACP launch (the policy above rejects any other shape).

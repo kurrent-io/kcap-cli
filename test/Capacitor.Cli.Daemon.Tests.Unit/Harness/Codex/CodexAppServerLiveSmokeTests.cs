@@ -73,7 +73,7 @@ public class CodexAppServerLiveSmokeTests {
                 ["cwd"]               = cwd.Path,
                 ["sandbox"]           = CodexAppServerPosture.RenderSandboxMode("read-only"),
                 ["approvalPolicy"]    = CodexAppServerPosture.RenderApprovalPolicy("never"),
-                ["approvalsReviewer"] = CodexAppServerPosture.ApprovalsReviewer,
+                ["approvalsReviewer"] = CodexAppServerPosture.RenderApprovalsReviewer(null),
             }), cts.Token).WaitAsync(HangGuard);
 
             // The exact fields the runtime reads: thread.id (deterministic identity) + resolved model.
