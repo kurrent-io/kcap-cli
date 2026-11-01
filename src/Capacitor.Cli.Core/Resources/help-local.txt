@@ -7,9 +7,9 @@ Subcommands:
                             Names a stopped, changing, uninstalled, purged or port-blocked server apart
                             (a port another program answers on is blocked, even when the OS cannot name it)
                             and suggests start only when a start can bring it up
-      --json                One JSON object on stdout, for the desktop app: the verdict, and whether the
-                            server is stopped, restarting, blocked by the program it names on its port, or
-                            not this installation's because its service runs another.
+      --json                One JSON object on stdout, for the desktop app: the verdict and a condition,
+                            such as installed, restarting, port_taken (with the holder's pid and command,
+                            or what answered when the OS names none) or serves_another.
   start                     Start the server and wait until it is ready
   stop                      Stop the server and wait until nothing of it is left; it stays stopped until start
   restart                   Stop, then start
