@@ -47,6 +47,9 @@ public sealed class LateBoundLocalControlOps(Func<ILocalControlOps> bind) : ILoc
 
     public Task<HandoffOutcomeDto?> ReadHandoffOutcomeAsync(string sessionId, CancellationToken ct) =>
         bind().ReadHandoffOutcomeAsync(sessionId, ct);
+
+    public Task<ResumeProbeReplyDto?> ProbeResumeAsync(ResumeProbeRequestDto request, CancellationToken ct) =>
+        bind().ProbeResumeAsync(request, ct);
 }
 
 /// <summary>

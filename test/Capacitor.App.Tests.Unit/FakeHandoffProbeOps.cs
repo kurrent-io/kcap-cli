@@ -37,4 +37,13 @@ sealed class FakeHandoffProbeOps : ILocalControlOps {
     public Task<DaemonSettingsAckDto> PutDaemonSettingsAsync(DaemonSettingsPutDto put, CancellationToken ct) => throw new NotSupportedException();
     public Task<SessionRenameAckDto> RenameSessionAsync(SessionRenameDto rename, CancellationToken ct) => throw new NotSupportedException();
     public Task<HandoffOutcomeDto?> ReadHandoffOutcomeAsync(string sessionId, CancellationToken ct) => throw new NotSupportedException();
+
+    public List<ResumeProbeRequestDto> ResumeProbes { get; } = [];
+    /// The resume probe's answer; null is a probe that never crossed the socket.
+    public ResumeProbeReplyDto? ResumeNext = new(null);
+
+    public Task<ResumeProbeReplyDto?> ProbeResumeAsync(ResumeProbeRequestDto request, CancellationToken ct) {
+        ResumeProbes.Add(request);
+        return Task.FromResult(ResumeNext);
+    }
 }

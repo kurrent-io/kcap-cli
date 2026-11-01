@@ -92,6 +92,33 @@ public class LocalControlOpsTests {
     }
 
     [Test]
+    public async Task ProbeResumeAsync_sends_the_request_and_returns_the_daemons_reply() {
+        if (OperatingSystem.IsWindows()) return;
+        string? asked = null;
+        ConnScript answer = async (_, s, ct) => {
+            var f = await FrameCodec.ReadAsync(s, ct);
+            if (f?.Type != FrameType.ResumeProbe) return;
+            asked = f.Text;
+            await FrameCodec.WriteAsync(s, new LocalFrame(FrameType.ResumeProbeReply) { Text = """{"refusal":"resume_store_changed"}""" }, ct);
+        };
+        await WithOpsAsync([answer], async ops => {
+            var reply = await ops.ProbeResumeAsync(new ResumeProbeRequestDto("s1", "claude", "/w", "acct", "/c"), CancellationToken.None);
+            await Assert.That(reply!.Refusal).IsEqualTo(ResumeInPlaceRefusals.StoreChanged);
+            await Assert.That(asked!).Contains("\"config_dir\":\"/c\"");
+        });
+    }
+
+    [Test]
+    public async Task ProbeResumeAsync_returns_null_when_the_daemon_never_answers() {
+        if (OperatingSystem.IsWindows()) return;
+
+        await WithOpsAsync([Stall()], async ops => {
+            var reply = await ops.ProbeResumeAsync(new ResumeProbeRequestDto("s1", "claude", "/w", null, "/c"), CancellationToken.None);
+            await Assert.That(reply).IsNull();
+        }, configure: ops => ops.ReplyTimeout = TimeSpan.FromMilliseconds(100));
+    }
+
+    [Test]
     public async Task ReadHandoffOutcomeAsync_sends_the_session_and_returns_the_stored_outcome() {
         if (OperatingSystem.IsWindows()) return;
         string? asked = null;

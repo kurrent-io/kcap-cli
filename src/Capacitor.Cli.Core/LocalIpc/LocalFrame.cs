@@ -1,6 +1,7 @@
 namespace Capacitor.Cli.Core.LocalIpc;
 
-public enum WorkLocation : byte { BorrowedCwd = 0, OwnedWorktree = 1 }
+/// InPlace is a session's own directory, resumed there: writable like an owned worktree, never deleted like a borrow.
+public enum WorkLocation : byte { BorrowedCwd = 0, OwnedWorktree = 1, InPlace = 2 }
 
 /// A decoded frame. Exactly one of the payload properties is meaningful per Type;
 /// the codec owns which. Bytes are raw (Stdin/Stdout); strings are UTF-8.
