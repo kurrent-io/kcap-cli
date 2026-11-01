@@ -230,6 +230,43 @@ public class AgentOrchestratorResumeInPlaceLaunchTests {
     }
 
     [Test]
+    public async Task Stopping_a_resumed_agent_deletes_nothing() {
+        await using var f = new Fixture(Tmp, new LoadableFactory("claude"));
+        await f.Orch.HandleLaunchAgentForTest(f.Launch());
+
+        await f.Orch.HandleStopAgent(AgentId);
+        await WaitHarness.PollUntilAsync(() => f.Orch.ResumeLedger!.TryRead(AgentId) is null);
+
+        await Assert.That(File.Exists(Path.Combine(f.Checkout, "work.txt"))).IsTrue();
+    }
+
+    /// <summary>A daemon restart finds the in-place agent in its ledger: the startup sweep keeps its directory and the
+    /// boot lane resumes it in place, never in a worktree of its own.</summary>
+    [Test]
+    public async Task An_in_place_agent_is_kept_by_the_sweep_and_resumed_in_place_after_a_restart() {
+        await using var f = new Fixture(Tmp, new LoadableFactory("claude"));
+        await f.Orch.HandleLaunchAgentForTest(f.Launch());
+        var entry = f.Orch.ResumeLedger!.TryRead(AgentId)!;
+
+        await using var restarted = AgentOrchestratorHarness.BuildOrchestrator(
+            new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
+            allowedRepoPath: f.Checkout, extraRuntimeFactories: [f.Factory],
+            configure: c => {
+                c.ResumeReadinessWindow = TimeSpan.FromMilliseconds(100);
+                c.DefaultDirectories    = new Dictionary<HarnessId, string> { [HarnessId.Claude] = f.Store };
+            });
+        restarted.ResumeLedger!.Write(entry with { State = ResumeState.Resuming, ResumingAt = DateTimeOffset.UtcNow });
+
+        restarted.LoadResumeLedger();
+        await Assert.That(restarted.LedgerWorktreePaths()).Contains(f.Checkout);
+
+        await restarted.ResumeOnBootAsync(CancellationToken.None);
+
+        var ctx = f.Factory.Context!;
+        await Assert.That((ctx.AgentId, ctx.Work, ctx.Worktree.Path, ctx.ResumeSessionId)).IsEqualTo((AgentId, WorkLocation.InPlace, f.Checkout, Dashed));
+    }
+
+    [Test]
     public async Task A_codex_in_place_resume_is_writable() =>
         await Assert.That(CodexPosturePolicy.Resolve(WorkLocation.InPlace, isReviewFlow: false, posture: null).Sandbox).IsEqualTo("workspace-write");
 

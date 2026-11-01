@@ -701,7 +701,7 @@ internal partial class AgentOrchestrator {
         }
 
         _resumeOrder.InsertRange(0, queue);
-        _ledgerWorktrees = [.. _ledgerWorktrees, .. entries.Where(e => e.Launch.Work == WorkLocation.OwnedWorktree).Select(e => e.Launch.WorktreePath)];
+        _ledgerWorktrees = [.. _ledgerWorktrees, .. entries.Where(KeepsItsDirectory).Select(e => e.Launch.WorktreePath)];
         _ledgerAgentIds  = [.. _ledgerAgentIds.Concat(entries.Select(e => e.AgentId)).Distinct(StringComparer.Ordinal)];
 
         return true;
@@ -919,7 +919,7 @@ internal partial class AgentOrchestrator {
 
         entries = [.. entries.Where(e => e.State != ResumeState.Interrupted || now - e.UpdatedAt <= InterruptedRetention)];
 
-        _ledgerWorktrees = [.. entries.Where(e => e.Launch.Work == WorkLocation.OwnedWorktree).Select(e => e.Launch.WorktreePath)];
+        _ledgerWorktrees = [.. entries.Where(KeepsItsDirectory).Select(e => e.Launch.WorktreePath)];
         _ledgerAgentIds  = [.. entries.SelectMany(e => (e.InheritedAgentIds ?? []).Append(e.AgentId)).Distinct(StringComparer.Ordinal)];
 
         foreach (var entry in entries) {
@@ -1091,9 +1091,13 @@ internal partial class AgentOrchestrator {
         await DiscardFailedLaunchJournalAsync(journal, agent.Id);
     }
 
-    /// <summary>Every owned worktree the ledger names, interrupted entries included: a later manual
-    /// resume needs its worktree as much as a boot candidate does.</summary>
+    /// <summary>Every directory the startup sweep must keep for the ledger, interrupted entries included: a later
+    /// manual resume needs its worktree as much as a boot candidate does. An in-place agent's directory is listed
+    /// although the daemon may never delete it, because it can be a retained worktree the sweep would otherwise
+    /// remove once it is clean.</summary>
     internal IReadOnlyList<string> LedgerWorktreePaths() => _ledgerWorktrees;
+
+    static bool KeepsItsDirectory(ResumeLedgerEntry entry) => entry.Launch.Work is WorkLocation.OwnedWorktree or WorkLocation.InPlace;
 
     /// <summary>The boot resume lane: reports the entries interrupted at boot, then resumes the
     /// candidates at most <see cref="DaemonConfig.ResumeConcurrency"/> at a time. Never throws.</summary>
