@@ -346,8 +346,21 @@ public class LocalPreflightTests {
     [Arguments(true, false, false, Architecture.Arm64, true)]
     [Arguments(true, false, false, Architecture.X64, false)]
     [Arguments(false, true, false, Architecture.Arm64, false)]
-    public async Task Only_an_Apple_silicon_Mac_supports_the_local_edition(bool mac, bool linux, bool musl, Architecture arch, bool expected) =>
+    public async Task Only_an_Apple_silicon_Mac_or_an_x64_PC_supports_the_local_edition(bool mac, bool linux, bool musl, Architecture arch, bool expected) =>
         await Assert.That(new LocalPlatform(mac, linux, musl, arch).SupportsLocalEdition).IsEqualTo(expected);
+
+    [Test]
+    public async Task An_x64_Windows_PC_installs_the_win_bundle_and_an_Arm_one_is_told_it_needs_x64() {
+        var x64 = new LocalPlatform(false, false, false, Architecture.X64) { IsWindows = true };
+        var arm = new LocalPlatform(false, false, false, Architecture.Arm64) { IsWindows = true };
+
+        await Assert.That(x64.Rid).IsEqualTo("win-x64");
+        await Assert.That(Preflight(platform: x64).Check(Version).Hint).IsEqualTo(PlanHint.Install);
+
+        var refused = await Refusal(() => Preflight(platform: arm).Check(Version));
+        await Assert.That(refused.Code).IsEqualTo(LocalInstallFailureCode.UnsupportedPlatform);
+        await Assert.That(refused.Message).Contains("x64");
+    }
 
     [Test]
     public async Task Copies_newer_than_the_floor_pass() {

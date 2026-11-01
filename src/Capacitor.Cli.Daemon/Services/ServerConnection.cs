@@ -6,6 +6,7 @@ using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Eval.Contracts;
+using Capacitor.Cli.Core.Handoff;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.LocalIpc;
 using Microsoft.AspNetCore.SignalR.Client;
@@ -788,7 +789,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             ActiveCountVersion: activeCount?.Version,
             SupportsAccountLaunches: true,
             Accounts: GetAccountsSnapshot?.Invoke(),
-            SupportsScratchWorkspace: true);
+            SupportsScratchWorkspace: true,
+            SupportsHandoffLaunch: true);
     }
 
     async Task DaemonConnectCoreAsync(RegistrationAttempt attempt) {
@@ -1229,6 +1231,51 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             await step();
         } catch (Exception ex) {
             LogShutdownReportStepFailed(ex, agentId, label);
+        }
+    }
+
+    /// <summary>Asks the server to reserve the ended <paramref name="source"/> for the <paramref name="successor"/>
+    /// this daemon runs; a refusal is an answer carrying its reason. A server that relayed the hand-off has the
+    /// method, so any failure but the hub's own missing-method reply is unreachable, not unsupported.</summary>
+    public virtual async Task<HandoffBeginResult> BeginHandoffTakeoverAsync(
+            string source, string successor, CancellationToken ct) {
+        try {
+            return await InvokeBeginHandoffTakeoverRawAsync(source, successor, ct) is { } admission
+                ? new HandoffBeginResult.Answered(admission)
+                : new HandoffBeginResult.Unreachable();
+        } catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested) {
+            LogHandoffTakeoverFailed(ex, "begin");
+
+            return IsUnknownHubMethod(ex, BeginHandoffTakeoverMethod)
+                ? new HandoffBeginResult.Unsupported()
+                : new HandoffBeginResult.Unreachable();
+        }
+    }
+
+    internal virtual Task<HandoffTakeoverAdmission?> InvokeBeginHandoffTakeoverRawAsync(string source, string successor, CancellationToken ct) =>
+        _hub.InvokeAsync<HandoffTakeoverAdmission?>(BeginHandoffTakeoverMethod, new HandoffTakeoverBeginRequest(source, successor), ct);
+
+    internal const string BeginHandoffTakeoverMethod = "BeginHandoffTakeover";
+
+    /// <summary>Extends the takeover lease; false when the server no longer holds it or the call fails.</summary>
+    public virtual async Task<bool> RenewHandoffTakeoverAsync(string token, CancellationToken ct) {
+        try {
+            return await _hub.InvokeAsync<bool>("RenewHandoffTakeover", token, ct);
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            LogHandoffTakeoverFailed(ex, "renew");
+
+            return false;
+        }
+    }
+
+    /// <summary>Releases the takeover. Best effort: the lease lapses on its own.</summary>
+    // Its own deadline rather than the shutdown token: the end runs while the daemon stops, after that token fired.
+    public virtual async Task EndHandoffTakeoverAsync(string token) {
+        try {
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5), _time);
+            await _hub.InvokeAsync("EndHandoffTakeover", token, cancellationToken: deadline.Token);
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            LogHandoffTakeoverFailed(ex, "end");
         }
     }
 
@@ -1900,6 +1947,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     [LoggerMessage(Level = LogLevel.Information, Message = "EndAgentSession for agent {AgentId} interrupted by a connection drop (retry {Attempt}); waiting for the daemon connection to recover before retrying")]
     partial void LogEndSessionRetry(string agentId, int attempt);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Hand-off takeover {Call} failed")]
+    partial void LogHandoffTakeoverFailed(Exception ex, string call);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Shutdown report step '{Step}' failed for agent {AgentId}")]
     partial void LogShutdownReportStepFailed(Exception ex, string agentId, string step);

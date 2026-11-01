@@ -5,7 +5,7 @@ using static Capacitor.Cli.Service.Native.Win32;
 
 namespace Capacitor.Cli.Service.Windows;
 
-/// <summary>A daemon process the service holds a handle to, and its job when it has one. Owns both</summary>
+/// <summary>A supervised process the service holds a handle to, and its job when it has one. Owns both</summary>
 [SupportedOSPlatform("windows")]
 sealed class Win32RunningDaemon : IRunningDaemon {
     readonly IntPtr _process;

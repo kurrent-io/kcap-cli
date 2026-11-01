@@ -23,6 +23,8 @@ sealed class LocalServerSystemdService(
 
     public string Describe => "systemd --user unit";
 
+    public string Name(LocalServerUnit unit) => unit.SystemdName;
+
     public string UnitFile(LocalServerUnit unit) => LocalServerSystemdUnit.UnitPath(home, unit);
 
     public bool IsInstalled(LocalServerUnit unit) => File.Exists(UnitFile(unit));

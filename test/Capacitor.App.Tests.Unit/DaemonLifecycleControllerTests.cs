@@ -2463,11 +2463,22 @@ sealed class FakeKcapCli : IKcapCli {
     public Func<Action<StreamedLine>, CancellationToken, CancellationToken, Task<StreamingResult>> SetupLocalBehavior =
         (_, _, _) => Task.FromResult(new StreamingResult(0, false, []));
     public List<LocalEmbeddingChoice> SetupLocalEmbeddings { get; } = [];
+    public List<bool> SetupLocalWindowsService { get; } = [];
     public Task<StreamingResult> SetupLocalAsync(
-            LocalEmbeddingChoice embeddings, Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct) {
+            LocalEmbeddingChoice embeddings, Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct,
+            bool windowsService = false) {
         SetupLocalCallCount++;
         SetupLocalEmbeddings.Add(embeddings);
+        SetupLocalWindowsService.Add(windowsService);
         return SetupLocalBehavior(onLine, interrupt, ct);
+    }
+
+    public int LocalFetchCallCount;
+    public Func<Action<StreamedLine>, CancellationToken, Task<StreamingResult>> LocalFetchBehavior =
+        (_, _) => Task.FromResult(new StreamingResult(0, false, []));
+    public Task<StreamingResult> LocalFetchAsync(Action<StreamedLine> onLine, CancellationToken interrupt) {
+        Interlocked.Increment(ref LocalFetchCallCount);
+        return LocalFetchBehavior(onLine, interrupt);
     }
 
     public int LocalUpgradeCallCount;

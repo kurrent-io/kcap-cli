@@ -9,8 +9,11 @@ public static class LocalOllamaAvailability {
         Timeout = TimeSpan.FromSeconds(3),
     };
 
-    // A GUI app's PATH leaves out Homebrew and /usr/local, so the CLI's usual homes are named outright.
-    static readonly string[] InstallPaths = ["/Applications/Ollama.app", "/opt/homebrew/bin/ollama", "/usr/local/bin/ollama"];
+    // A GUI app's PATH leaves out Homebrew and /usr/local, so the CLI's usual homes are named outright. Ollama's Windows
+    // installer is per user and puts it under %LOCALAPPDATA%.
+    static readonly string[] InstallPaths = OperatingSystem.IsWindows()
+        ? Environment.GetEnvironmentVariable("LOCALAPPDATA") is { Length: > 0 } local ? [Path.Combine(local, "Programs", "Ollama", "ollama.exe")] : []
+        : ["/Applications/Ollama.app", "/opt/homebrew/bin/ollama", "/usr/local/bin/ollama"];
 
     public static bool Installed() => Installed(path => Directory.Exists(path) || File.Exists(path));
 

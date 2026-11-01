@@ -85,7 +85,7 @@ internal sealed record WizardGraphOptions(
     TimeProvider                                                                 Time,
     CancellationToken                                                            ShutdownToken,
     LocalRoot                                                                    LocalRoot,
-    // The local edition ships for macOS on Apple silicon only.
+    // The local edition ships for Apple silicon Macs and x64 Windows.
     bool                                                                         LocalEditionSupported,
     bool                                                                         AlreadyAuthenticated = false,
     // The name the profile already carries, or null when none was ever saved.
@@ -107,7 +107,11 @@ internal sealed record WizardGraphOptions(
     // Opens a support email with this report as its body; null offers no support email.
     Func<string, FeedbackMailOutcome>?                                           MailSupport = null,
     // This app sent the user to kcap.ai's sign-up and no sign-in has committed since.
-    bool                                                                         ResumeWebSignUp = false);
+    bool                                                                         ResumeWebSignUp = false,
+    // The app's one bundle prefetch, started while the edition page leads with the local edition; null fetches nothing ahead.
+    LocalBundlePrefetch?                                                         Prefetch = null,
+    // The install page offers to run kcap as a Windows service.
+    bool                                                                         OffersWindowsService = false);
 
 /// The wizard half of the composition root, split out of App so it can be driven
 /// with fakes: nothing here touches a daemon, a socket or the network until a step is used.
@@ -223,7 +227,17 @@ internal static class WizardComposition {
 
         return new LocalInstallController(
             () => cli, options.LocalRoot, () => IsCommittedLocal(options), options.Bridges.Post,
-            options.Bridges.Telemetry.Funnel);
+            options.Bridges.Telemetry.Funnel, options.Prefetch,
+            rememberWindowsServiceDeclined: () => options.AppState.UpdateAsync(s => s with { WindowsServiceDeclined = true }));
+    }
+
+    /// <summary>A current service already running kcap takes the local server without being asked for, so the
+    /// option is left out; a declined administrator prompt leaves it unticked. An unknown status still offers it.</summary>
+    internal static async Task<WindowsServiceOffer> WindowsServiceOfferAsync(IAppStateStore state, IKcapCli cli, CancellationToken ct) {
+        if (await cli.ServiceStatusAsync(ct).ConfigureAwait(false) is { Supervisor: "windows_service", ServiceUpgradeAvailable: not true })
+            return WindowsServiceOffer.Hidden;
+
+        return (await state.LoadAsync().ConfigureAwait(false)).WindowsServiceDeclined ? WindowsServiceOffer.Off : WindowsServiceOffer.On;
     }
 
     static bool IsCommittedLocal(WizardGraphOptions options) =>
@@ -262,7 +276,9 @@ internal static class WizardComposition {
                 RefreshDurable();
                 return LocalUnavailableReason(options.LocalEditionSupported, options.Root, root);
             },
-            locked: () => signedInAtStart || Installed() || Pending() || CommittedLocal());
+            locked: () => signedInAtStart || Installed() || Pending() || CommittedLocal(),
+            leadWithLocal: () => !File.Exists(root.RegistryPath),
+            prefetch: options.Prefetch);
         bool OnLocalPath() => edition.Choice == EditionChoice.Local || Pending() || CommittedLocal();
         // The edition decides what an unmade usage-data choice means: the cloud edition's notice, or the local edition's
         // question. Settled ahead of the funnel event that reports the choice, so a cloud choice sends what was held with it.
@@ -285,7 +301,8 @@ internal static class WizardComposition {
             repairClients: options.RepairClients,
             time: options.Time,
             mailSupport: options.MailSupport is { } mail ? failures => mail(InstallSupportReport.Build(failures, root)) : null,
-            resuming: Pending);
+            resuming: Pending,
+            windowsServiceOffer: options.OffersWindowsService ? ct => WindowsServiceOfferAsync(options.AppState, cli, ct) : null);
         var connect  = new ConnectChoiceViewModel();
         var signIn   = new SignInStepViewModel(
             auth, connect, options.Bridges, claims, options.AppState, options.UrlOpener, time: options.Time,

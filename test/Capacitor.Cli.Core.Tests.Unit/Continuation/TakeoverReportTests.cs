@@ -25,6 +25,19 @@ public class TakeoverReportTests {
     }
 
     [Test]
+    public async Task A_write_an_interrupted_run_never_finished_is_not_called_attached() {
+        var outcome = JsonNode.Parse("""
+            {"continued_from":"aaa","work_items":{"status":"ok","items":[{"work_item_id":"w1","label":"One","attached":null}]},
+             "plans":[{"plan_id":"p1","task_id":"t1","title":"Step one","status":"pending","attached":null}],"skipped_plans":[]}
+            """)!.AsObject();
+
+        var text = TakeoverReport.Render(outcome);
+
+        await Assert.That(text).Contains("One — not confirmed");
+        await Assert.That(text).Contains("(pending) — not confirmed");
+    }
+
+    [Test]
     public async Task Says_when_only_the_most_recent_plans_were_checked() {
         var outcome = JsonNode.Parse("""{"continued_from":"aaa","work_items":{"status":"ok","items":[]},"plans":[],"skipped_plans":[{"plan_id":"p1","reason":"not_adoptable"}],"plans_truncated":true}""")!.AsObject();
 

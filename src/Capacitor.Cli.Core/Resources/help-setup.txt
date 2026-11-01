@@ -8,9 +8,9 @@ see "Unattended setup" below for both editions.
 
 A bare kcap setup in a terminal first asks how you want to run kcap, as
 the desktop app does: "For you, locally" runs the local edition (--local,
-macOS only); "For your team, cloud" opens sign-up in your browser, where you
-create the workspace, then discovers it once you press Enter; "Already have a
-workspace?" goes straight to discovery.
+Apple silicon Macs and x64 Windows); "For your team, cloud" opens sign-up in
+your browser, where you create the workspace, then discovers it once you press
+Enter; "Already have a workspace?" goes straight to discovery.
 
 With no <tenant> or --server-url, setup discovers your workspace: it signs you
 in with your organization's single sign-on, then lets you pick from the
@@ -43,9 +43,9 @@ Options:
                               Not `kcap login --discover`, which does pick a workspace
                               and saves it.
   --local                     Install and start a kcap server on this machine
-                              instead of using a hosted workspace (macOS on Apple
-                              silicon). See "Local edition" below. Cannot be
-                              combined with <tenant>, --server-url, --discover,
+                              instead of using a hosted workspace (Apple silicon
+                              Macs and x64 Windows). See "Local edition" below.
+                              Cannot be combined with <tenant>, --server-url, --discover,
                               --org, --slug, --tier, --invite-code, --device,
                               --github or --muse-assistant.
   --single-user               With --local: confirm this machine has one user.
@@ -63,6 +63,14 @@ Options:
   --no-embeddings             With --local: search by keyword only, removing a
                               model an earlier setup configured. Remembered, so a
                               later setup without an embedding flag keeps it.
+  --windows-service           With --local, on Windows only: run the server under
+                              the kcap-service Windows service, installing it
+                              behind an administrator prompt when it is missing.
+                              A declined prompt, or a kcap that does not carry the
+                              service, carries on with a Scheduled Task, which
+                              runs the server while you are signed in. Under
+                              --json that is a windows_service_declined or
+                              windows_service_unavailable line, not a failure.
   --json                      With --no-prompt: write one JSON object per line
                               to stdout for the whole run, ending with "done"
                               or "failed", and the narration to stderr. See
@@ -75,7 +83,8 @@ Options:
                               (Ctrl+C or SIGTERM) was received, whichever line
                               came last. Takes only --single-user, --yes,
                               --no-update-check, --embedding-model,
-                              --no-embeddings and --builtin-embeddings, and
+                              --no-embeddings, --builtin-embeddings and
+                              --windows-service, and
                               without one of the last three chooses as
                               --no-prompt does. With --discover: the workspace
                               report.
@@ -284,7 +293,10 @@ changes.
 
 Local edition: `kcap setup --local` runs a kcap server on this machine
 instead of a hosted workspace, then continues with login, hooks and the daemon
-against it. macOS on Apple silicon only for now. The first version is for a
+against it. Apple silicon Macs and x64 Windows only for now; on Windows the
+server runs under the kcap-service Windows service when it is installed
+(--windows-service installs it), and otherwise as a per-user Scheduled Task.
+The first version is for a
 machine with one user: on a shared machine, other OS users can open the web UI
 and act as its admin, so setup asks you to confirm that and the install itself
 (--single-user and --yes; --no-prompt and --json cannot ask and require both).

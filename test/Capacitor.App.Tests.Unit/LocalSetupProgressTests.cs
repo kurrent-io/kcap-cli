@@ -3,8 +3,13 @@ using Capacitor.App.Services.LocalSetup;
 namespace Capacitor.App.Tests.Unit;
 
 public class LocalSetupProgressTests {
-    static LocalSetupProgress Run(params string[] lines) {
-        var progress = new LocalSetupProgress();
+    const string OllamaNotFound =
+        "{\"v\":1,\"event\":\"embeddings_skipped\",\"code\":\"ollama_not_found\",\"message\":\"Ollama is not responding on http://localhost:11434; search works by keyword. Start Ollama, then run kcap setup --local again to turn on search by meaning.\"}";
+
+    static LocalSetupProgress Run(params string[] lines) => Asked(null, lines);
+
+    static LocalSetupProgress Asked(LocalEmbeddingChoice? asked, params string[] lines) {
+        var progress = new LocalSetupProgress(asked);
         foreach (var text in lines) {
             if (LocalSetupLine.Parse(text) is { } line) progress.Apply(line);
         }
@@ -179,9 +184,7 @@ public class LocalSetupProgressTests {
     /// The CLI's skip message is written for a terminal; the row keeps its cause and drops its advice.
     [Test]
     public async Task A_skip_ends_in_keyword_search_with_its_reason_and_fails_nothing() {
-        var p = Run(
-            "{\"v\":1,\"event\":\"embeddings_skipped\",\"code\":\"ollama_not_found\",\"message\":\"Ollama is not responding on http://localhost:11434; search works by keyword. Start Ollama, then run kcap setup --local again to turn on search by meaning.\"}",
-            "{\"v\":1,\"event\":\"starting\",\"unit\":\"u\"}");
+        var p = Run(OllamaNotFound, "{\"v\":1,\"event\":\"starting\",\"unit\":\"u\"}");
 
         await Assert.That(p.Embeddings.Row.State).IsEqualTo(RowState.Skipped);
         await Assert.That(p.Embeddings.Skipped).IsTrue();
@@ -196,6 +199,26 @@ public class LocalSetupProgressTests {
             "{\"v\":1,\"event\":\"embeddings_skipped\",\"code\":\"declined\",\"message\":\"Search by meaning stays off, as an earlier setup chose; --embedding-model <model> turns it on.\"}");
 
         await Assert.That(p.Embeddings.Summary).IsEqualTo("Search by keyword, as chosen.");
+    }
+
+    /// Keyword search left as the recommendation passes no flag, so setup still probes Ollama and reports it missing.
+    [Test]
+    public async Task A_skip_after_keyword_search_was_asked_for_reads_as_that_choice() {
+        foreach (var asked in new[] { LocalEmbeddingChoice.Recommended(LocalEmbeddingChoice.KeywordOnly), LocalEmbeddingChoice.KeywordOnly }) {
+            var p = Asked(asked, OllamaNotFound);
+
+            await Assert.That(p.Embeddings.Row.State).IsEqualTo(RowState.Skipped);
+            await Assert.That(p.Embeddings.Summary).IsEqualTo("Search by keyword, as chosen.");
+        }
+    }
+
+    [Test]
+    public async Task A_skip_after_search_by_meaning_was_asked_for_keeps_its_reason() {
+        foreach (var asked in new[] { LocalEmbeddingChoice.Default, LocalEmbeddingChoice.Builtin, LocalEmbeddingChoice.Recommended(LocalEmbeddingChoice.Builtin) }) {
+            var p = Asked(asked, OllamaNotFound);
+
+            await Assert.That(p.Embeddings.Summary).IsEqualTo("Ollama is not responding on http://localhost:11434; search works by keyword.");
+        }
     }
 
     /// The server already serves the model when setup fails to clear its pending mark.

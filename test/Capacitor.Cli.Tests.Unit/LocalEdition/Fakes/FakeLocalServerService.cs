@@ -38,6 +38,9 @@ sealed class FakeLocalServerService(List<string> log, UserHome home) : ILocalSer
     /// <summary>Set by an install or start, cleared by a stop or uninstall.</summary>
     public bool Running { get; private set; }
 
+    /// <summary>What the last quick uninstall gave the server to stop.</summary>
+    public TimeSpan? StopGrace { get; private set; }
+
     public string Describe => "fake unit";
 
     void Log(string entry) {
@@ -88,6 +91,21 @@ sealed class FakeLocalServerService(List<string> log, UserHome home) : ILocalSer
             File.Delete(file);
             FaultPoints.Hit($"unlink:{file}");
         }
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Unloads and removes the unit as the real quick paths do: whatever of the stack is still alive is left for
+    /// the caller to find.</summary>
+    public Task UninstallWithinAsync(LocalServerUnit unit, TimeSpan grace, CancellationToken ct) {
+        Log("uninstall-within");
+        StopGrace = grace;
+        if (UninstallFailure is { } failure) throw failure;
+
+        LoadedRoot = null;
+        Running    = false;
+
+        if (File.Exists(UnitFile(unit))) File.Delete(UnitFile(unit));
 
         return Task.CompletedTask;
     }

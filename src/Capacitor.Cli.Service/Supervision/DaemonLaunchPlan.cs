@@ -12,8 +12,7 @@ public sealed record DaemonLaunchPlan(string CommandLine, IReadOnlyDictionary<st
     public static DaemonLaunchPlan For(
             Enrollment enrollment, string profileDirectory, IReadOnlyDictionary<string, string> userEnvironment,
             IReadOnlyDictionary<string, string>? captured = null) {
-        var env = new Dictionary<string, string>(userEnvironment, StringComparer.OrdinalIgnoreCase);
-        foreach (var (key, value) in captured ?? new Dictionary<string, string>()) env[key] = value;
+        var env = UserEnvironment.Overlay(userEnvironment, captured);
         env[SupervisedVariable] = enrollment.Name;
         if (enrollment.Profile is { } profile) env["KCAP_PROFILE"] = profile;
 
@@ -33,7 +32,5 @@ public sealed record DaemonLaunchPlan(string CommandLine, IReadOnlyDictionary<st
     public static string StopCommandLine(Enrollment enrollment) =>
         $"\"{enrollment.CliPath}\" daemon stop --name \"{enrollment.Name}\" --direct";
 
-    /// <summary>The double-NUL-terminated, sorted block CreateProcessAsUser takes</summary>
-    public string EnvironmentBlock() =>
-        string.Concat(Environment.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase).Select(kv => $"{kv.Key}={kv.Value}\0")) + "\0";
+    public string EnvironmentBlock() => UserEnvironment.Block(Environment);
 }

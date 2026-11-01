@@ -104,8 +104,9 @@ jobs:
           done < <(find publish/app -type f)
           bash scripts/sign-macos.sh "$APPLE_SIGNING_IDENTITY" "$KEYCHAIN" src/Capacitor.App/Packaging/app.entitlements "${machos[@]}"
 
-      # The trio is copied as it arrived and never touched by codesign again. On Linux the CLI goes
-      # under bin/ because the plugin directory beside it is also named kcap.
+      # The trio is copied as it arrived and never touched by codesign again. On Linux and Windows the
+      # CLI goes under bin/, the folder that goes on PATH, because the plugin directory is also named
+      # kcap: Git Bash, which runs Claude Code's hooks on Windows, does not resolve kcap.exe beside it.
       - name: Assemble pack directory
         run: |
           set -euo pipefail
@@ -115,7 +116,8 @@ jobs:
               chmod +x publish/app/kcap publish/app/kcap-daemon "publish/app/kcap-desktop"
               bash scripts/assemble-app-bundle.sh publish/app "publish/kcap.app" "$VERSION" ;;
             Windows)
-              cp trio/bin/kcap.exe trio/bin/kcap-daemon.exe trio/bin/kcap-service.exe publish/app/
+              mkdir -p publish/app/bin
+              cp trio/bin/kcap.exe trio/bin/kcap-daemon.exe trio/bin/kcap-service.exe publish/app/bin/
               bash scripts/bundle-app-plugin.sh publish/app "$VERSION" ;;
             Linux)
               mkdir -p publish/app/bin
@@ -209,10 +211,10 @@ jobs:
           set -euo pipefail
           install="$(cygpath -u "$LOCALAPPDATA")/kcap"
           bash scripts/assert-app-plugin.sh "$install/current" "$VERSION"
-          bash scripts/assert-app-cli-version.sh "$install/current/kcap.exe" "$VERSION"
+          bash scripts/assert-app-cli-version.sh "$install/current/bin/kcap.exe" "$VERSION"
           bash scripts/assert-bundle-digest.sh "$install" trio/bin/daemon.sha256
-          "$install/current/kcap-daemon.exe" --version
-          "$install/current/kcap-service.exe" --version
+          "$install/current/bin/kcap-daemon.exe" --version
+          "$install/current/bin/kcap-service.exe" --version
 
       # A missing native library or a platform-only call on the startup path ends the process
       # within seconds.

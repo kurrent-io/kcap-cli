@@ -65,7 +65,7 @@ static class LocalSetupCommit {
 
         if (LocalRootIdentity.Decide(root, service.Owner(unit)) != OwnerDecision.Ours)
             throw new LocalInstallFailure(refused,
-                $"The local server did not confirm it left setup mode, and the {service.Describe} {unit.Label} ({service.UnitFile(unit)}) is not provably this installation's, so it was not restarted. The setup journal is kept; run kcap setup --local again to finish it.");
+                $"The local server did not confirm it left setup mode, and the {service.Describe} {service.Name(unit)} ({service.UnitFile(unit)}) is not provably this installation's, so it was not restarted. The setup journal is kept; run kcap setup --local again to finish it.");
 
         await service.StopAsync(unit, CancellationToken.None);
         service.Start(unit);

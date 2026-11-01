@@ -2,7 +2,7 @@ namespace Capacitor.Cli.Service.Installation;
 
 /// <summary>
 /// What <c>kcap-service install</c> does, from what is already on the machine. Replacing the binary
-/// stops the service first and only the service: the daemons it supervises keep running and the new
+/// stops the service first and only the service: the daemons and servers it supervises keep running and the new
 /// binary adopts them. "Current" compares the bytes, so a downgrade replaces the binary just as an
 /// upgrade does
 /// </summary>

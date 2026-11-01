@@ -24,9 +24,7 @@ public static class TakeoverReport {
                 var items = workItems?["items"] as JsonArray;
                 sb.AppendLine(items is { Count: > 0 } ? "Work items:" : "Work items: none.");
                 foreach (var item in items ?? new JsonArray())
-                    sb.AppendLine(IsTrue(item?["attached"])
-                        ? $"- {Str(item?["label"])}"
-                        : $"- {Str(item?["label"])} — not attached: {Str(item?["error"])}");
+                    sb.AppendLine(CultureInfo.InvariantCulture, $"- {Str(item?["label"])}{Attached(item)}");
                 break;
         }
 
@@ -40,8 +38,7 @@ public static class TakeoverReport {
             sb.AppendLine(plans.Count + skipped.Count > 0 ? "Plans:" : "Plans: none.");
 
             foreach (var plan in plans) {
-                var line = $"- {Str(plan?["plan_id"])}: task {Str(plan?["task_id"])} \"{Str(plan?["title"])}\" ({Str(plan?["status"])})";
-                sb.AppendLine(IsTrue(plan?["attached"]) ? line : $"{line} — not attached: {Str(plan?["error"])}");
+                sb.AppendLine(CultureInfo.InvariantCulture, $"- {Str(plan?["plan_id"])}: task {Str(plan?["task_id"])} \"{Str(plan?["title"])}\" ({Str(plan?["status"])}){Attached(plan)}");
             }
 
             foreach (var plan in skipped)
@@ -72,6 +69,13 @@ public static class TakeoverReport {
         }
         return sb.ToString();
     }
+
+    /// <summary>A null <c>attached</c> is a write the run never finished, so whether it landed is unknown.</summary>
+    static string Attached(JsonNode? entry) => entry?["attached"] switch {
+        null                 => " — not confirmed: the takeover was interrupted",
+        var a when IsTrue(a) => "",
+        _                    => $" — not attached: {Str(entry["error"])}",
+    };
 
     static string Safe(JsonNode? node) => NextWorkUntrustedText.Render(Str(node), 128);
 

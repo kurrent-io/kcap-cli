@@ -73,6 +73,17 @@ abstract record LocalInstallEvent {
 
     public sealed record Upgraded(string ServerUrl, string From, string To) : LocalInstallEvent;
 
+    /// <summary>The administrator prompt in front of <c>kcap-service</c>'s install was declined, so the server runs as a
+    /// Scheduled Task while the user is signed in.</summary>
+    public sealed record WindowsServiceDeclined : LocalInstallEvent;
+
+    /// <summary><c>kcap-service</c> could not be installed or cannot run the server, so it runs as a Scheduled Task.</summary>
+    public sealed record WindowsServiceUnavailable(string Message) : LocalInstallEvent;
+
+    /// <summary>The verified bundle for <paramref name="Version"/> is in the cache under <paramref name="Path"/>, for the
+    /// next install to take instead of downloading it.</summary>
+    public sealed record Fetched(string Version, string Path) : LocalInstallEvent;
+
     /// <summary>The stack is left as it is: already at the caller's version, newer than it, or not installed.</summary>
     public sealed record NothingToDo(UpgradeSkip Reason, string Version, string? InstalledVersion) : LocalInstallEvent;
 }

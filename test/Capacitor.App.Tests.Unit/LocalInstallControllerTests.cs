@@ -303,4 +303,19 @@ public class LocalInstallControllerTests {
         await Assert.That(controller.Progress.FailedCode).IsNull();
         await Assert.That(controller.Outcome).IsTypeOf<LocalInstallOutcome.Installed>();
     }
+
+    /// The progress a run reports into knows what it was asked, so a keyword run's Ollama probe does not read as a failure.
+    [Test]
+    public async Task A_run_left_on_keyword_search_summarises_its_skip_as_that_choice() {
+        const string skipped =
+            """{"v":1,"event":"embeddings_skipped","code":"ollama_not_found","message":"Ollama is not responding on http://localhost:11434; search works by keyword."}""";
+        var cli = new FakeKcapCli { SetupLocalBehavior = LocalSetupScript.Prints(0, skipped, LocalSetupScript.Committed) };
+        var controller = Controller(cli, LocalSetupScript.NoSetup(Config), Probe());
+
+        await controller.StartAsync(LocalEmbeddingChoice.Recommended(LocalEmbeddingChoice.KeywordOnly), CancellationToken.None);
+        await controller.SettleAsync();
+
+        await Assert.That(controller.Outcome).IsTypeOf<LocalInstallOutcome.Installed>();
+        await Assert.That(controller.Progress.Embeddings.Summary).IsEqualTo("Search by keyword, as chosen.");
+    }
 }

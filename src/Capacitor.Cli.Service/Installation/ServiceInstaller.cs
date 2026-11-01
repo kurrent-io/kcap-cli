@@ -54,7 +54,7 @@ static unsafe class ServiceInstaller {
         try {
             RunSteps(steps, service, sourceExe);
         } catch {
-            // The service was stopped for the upgrade; left that way, nothing supervises anyone's daemon
+            // The service was stopped for the upgrade; left that way, nothing supervises anyone's daemon or server
             if (running) StartAgain();
             throw;
         }
@@ -123,7 +123,7 @@ static unsafe class ServiceInstaller {
         RemoveFiles(InstallDirectory);
         // The index stays: the users still in it keep their enrollments, and a reinstalled service that could
         // not see them would remove itself at the next unenroll
-        Console.WriteLine("kcap-service is uninstalled; the daemons it started keep running as their users' own processes");
+        Console.WriteLine("kcap-service is uninstalled; the daemons and servers it started keep running as their users' own processes");
         return 0;
     }
 

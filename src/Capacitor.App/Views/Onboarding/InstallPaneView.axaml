@@ -45,6 +45,19 @@
             <icons:SearchChoiceView DataContext="{Binding Search}" />
         </Border>
 
+        <Border Classes="onboardingCallout" IsVisible="{Binding WindowsServiceVisible}">
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="11">
+                <CheckBox x:Name="WindowsServiceCheckBox" Classes="onboardingCheck" VerticalAlignment="Top" Margin="0,1,0,0"
+                          IsChecked="{Binding RunAsWindowsService, Mode=TwoWay}"
+                          AutomationProperties.Name="{x:Static vm:InstallStepViewModel.WindowsServiceLabel}" />
+                <StackPanel Grid.Column="1" Spacing="3">
+                    <TextBlock Classes="onboardingLabel" FontSize="13" Text="{x:Static vm:InstallStepViewModel.WindowsServiceLabel}" />
+                    <TextBlock Classes="onboardingDetail" Foreground="{StaticResource OnboardingMutedBrush}" TextWrapping="Wrap"
+                               Text="{x:Static vm:InstallStepViewModel.WindowsServiceDetail}" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
         <Border Classes="onboardingCard" IsVisible="{Binding ProgressVisible}">
             <StackPanel Spacing="12">
                 <TextBlock Classes="onboardingNote" Text="Finishing an earlier setup" IsVisible="{Binding Progress.Recovering}" />
@@ -103,6 +116,9 @@
                     <TextBlock Classes="onboardingDetail" TextWrapping="Wrap" IsVisible="{Binding Skipped}"
                                Text="{x:Static vmr:SearchChoiceViewModel.KeywordDetail}" />
                 </StackPanel>
+
+                <TextBlock x:Name="WindowsServiceNoteText" Classes="onboardingDetail" TextWrapping="Wrap"
+                           Text="{Binding WindowsServiceNote}" IsVisible="{Binding WindowsServiceNoteVisible}" />
 
                 <TextBlock x:Name="RetryStatusText" Classes="onboardingDetail" TextWrapping="Wrap" Text="{Binding RetryStatus}"
                            IsVisible="{Binding AutoRetrying}" />

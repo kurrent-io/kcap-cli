@@ -2,7 +2,9 @@ namespace Capacitor.Cli.Core.LocalEdition;
 
 public static class LocalServerConditions {
     /// <summary>The binary the unit runs, reached through <c>bin/current</c> so an upgrade switches it in place.</summary>
-    public static string ServerBinary(LocalRoot root) => Path.Combine(root.Directory, "bin", "current", "kcap-server");
+    public static string ServerBinary(LocalRoot root) => Path.Combine(root.Directory, "bin", "current", ServerFileName);
+
+    public static string ServerFileName => OperatingSystem.IsWindows() ? "kcap-server.exe" : "kcap-server";
 
     /// <summary>Lock-free and write-free, like <c>kcap local status</c>: the lock is probed, never taken, so a reader
     /// cannot hold up the command it reports on.</summary>
@@ -19,7 +21,6 @@ public static class LocalServerConditions {
             StateRead<InstallRegistry>.Present { Value.Active: not null } when !Directory.Exists(Path.Combine(root.Directory, "bin"))
                 => LocalServerCondition.Uninstalled,
             StateRead<InstallRegistry>.Present { Value.Active: not null } => File.Exists(ServerBinary(root))
-                                                                          || (OperatingSystem.IsWindows() && File.Exists(ServerBinary(root) + ".exe"))
                 ? LocalServerCondition.Installed
                 : LocalServerCondition.FilesMissing,
             StateRead<InstallRegistry>.Present { Value.Retired.Count: > 0 } => LocalServerCondition.Purged,

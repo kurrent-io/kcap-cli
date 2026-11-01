@@ -18,6 +18,7 @@ using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Core.Resume;
+using HandoffSourceContext = Capacitor.Cli.Core.Handoff.HandoffSourceContext;
 using Capacitor.Cli.Daemon.Harness.Antigravity;
 using Capacitor.Cli.Daemon.Harness.Claude;
 using Capacitor.Cli.Daemon.Harness.Codex;
@@ -77,6 +78,12 @@ internal record AgentInstance(
     /// The interrupted session this agent continues, until its own session id is known and the
     /// takeover of that session's work has started.
     public string?              ContinuedFromSessionId { get; set; }
+
+    /// The ended session this agent was launched to hand off from, until its takeover settles.
+    public HandoffSourceContext? HandoffSource { get; set; }
+
+    /// Set by the first call that starts this agent's hand-off takeover; it runs once.
+    public int HandoffTakeoverStarted;
 
     /// The agent this one continues, announced on every registration so the server can follow its wake-ups here.
     public string?              ContinuesAgentId  { get; init; }
@@ -588,6 +595,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // Tail-of-PTY capture for a FAILED launch, under the same per-daemon record root as the PID
     // records ({state}/{name}/agents/failed/) — survives worktree teardown for post-mortem.
     readonly FailedLaunchLog?     _failedLaunchLog;
+    readonly HandoffOutcomeStore  _handoffOutcomes;
     readonly string               _daemonId    = "";
     readonly string               _daemonEpoch = "";
 
@@ -906,6 +914,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         ResumeLedger      = ResumeLedgerStore.For(config.Store, config.Name, time);
         ParticipantLedger = ResumeLedgerStore.ParticipantsFor(config.Store, config.Name, time);
         _failedLaunchLog = new FailedLaunchLog(recordRoot, time);
+        _handoffOutcomes = new HandoffOutcomeStore(recordRoot, time);
         _quarantine  = new AgentKillQuarantine(logger, time);
         _daemonId    = ComputeDaemonId(config.Name);
         _daemonEpoch = config.DaemonEpoch ?? Guid.NewGuid().ToString("N");
@@ -2530,11 +2539,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             : AccountResolution.ResolveForResume(registry, vendor, resumed.AccountId, resumed.AccountDirectory, defaultDirectory);
     }
 
-    /// <summary>The server's start title, or — from a server that sends none — one derived from the prompt.</summary>
+    /// <summary>The server's start title, or — from a server that sends none — one derived from the prompt, or
+    /// for a hand-off with no text, one naming its source.</summary>
     internal static AgentStartTitle? StartTitleOf(LaunchAgentCommand cmd) =>
         !string.IsNullOrWhiteSpace(cmd.Title)
             ? new AgentStartTitle(cmd.Title.Trim(), cmd.TitleDerived)
-            : AgentStartTitle.FromPrompt(cmd.Prompt);
+            : AgentStartTitle.FromPrompt(cmd.Prompt) ?? (cmd.Handoff?.Source is { } source ? HandoffStartTitle(source) : null);
 
     /// <summary>The launch body. Its outcome drives the sequenced lane: a pre-flight rejection is
     /// <c>LaunchRejected</c> (capacity as <c>daemon_capacity</c>, every other validation as
@@ -2557,6 +2567,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // Before consent for the same reason as the preset guard above.
         if (ClaudePermissionModePolicy.RejectionReason(cmd) is { } modeRejection) {
             await _server.LaunchFailedAsync(cmd.AgentId, modeRejection);
+
+            return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
+        }
+
+        // Before consent for the same reason as the preset guard above.
+        if (HandoffLaunchRefusal(cmd, resuming: false) is { } handoffRefusal) {
+            await _server.LaunchFailedAsync(cmd.AgentId, handoffRefusal);
 
             return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
         }
@@ -2625,6 +2642,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // absorb this incidentally.)
         if (string.IsNullOrWhiteSpace(cmd.Vendor) || !_runtimeFactories.TryGetValue(cmd.Vendor, out var runtimeFactory)) {
             await LaunchFailedUnlessPrivateAsync(isPrivate, cmd.AgentId, $"Unknown vendor: {cmd.Vendor}");
+
+            return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
+        }
+
+        if (HandoffLaunchRefusal(cmd, resume is not null) is { } handoffRefusal) {
+            await LaunchFailedUnlessPrivateAsync(isPrivate, cmd.AgentId, handoffRefusal);
 
             return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
         }
@@ -2854,6 +2877,17 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             if (resume is not null) {
                 worktree = resume.Worktree;
+            } else if (cmd.Handoff is not null) {
+                using var handoffCts = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token, cancel);
+                var handoff = await PrepareHandoffAsync(cmd, repoPath, handoffCts.Token);
+                if (handoff.Refusal is { } handoffRefused) {
+                    await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, handoffRefused);
+
+                    return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
+                }
+
+                worktree = handoff.Worktree!;
+                prompt   = handoff.Prompt;
             } else if (cmd.Borrowed) {
                 // Defense-in-depth re-authorization: the server already probed this cwd, but the
                 // daemon NEVER borrows a path just because the server said so (TOCTOU-safe). The
@@ -3243,6 +3277,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 StartTitle          = startTitle,
                 IsPrivate           = isPrivate,
                 ContinuesAgentId    = resume?.Entry.InheritedAgentIds is [.., var predecessor] ? predecessor : null,
+                HandoffSource       = cmd.Handoff?.Source ?? resume?.Entry.Launch.HandoffSource,
                 // Keeps the worktree and the entry through any failure until the resume is judged.
                 ResumePending       = resume is not null
             };
@@ -3374,6 +3409,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     Record: pid => PersistPidRecordOrThrow(agent, pid, null),
                     Clear:  () => DeletePidRecord(agent.Id));
             }
+
+            StartHandoffTakeover(agent);
 
             // Start reading output
             _ = ReadAgentOutputAsync(agent);
@@ -6074,6 +6111,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     agent.TranscriptPath = winner.Path;
                     UpdateLedgerSession(agent);
                     StartContinuationTakeover(agent);
+                    StartHandoffTakeover(agent);
                     _statusNotifier.Pulse();
                     LogSessionIdDetected(agent.Id, winner.SessionId);
 
@@ -6478,6 +6516,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // child termination/cleanup below — and the run-once guard means the DI pass
                 // can never retry, stranding live child processes. Log and continue.
                 LogDisposeStepFailed(ex, "shutdown-cancel");
+            }
+
+            try {
+                await DrainHandoffTakeoversAsync();
+            } catch (Exception ex) {
+                LogDisposeStepFailed(ex, "handoff-takeovers");
             }
 
             // Before the hub is disposed (DaemonRunner disposes it after this method returns):

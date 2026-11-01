@@ -35,7 +35,7 @@ internal static class Program
                 .OnRestarted(_ => updateRelaunch = true);
             if (OperatingSystem.IsWindows())
                 velopack = velopack.OnBeforeUninstallFastCallback(_ => {
-                    if (OperatingSystem.IsWindows()) WindowsUninstallCleanup.Run(AppContext.BaseDirectory);
+                    if (OperatingSystem.IsWindows()) WindowsUninstallCleanup.Run(AppContext.BaseDirectory, UserHome.FromEnvironment());
                 });
             velopack.Run();
         }

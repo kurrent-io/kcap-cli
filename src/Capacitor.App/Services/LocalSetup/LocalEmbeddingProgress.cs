@@ -4,14 +4,17 @@ using ReactiveUI.Reactive;
 namespace Capacitor.App.Services.LocalSetup;
 
 /// The `embeddings_*` lines of one setup run: the Ollama model pull or the built-in model download, and whether the
-/// step ended in search by meaning or by keyword. A skip never fails the run.
-public sealed class LocalEmbeddingProgress : ReactiveObject {
+/// step ended in search by meaning or by keyword. A skip never fails the run. When the run was asked for keyword
+/// search, even as an unchosen recommendation that passes no flag, a skip reads as that choice rather than as the
+/// Ollama probe setup makes without a flag.
+public sealed class LocalEmbeddingProgress(LocalEmbeddingChoice? asked = null) : ReactiveObject {
     long _bytes;
     double? _pullFraction;
     bool _pulling, _builtin;
     string? _model, _configuredModel, _replacedModel, _skipCode, _skipMessage;
 
     const string BuiltinName = "the built-in model";
+    const string KeywordAsChosen = "Search by keyword, as chosen.";
 
     public InstallRow Row { get; } = new();
 
@@ -66,9 +69,10 @@ public sealed class LocalEmbeddingProgress : ReactiveObject {
     public string? Summary => ConfiguredModel is { } model
         ? $"Search by meaning with {model}."
         : SkipCode switch {
-            null       => null,
-            "declined" => "Search by keyword, as chosen.",
-            _          => TerminalAdvice.Strip(SkipMessage) ?? "Search by keyword.",
+            null                                 => null,
+            "declined"                           => KeywordAsChosen,
+            _ when asked is { ByMeaning: false } => KeywordAsChosen,
+            _                                    => TerminalAdvice.Strip(SkipMessage) ?? "Search by keyword.",
         };
 
     public string? ReembedNote => ConfiguredModel switch {
