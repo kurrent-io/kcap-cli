@@ -141,6 +141,9 @@ sealed class LocalCommand(
         }
 
         var quick = args.Contains(QuickFlag);
+        // Only the Windows supervisors give the server a bounded grace; elsewhere the stop is waited out and verified.
+        if (quick && !OperatingSystem.IsWindows())
+            return await FailAsync($"{QuickFlag} is for the Windows app's uninstaller; run kcap local uninstall without it.");
         if (quick && args.Contains("--purge"))
             return await FailAsync($"{QuickFlag} leaves a server that is still stopping, so it cannot delete its data: drop --purge or {QuickFlag}.");
 
