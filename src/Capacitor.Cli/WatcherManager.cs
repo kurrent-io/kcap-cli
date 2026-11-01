@@ -132,10 +132,9 @@ public sealed partial class WatcherManager(
             try {
                 using var process = Process.GetProcessById(parsed);
 
-                // SIGTERM-first on Unix so the watcher runs its shutdown path (final drain +
-                // undelivered-tail spool) — Process.Kill is SIGKILL there. Windows has no
-                // SIGTERM; the stop is hard and recovery is left to the spool/import paths.
-                if (!TrySignalTerm(parsed)) {
+                // Ask first so the watcher runs its shutdown path (final drain, tail spool): SIGTERM
+                // on Unix, the stop event on Windows. Process.Kill skips all of it.
+                if (!TrySignalTerm(parsed) && !WatcherStopSignal.TryRequest(parsed)) {
                     process.Kill(entireProcessTree: false);
                 }
 

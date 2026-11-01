@@ -470,6 +470,10 @@ partial class WatchCommand(
             cts.Cancel();
             ctx.Cancel = true;
         });
+        using var stopRequest = WatcherStopSignal.Listen(Environment.ProcessId, () => {
+            Log(time, "Stop requested; shutting down watcher");
+            cts.Cancel();
+        });
 
         // SIGHUP defense-in-depth: setsid above should prevent the kernel from
         // delivering SIGHUP to us, but if a shell forwards SIGHUP explicitly to
