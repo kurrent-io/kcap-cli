@@ -888,4 +888,41 @@ public class KcapCliTests {
         await Assert.That(result.ExitCode).IsEqualTo(127);
         await Assert.That(runner.SeenArgs).IsNull();
     }
+
+    /// <summary>A provider's key reaches the CLI in its own variable, never on the command line, where any local user
+    /// could read it.</summary>
+    [Test]
+    public async Task Local_intelligence_carries_the_key_in_the_environment_only() {
+        var runner = new FakeProcessRunner {
+            Behavior = _ => Task.FromResult(new ProcessResult(0,
+                """{"ok":true,"mode":"provider","vendor":"anthropic","import_outcomes":true,"backlog_session_touches_per_day":200,"resolving":["titles"]}""",
+                "", false)),
+        };
+
+        var outcome = await MakeCli(runner).LocalIntelligenceAsync(
+            Cli.Core.Setup.Intelligence.IntelligenceAnswer.Parse("anthropic")!, "claude-haiku-4-5", "sk-ant-secret", false, CancellationToken.None);
+
+        await Assert.That(runner.SeenArgs!).IsEquivalentTo(
+            ["local", "intelligence", "anthropic", "--model", "claude-haiku-4-5", "--no-import-outcomes", "--json", "--no-update-check"],
+            CollectionOrdering.Matching);
+        await Assert.That(string.Join(' ', runner.SeenArgs!)).DoesNotContain("sk-ant-secret");
+        await Assert.That(runner.SeenOptions!.EnvOverlay!["ANTHROPIC_API_KEY"]).IsEqualTo("sk-ant-secret");
+        await Assert.That(((Cli.Core.Setup.Intelligence.IntelligenceSetupOutcome.Applied)outcome).Response.Vendor).IsEqualTo("anthropic");
+    }
+
+    [Test]
+    public async Task Local_intelligence_reads_a_refusal_and_a_failure() {
+        var refused = new FakeProcessRunner { Behavior = _ => Task.FromResult(new ProcessResult(2, """{"ok":false,"error":"not_offered"}""", "", false)) };
+        var failed  = new FakeProcessRunner { Behavior = _ => Task.FromResult(new ProcessResult(1, """{"ok":false,"error":"Could not reach"}""", "", false)) };
+        var garbled = new FakeProcessRunner { Behavior = _ => Task.FromResult(new ProcessResult(0, "not json", "boom", false)) };
+        var none    = Cli.Core.Setup.Intelligence.IntelligenceAnswer.None;
+
+        await Assert.That(await MakeCli(refused).LocalIntelligenceAsync(none, null, null, null, CancellationToken.None))
+            .IsEqualTo(new Cli.Core.Setup.Intelligence.IntelligenceSetupOutcome.Refused("not_offered"));
+        await Assert.That(await MakeCli(failed).LocalIntelligenceAsync(none, null, null, null, CancellationToken.None))
+            .IsEqualTo(new Cli.Core.Setup.Intelligence.IntelligenceSetupOutcome.Failed("Could not reach"));
+        await Assert.That(await MakeCli(garbled).LocalIntelligenceAsync(none, null, null, null, CancellationToken.None))
+            .IsTypeOf<Cli.Core.Setup.Intelligence.IntelligenceSetupOutcome.Failed>();
+        await Assert.That(refused.SeenArgs!).DoesNotContain("--model");
+    }
 }

@@ -1084,7 +1084,7 @@ public class WizardStartupTests {
 
             await Assert.That(graph.Steps.Select(s => s.Id).ToList()).IsEquivalentTo([
                 WizardStepId.Edition, WizardStepId.Install, WizardStepId.SignIn,
-                WizardStepId.Harnesses, WizardStepId.Import, WizardStepId.Privacy, WizardStepId.Done,
+                WizardStepId.Harnesses, WizardStepId.Intelligence, WizardStepId.Import, WizardStepId.Privacy, WizardStepId.Done,
             ], CollectionOrdering.Matching);
             // No mutation, no IPC, no status read: composing the wizard never speaks to a daemon.
             await Assert.That(harness.Lane.Requests).IsEmpty();

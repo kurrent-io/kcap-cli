@@ -56,7 +56,7 @@ sealed class LocalIntelligenceCommand(ICapacitorHttpClient http, LocalRoot root)
 
     static int Print(bool json, IntelligenceSetupResponse r) {
         if (json) {
-            Write(new LocalIntelligenceLine(true, r.Mode, r.Harness, r.Vendor, r.ImportOutcomes, r.BacklogSessionTouchesPerDay, r.Resolving));
+            Write(IntelligenceCliLine.From(r));
 
             return Applied;
         }
@@ -81,14 +81,14 @@ sealed class LocalIntelligenceCommand(ICapacitorHttpClient http, LocalRoot root)
     }
 
     static int Report(bool json, int exit, string message) {
-        if (json) Write(new LocalIntelligenceLine(false, Error: message));
+        if (json) Write(new IntelligenceCliLine(false, Error: message));
         else Console.Error.WriteLine($"  Error: {message}");
 
         return exit;
     }
 
-    static void Write(LocalIntelligenceLine line) {
-        Console.Out.WriteLine(JsonSerializer.Serialize(line, LocalSetupJsonContext.Default.LocalIntelligenceLine));
+    static void Write(IntelligenceCliLine line) {
+        Console.Out.WriteLine(JsonSerializer.Serialize(line, IntelligenceCliJsonContext.Default.IntelligenceCliLine));
         Console.Out.Flush();
     }
 }

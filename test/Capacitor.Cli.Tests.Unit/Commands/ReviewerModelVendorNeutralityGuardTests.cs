@@ -47,6 +47,8 @@ public class ReviewerModelVendorNeutralityGuardTests {
     /// design, and a guard edit per curated entry adds friction without safety.</summary>
     static readonly HashSet<string> CatalogOwnedFiles = new(StringComparer.OrdinalIgnoreCase) {
         "HostedHarnessCatalog.cs",
+        // The local edition's provider choice, offering the server's own default model per vendor.
+        "IntelligenceVendor.cs",
     };
 
     /// <summary>Per-file substrings that are PRE-EXISTING, unrelated vendor-model literals

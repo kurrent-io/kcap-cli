@@ -37,6 +37,7 @@ using Capacitor.Cli.Core.PullRequests.Readers;
 using Capacitor.Cli.Core.PullRequests.Readers.GitHubCli;
 using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Core.Setup;
+using Capacitor.Cli.Core.Setup.Intelligence;
 using Capacitor.Remote.Models;
 using Capacitor.Cli.Core.Harness;
 using Microsoft.Extensions.DependencyInjection;
@@ -1794,6 +1795,12 @@ public partial class App : Application {
                 SystemBrowser.Instance, Capacitor.Cli.Core.Auth.Clipboard.TryCopy),
             ResumeWebSignUp: WizardComposition.ResumesWebSignUp(await _appState.LoadAsync(), _time.GetUtcNow()),
             Prefetch: _localPrefetch,
+            HeadlessHarnesses: async (name, ct) => {
+                var binaries = BinaryProbe.Searching(await probe.TerminalPathAsync(ct));
+
+                return await HeadlessHarnessSource.ReadAsync(_daemonStore, name, _time,
+                    () => HeadlessHarnessProbe.Detect(HarnessRegistry.FromEnvironment(_userHome, binaries), binaries), ct);
+            },
             OffersWindowsService: OperatingSystem.IsWindows());
         _localInstall ??= WizardComposition.NewInstallController(options);
         var graph = WizardComposition.BuildGraph(options with { Install = _localInstall });

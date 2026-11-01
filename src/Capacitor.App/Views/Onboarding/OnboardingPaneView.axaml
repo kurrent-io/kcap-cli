@@ -82,6 +82,10 @@
             <views:HarnessesPaneView />
         </DataTemplate>
 
+        <DataTemplate DataType="vm:IntelligenceStepViewModel">
+            <views:IntelligencePaneView />
+        </DataTemplate>
+
         <DataTemplate DataType="vm:HistoryStepViewModel">
             <views:HistoryPaneView />
         </DataTemplate>
