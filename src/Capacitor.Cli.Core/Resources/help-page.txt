@@ -6,7 +6,9 @@ Subcommands:
   publish <file.html> [options]    Publish a page, print its URL
   list [--mine]                    Pages you can see
   search <query...> [--limit N]    Pages you can see whose title, description
-                                   or text match, best first (20 by default)
+                                   or text match, best first (20 by default).
+                                   Words after `--` are searched as they are,
+                                   so `search -- --force` finds that flag.
   get <id|url> [--version N]       Print a page's text; --html prints its HTML
   share <id> --visibility V [--to] Change who may open a page
   delete <id>                      Remove a page

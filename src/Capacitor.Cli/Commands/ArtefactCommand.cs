@@ -28,7 +28,7 @@ class ArtefactCommand(IArtefactsApi artefacts) {
         --session cites a session and may be repeated; it defaults to KCAP_SESSION_ID when set.
         --update publishes a new version of an existing page, which keeps its URL.
         get prints the page's text, or its HTML with --html; --version reads an older version.
-        search finds pages you can open by their title, description or text; --limit defaults to 20.
+        search finds pages you can open by their title, description or text; --limit defaults to 20, and words after -- are searched as they are.
         """;
 
     public async Task<int> HandleAsync(string[] args) {
@@ -372,6 +372,12 @@ class ArtefactCommand(IArtefactsApi artefacts) {
             var flags = new Flags();
 
             for (var i = from; i < args.Length; i++) {
+                // Everything after a bare `--` is a positional, so a search can look for `--force`.
+                if (args[i] == "--") {
+                    flags.Positionals.AddRange(args[(i + 1)..]);
+                    break;
+                }
+
                 if (!args[i].StartsWith("--", StringComparison.Ordinal)) {
                     flags.Positionals.Add(args[i]);
                     continue;

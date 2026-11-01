@@ -508,7 +508,7 @@ public class McpArtefactsServerTests {
     }
 
     [Test]
-    public async Task Search_pages_returns_only_pages_with_page_ids() {
+    public async Task Search_pages_returns_only_pages_with_page_ids_behind_the_untrusted_notice() {
         using var stub = SearchStub("""
             {"sessions":null,"transcripts":null,"took_ms":4,"work_items":null,
              "pages":[{"artefact_id":"p1","title":"Ferry timetable","owner_user_id":"github:42","owner_display_name":"Ada",
@@ -521,7 +521,8 @@ public class McpArtefactsServerTests {
         await Assert.That(isError).IsFalse();
 
         var result = JsonNode.Parse(text)!.AsObject();
-        await Assert.That(result.Select(p => p.Key)).IsEquivalentTo(new[] { "pages" });
+        await Assert.That(string.Join(",", result.Select(p => p.Key))).IsEqualTo("notice,pages");
+        await Assert.That(result["notice"]!.GetValue<string>()).IsEqualTo(McpArtefactsServer.UntrustedNotice);
         await Assert.That(result["pages"]![0]!["page_id"]!.GetValue<string>()).IsEqualTo("p1");
         await Assert.That(result["pages"]![0]!.AsObject().ContainsKey("artefact_id")).IsFalse();
 
@@ -552,7 +553,7 @@ public class McpArtefactsServerTests {
         var (isError, text) = await CallAsync(Server(), stub.Url!, Args("""{"query":"ferry","limit":80}"""), "search_pages");
 
         await Assert.That(isError).IsFalse();
-        await Assert.That(JsonNode.Parse(text)!.ToJsonString()).IsEqualTo("""{"pages":[]}""");
+        await Assert.That(JsonNode.Parse(text)!["pages"]!.AsArray()).IsEmpty();
         await Assert.That(stub.LogEntries.Single().RequestMessage.Query!["limit"].Single()).IsEqualTo("50");
     }
 

@@ -200,7 +200,8 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
         }
     }
 
-    /// <summary>Only the pages lane, keyed the way every other tool here names a page. A server that
+    /// <summary>Only the pages lane, keyed the way every other tool here names a page, behind the
+    /// untrusted-content notice. A server that
     /// predates page search answers with no pages lane, which is an error rather than "nothing matched".</summary>
     async Task<string> SearchPagesAsync(JsonNode id, HttpClient client, string baseUrl, JsonObject? arguments, CancellationToken ct) {
         if (McpToolArguments.OptionalString(arguments, "query") is not { } query)
@@ -218,7 +219,10 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
         if (JsonNode.Parse(body)?["pages"] is not JsonArray pages)
             return BuildToolResult(id, "Error: this server does not support page search yet; it needs a newer kcap server.", isError: true);
 
-        return BuildToolResult(id, PageResultKeys.Rename(new JsonObject { ["pages"] = pages.DeepClone() }.ToJsonString()));
+        // Titles, author names and excerpts are written by other people, so the notice that guards
+        // get_page's content guards them too.
+        return BuildToolResult(id, PageResultKeys.Rename(
+            new JsonObject { ["notice"] = UntrustedNotice, ["pages"] = pages.DeepClone() }.ToJsonString()));
     }
 
     const int DefaultSearchLimit = 10;

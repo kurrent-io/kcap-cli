@@ -166,13 +166,14 @@ public class ArtefactCommandTests {
     }
 
     [Test]
-    public async Task Search_joins_positionals_and_passes_the_limit() {
+    public async Task Search_joins_positionals_takes_option_like_words_after_a_double_dash_and_passes_the_limit() {
         var api = new RecordingArtefactsApi();
 
         await SearchAsync(api, "ferry", "timetable", "--limit", "5");
         await SearchAsync(api, "ferry");
+        await SearchAsync(api, "--limit", "3", "--", "--force", "push");
 
-        await Assert.That(api.Calls).IsEquivalentTo(new[] { "search:ferry timetable:5", "search:ferry:20" });
+        await Assert.That(api.Calls).IsEquivalentTo(new[] { "search:ferry timetable:5", "search:ferry:20", "search:--force push:3" });
     }
 
     [Test]
