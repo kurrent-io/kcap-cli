@@ -730,6 +730,31 @@ public class KcapCliTests {
             ["setup", "--local", "--json", "--single-user", "--yes", "--no-embeddings"], CollectionOrdering.Matching);
     }
 
+    [Test]
+    public async Task SetupLocalAsync_asks_for_the_windows_service_last() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCli(runner);
+
+        await cli.SetupLocalAsync(LocalEmbeddingChoice.KeywordOnly, _ => { }, CancellationToken.None, CancellationToken.None,
+            windowsService: true);
+
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(
+            ["setup", "--local", "--json", "--single-user", "--yes", "--no-embeddings", "--windows-service"], CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task LocalFetchAsync_streams_json_and_stops_through_its_interrupt() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCli(runner);
+        using var interrupt = new CancellationTokenSource();
+
+        await cli.LocalFetchAsync(_ => { }, interrupt.Token);
+
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(["local", "fetch", "--json"], CollectionOrdering.Matching);
+        await Assert.That(runner.SeenOptions!.Interrupt).IsEqualTo(interrupt.Token);
+        await Assert.That(runner.SeenStreamingToken.CanBeCanceled).IsFalse();
+    }
+
     /// The caller's token bounds only the work before the spawn: a running setup stops through its
     /// interrupt, which lets the CLI roll back, never through a tree kill.
     [Test]

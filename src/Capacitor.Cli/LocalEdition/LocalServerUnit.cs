@@ -4,8 +4,8 @@ namespace Capacitor.Cli.LocalEdition;
 
 /// <summary>
 /// The OS service that runs the local server. Its names share no prefix with a daemon unit's
-/// (<c>io.kurrent.kcap.daemon.*</c>, <c>kcap-daemon-*.service</c>), so no daemon-service listing, refresh,
-/// replace or removal can match it.
+/// (<c>io.kurrent.kcap.daemon.*</c>, <c>kcap-daemon-*.service</c>, the <c>kcap-daemon-*</c> Scheduled Task), so no
+/// daemon-service listing, refresh, replace, removal or migration to <c>kcap-service</c> can match it.
 ///
 /// <para>The server reads its root and port from the environment and needs no arguments: the bundle is a
 /// local-edition build. The binary is reached through <c>bin/current</c>, so an upgrade switches the
@@ -14,11 +14,15 @@ namespace Capacitor.Cli.LocalEdition;
 sealed record LocalServerUnit(string ServerBinary, LocalRoot Root, int Port) {
     public const string ProductionLabel       = "io.kurrent.kcap.local";
     public const string ProductionSystemdName = "kcap-local.service";
+    public const string ProductionTaskName    = "kcap-local";
 
     /// <summary>The launchd label. Tests that load a real unit give it a name of its own.</summary>
     public string Label { get; init; } = ProductionLabel;
 
     public string SystemdName { get; init; } = ProductionSystemdName;
+
+    /// <summary>The Scheduled Task's name, at the root of the Task Scheduler library.</summary>
+    public string TaskName { get; init; } = ProductionTaskName;
 
     /// <summary>The embedding setting the server runs with; a decline, a provider this release does not know, or
     /// none searches by keyword.</summary>

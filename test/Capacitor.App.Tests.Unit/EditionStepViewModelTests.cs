@@ -78,7 +78,7 @@ public class EditionStepViewModelTests {
         });
 
         await Assert.That(reason).IsEqualTo(
-            "The local edition runs only on Apple silicon Macs for now, so it isn't available on this machine.");
+            "The local edition runs only on Apple silicon Macs and x64 Windows PCs for now, so it isn't available on this machine.");
         await Assert.That(canChoose).IsFalse();
     }
 

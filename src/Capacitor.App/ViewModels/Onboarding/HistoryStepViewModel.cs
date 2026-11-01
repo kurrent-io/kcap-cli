@@ -106,7 +106,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         HistoryState.NoHistory =>
             $"No history on {MachineName} to import. New sessions will be stored as they happen.",
         HistoryState.OnlyUnmatched =>
-            $"Found {SessionCount(_unmatched)} on {MachineName}, but none matched a repository. Those sessions stay on this Mac.",
+            $"Found {SessionCount(_unmatched)} on {MachineName}, but none matched a repository. Those sessions stay on {ThisDevice.Name}.",
         HistoryState.Unreadable =>
             $"Could not read history on {MachineName}. Import it later from {SetupLocation.Path}.",
         _ => null,
@@ -117,7 +117,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     public bool CloudLevels => !_discoveredLocal;
 
     public string LevelsNote => _discoveredLocal
-        ? "Checked repositories import into kcap on this Mac"
+        ? $"Checked repositories import into kcap on {ThisDevice.Name}"
         : "Checked repositories import with your recording privacy setting. Only me keeps a repository's history private";
 
     /// The harnesses discovery found repository history from, each one its own choice. Empty when the CLI's report
@@ -134,7 +134,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
 
     public string? UnmatchedNote =>
         !HasRepos || _unmatched == 0 ? null
-        : _onLocalPath()             ? $"{SessionCount(_unmatched)} on disk don't match a repository. Those sessions stay on this Mac{FoldersOffered}."
+        : _onLocalPath()             ? $"{SessionCount(_unmatched)} on disk don't match a repository. Those sessions stay on {ThisDevice.Name}{FoldersOffered}."
         :                              $"{SessionCount(_unmatched)} on disk don't match a repository. Use kcap remap to link them{FoldersOffered}.";
 
     string FoldersOffered => Folders.Count > 0 ? ", or check their folders under Customize" : "";

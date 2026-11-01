@@ -13,7 +13,7 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
     public static readonly string BuiltinDetail = BuiltinDetailFor("about 320 MB");
     public const string BuiltinUnavailable = "Not available. kcap could not find a built-in model for this version.";
     public const string BuiltinLookingUp = "Checking for a built-in model…";
-    public const string MeaningDetail = "Finds related information even when you use different words. Uses an AI model that runs in Ollama on this Mac.";
+    public static readonly string MeaningDetail = $"Finds related information even when you use different words. Uses an AI model that runs in Ollama on {ThisDevice.Name}.";
     public const string KeywordDetail = "Finds information using matching words. No AI model needed. You can change this later in Settings, under Search.";
     public const string DefaultLabel = $"{LocalEmbeddingChoice.DefaultModel} (about 670 MB)";
     public const string DefaultDetail = "Downloaded into Ollama if it is not there yet.";
@@ -111,7 +111,7 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
         : BuiltinDetail;
 
     static string BuiltinDetailFor(string size) =>
-        $"Finds related information even when you use different words. kcap downloads an AI model ({size}) once and runs it on this Mac. Nothing else to install.";
+        $"Finds related information even when you use different words. kcap downloads an AI model ({size}) once and runs it on {ThisDevice.Name}. Nothing else to install.";
 
     /// What the stack setup will run offers; null when it offers no built-in model or the lookup failed. A pick it can
     /// no longer honour goes back to following the recommendation.

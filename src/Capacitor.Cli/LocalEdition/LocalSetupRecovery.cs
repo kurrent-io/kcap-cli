@@ -57,7 +57,7 @@ sealed class LocalSetupRecovery(
 
     Task<bool> EnsureOwnUnitAsync(LocalRoot root, LocalServerUnit unit) =>
         LocalOwnUnit.EnsureAsync(root, unit, service, home, () =>
-            Failed($"The interrupted setup cannot be finished: the {service.Describe} {unit.Label} ({service.UnitFile(unit)}) is not provably this installation's. Nothing was changed and the setup journal {root.JournalPath} is kept."));
+            Failed($"The interrupted setup cannot be finished: the {service.Describe} {service.Name(unit)} ({service.UnitFile(unit)}) is not provably this installation's. Nothing was changed and the setup journal {root.JournalPath} is kept."));
 
     static LocalInstallFailure Failed(string message) => new(LocalInstallFailureCode.RecoveryFailed, message);
 }

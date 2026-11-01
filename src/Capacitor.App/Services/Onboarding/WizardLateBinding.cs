@@ -94,8 +94,12 @@ public sealed class LateBoundKcapCli(Func<IKcapCli> bind, string? cliPath) : IKc
         bind().ImportAsync(request, onLine, ct);
 
     public Task<StreamingResult> SetupLocalAsync(
-            LocalEmbeddingChoice embeddings, Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct) =>
-        bind().SetupLocalAsync(embeddings, onLine, interrupt, ct);
+            LocalEmbeddingChoice embeddings, Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct,
+            bool windowsService = false) =>
+        bind().SetupLocalAsync(embeddings, onLine, interrupt, ct, windowsService);
+
+    public Task<StreamingResult> LocalFetchAsync(Action<StreamedLine> onLine, CancellationToken interrupt) =>
+        bind().LocalFetchAsync(onLine, interrupt);
 
     public Task<StreamingResult> LocalUpgradeAsync(Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct) =>
         bind().LocalUpgradeAsync(onLine, interrupt, ct);

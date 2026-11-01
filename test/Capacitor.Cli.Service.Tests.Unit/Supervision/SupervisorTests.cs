@@ -2,6 +2,7 @@ using Capacitor.Cli.Service.Logging;
 using Capacitor.Cli.Service.Sessions;
 using Capacitor.Cli.Service.Supervision;
 using Microsoft.Extensions.Time.Testing;
+using DaemonSupervisor = Capacitor.Cli.Service.Supervision.Supervisor<Capacitor.Cli.Service.Sessions.Enrollment>;
 
 namespace Capacitor.Cli.Service.Tests.Unit.Supervision;
 
@@ -18,7 +19,9 @@ public class SupervisorTests {
     readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 10, 22, 9, 0, 0, TimeSpan.Zero));
     readonly ListLog _log = new();
 
-    Supervisor NewSupervisor() => new(_host, _time, _log);
+    static readonly TimeSpan StopWait = TimeSpan.FromSeconds(15);
+
+    DaemonSupervisor NewSupervisor() => new(_host, _time, _log, StopWait);
 
     static async Task WaitUntilAsync(Func<bool> condition, string what) {
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
@@ -50,7 +53,7 @@ public class SupervisorTests {
 
         _host.Launched[0].Exit(-1);
         await WaitUntilAsync(() => supervisor.Status(Alice).State == DaemonState.Relaunching, "the relaunching state");
-        _time.Advance(Supervisor.RelaunchPause - TimeSpan.FromMilliseconds(1));
+        _time.Advance(DaemonSupervisor.RelaunchPause - TimeSpan.FromMilliseconds(1));
         await Task.Delay(50);
         await Assert.That(_host.LaunchCount).IsEqualTo(1);
 
@@ -70,7 +73,7 @@ public class SupervisorTests {
         _host.Launched[0].Exit(0);
 
         await WaitUntilAsync(() => supervisor.Status(Alice).State == DaemonState.Stopped, "the stopped state");
-        _time.Advance(Supervisor.RelaunchPause * 4);
+        _time.Advance(DaemonSupervisor.RelaunchPause * 4);
         await Task.Delay(50);
         await Assert.That(_host.LaunchCount).IsEqualTo(1);
     }
@@ -83,7 +86,7 @@ public class SupervisorTests {
 
         supervisor.OnLogoff(1);
         _host.Launched[0].Exit(1);
-        _time.Advance(Supervisor.RelaunchPause * 4);
+        _time.Advance(DaemonSupervisor.RelaunchPause * 4);
         await Task.Delay(50);
 
         await Assert.That(_host.LaunchCount).IsEqualTo(1);
@@ -127,12 +130,12 @@ public class SupervisorTests {
 
         var stopping = supervisor.StopAsync(Alice);
         await WaitUntilAsync(() => _host.StopRequests.Count == 1, "the stop request");
-        _time.Advance(Supervisor.GracefulStopWait);
+        _time.Advance(StopWait);
         var status = await stopping;
 
         await Assert.That(_host.Launched[0].Terminations).IsEqualTo(1);
         await Assert.That(status.State).IsEqualTo(DaemonState.Stopped);
-        _time.Advance(Supervisor.RelaunchPause * 4);
+        _time.Advance(DaemonSupervisor.RelaunchPause * 4);
         await Task.Delay(50);
         await Assert.That(_host.LaunchCount).IsEqualTo(1);
     }
@@ -146,7 +149,7 @@ public class SupervisorTests {
         await WaitUntilAsync(() => supervisor.Status(Alice).State == DaemonState.Relaunching, "the relaunching state");
 
         var status = await supervisor.StopAsync(Alice);
-        _time.Advance(Supervisor.RelaunchPause * 4);
+        _time.Advance(DaemonSupervisor.RelaunchPause * 4);
         await Task.Delay(50);
 
         await Assert.That(status.State).IsEqualTo(DaemonState.Stopped);
@@ -187,7 +190,7 @@ public class SupervisorTests {
         _host.SignIn(2, Bob);
         _host.Running = new FakeRunningDaemon(777);
         var supervised = new List<string>();
-        var supervisor = new Supervisor(_host, _time, _log, supervised.Add);
+        var supervisor = new DaemonSupervisor(_host, _time, _log, StopWait, supervised.Add);
 
         supervisor.Start();
 
@@ -217,7 +220,7 @@ public class SupervisorTests {
 
         supervisor.Detach();
         _host.Launched[0].Exit(1);
-        _time.Advance(Supervisor.RelaunchPause * 4);
+        _time.Advance(DaemonSupervisor.RelaunchPause * 4);
         await Task.Delay(50);
 
         await Assert.That(_host.LaunchCount).IsEqualTo(1);
@@ -240,7 +243,7 @@ public class SupervisorTests {
     public async Task A_launch_failure_is_reported_in_the_status() {
         _host.SignIn(1, Alice);
         var failing = new ThrowingHost(_host);
-        var supervisor = new Supervisor(failing, _time, _log);
+        var supervisor = new DaemonSupervisor(failing, _time, _log, StopWait);
 
         var status = supervisor.Start(Alice);
 
@@ -248,13 +251,75 @@ public class SupervisorTests {
         await Assert.That(supervisor.Status(Alice).Error).IsEqualTo("CreateProcessAsUser failed");
     }
 
-    sealed class ThrowingHost(FakeDaemonHost inner) : IDaemonHost {
+    /// The local server is given a longer window than the daemon: the daemon's must not end it early
+    [Test]
+    public async Task Stop_waits_the_graceful_window_the_supervisor_was_given() {
+        _host.SignIn(1, Alice);
+        var wait = TimeSpan.FromSeconds(100);
+        var supervisor = new DaemonSupervisor(_host, _time, _log, wait);
+        supervisor.Start();
+
+        var stopping = supervisor.StopAsync(Alice);
+        await WaitUntilAsync(() => _host.StopRequests.Count == 1, "the stop request");
+        _time.Advance(StopWait);
+        await Task.Delay(50);
+        await Assert.That(stopping.IsCompleted).IsFalse();
+        await Assert.That(_host.Launched[0].Terminations).IsEqualTo(0);
+
+        _time.Advance(wait - StopWait);
+        var status = await stopping;
+
+        await Assert.That(_host.Launched[0].Terminations).IsEqualTo(1);
+        await Assert.That(status.State).IsEqualTo(DaemonState.Stopped);
+    }
+
+    [Test]
+    public async Task The_stop_request_names_the_running_process() {
+        _host.SignIn(1, Alice);
+        _host.StopRequestEndsDaemon = true;
+        var supervisor = NewSupervisor();
+        supervisor.Start();
+
+        await supervisor.StopAsync(Alice);
+
+        await Assert.That(_host.StopPids).IsEquivalentTo([_host.Launched[0].Pid]);
+    }
+
+    [Test]
+    public async Task An_enrollment_that_holds_its_process_down_launches_nothing_even_on_logon() {
+        _host.SignIn(1, Alice);
+        _host.Enrollments.Remove(Alice);
+        _host.Refusals[Alice] = "stopped";
+        var supervisor = NewSupervisor();
+
+        supervisor.Start();
+        supervisor.OnLogon(1);
+        var status = supervisor.Start(Alice);
+
+        await Assert.That(_host.LaunchCount).IsEqualTo(0);
+        await Assert.That(status.State).IsEqualTo(DaemonState.NotEnrolled);
+        await Assert.That(status.Error).IsEqualTo("stopped");
+        await Assert.That(supervisor.HasEnrollment(Alice)).IsTrue();
+    }
+
+    [Test]
+    public async Task Whether_a_user_is_enrolled_cannot_be_told_without_their_session() {
+        _host.SignIn(1, Alice);
+        _host.Enrollments.Remove(Alice);
+        var supervisor = NewSupervisor();
+
+        await Assert.That(supervisor.HasEnrollment(Alice)).IsFalse();
+        await Assert.That(supervisor.HasEnrollment(Bob)).IsNull();
+    }
+
+    sealed class ThrowingHost(FakeDaemonHost inner) : IDaemonHost<Enrollment> {
         public IReadOnlyList<int> ActiveSessions() => inner.ActiveSessions();
         public SessionUser? UserOf(int sessionId) => inner.UserOf(sessionId);
         public Enrollment? EnrollmentOf(SessionUser user, out string? refusal) => inner.EnrollmentOf(user, out refusal);
+        public bool HasEnrollment(SessionUser user) => inner.HasEnrollment(user);
         public IRunningDaemon? FindRunning(SessionUser user, Enrollment enrollment) => null;
         public IRunningDaemon Launch(SessionUser user, Enrollment enrollment) =>
             throw new InvalidOperationException("CreateProcessAsUser failed");
-        public void RequestStop(SessionUser user, Enrollment enrollment) { }
+        public void RequestStop(SessionUser user, Enrollment enrollment, int pid) { }
     }
 }

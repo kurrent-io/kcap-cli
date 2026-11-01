@@ -1,8 +1,10 @@
+using Capacitor.Cli.Service.Supervision;
+
 namespace Capacitor.Cli.Service.Sessions;
 
 /// <summary>A user's opt-in, read from their own hive. Everything in it is the user's to choose, because the
 /// daemon it names only ever runs as that user</summary>
-public sealed record Enrollment(string Name, string DaemonPath, string? Profile, int? MaxAgents, string? EnvironmentFile = null) {
+public sealed record Enrollment(string Name, string DaemonPath, string? Profile, int? MaxAgents, string? EnvironmentFile = null) : ISupervisedEnrollment {
     public const string DaemonFileName = "kcap-daemon.exe";
 
     /// <summary>The <c>kcap.exe</c> shipped beside the daemon, which runs the daemon's own graceful stop</summary>
@@ -16,12 +18,12 @@ public sealed record Enrollment(string Name, string DaemonPath, string? Profile,
             refusal = "the daemon name is missing or not a plain name";
             return null;
         }
-        if (string.IsNullOrWhiteSpace(daemonPath) || !IsLocalPath(daemonPath)
+        if (string.IsNullOrWhiteSpace(daemonPath) || !LocalPath.IsAbsolute(daemonPath)
             || !string.Equals(Path.GetFileName(daemonPath), DaemonFileName, StringComparison.OrdinalIgnoreCase)) {
             refusal = $"the daemon path is not an absolute local path to {DaemonFileName}";
             return null;
         }
-        if (!string.IsNullOrWhiteSpace(environmentFile) && !IsLocalPath(environmentFile)) {
+        if (!string.IsNullOrWhiteSpace(environmentFile) && !LocalPath.IsAbsolute(environmentFile)) {
             refusal = "the environment file is not an absolute local path";
             return null;
         }
@@ -29,7 +31,4 @@ public sealed record Enrollment(string Name, string DaemonPath, string? Profile,
         return new Enrollment(name, daemonPath, string.IsNullOrWhiteSpace(profile) ? null : profile, agents,
             string.IsNullOrWhiteSpace(environmentFile) ? null : environmentFile);
     }
-
-    static bool IsLocalPath(string path) =>
-        path.Length > 3 && char.IsAsciiLetter(path[0]) && path[1] == ':' && path[2] == '\\' && path.IndexOf('"') < 0;
 }

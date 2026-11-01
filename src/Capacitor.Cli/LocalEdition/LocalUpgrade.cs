@@ -61,7 +61,7 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
 
         if (installed.Owner != OwnerDecision.Ours)
             throw Failed(LocalInstallFailureCode.NotOurServer,
-                $"The {stack.Service.Describe} {unit.Label} ({stack.Service.UnitFile(unit)}) is not provably this installation's. Nothing was changed.");
+                $"The {stack.Service.Describe} {stack.Service.Name(unit)} ({stack.Service.UnitFile(unit)}) is not provably this installation's. Nothing was changed.");
 
         if (LocalBin.Current(stack.Root) == version)
             throw Failed(LocalInstallFailureCode.LeftoverState,
@@ -235,7 +235,7 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
             throw Unfinished(details, ex.Message);
         }
 
-        progress.Report(new LocalInstallEvent.Starting(installed.Unit.Label));
+        progress.Report(new LocalInstallEvent.Starting(stack.Service.Name(installed.Unit)));
 
         try {
             await Control.StartAsync(installed, _ => { }, CancellationToken.None, rewriteUnit: true);

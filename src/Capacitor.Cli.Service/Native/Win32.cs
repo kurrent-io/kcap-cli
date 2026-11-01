@@ -15,7 +15,8 @@ static unsafe partial class Win32 {
     public const uint JOB_OBJECT_ALL_ACCESS = 0x1F001F, JOB_OBJECT_QUERY = 0x0004;
     public const uint SYNCHRONIZE = 0x00100000, PROCESS_QUERY_LIMITED_INFORMATION = 0x1000, PROCESS_TERMINATE = 0x0001;
     public const uint GENERIC_WRITE = 0x40000000, FILE_APPEND_DATA = 0x4;
-    public const uint FILE_SHARE_READ = 1, FILE_SHARE_WRITE = 2, FILE_SHARE_DELETE = 4, OPEN_ALWAYS = 4;
+    public const uint FILE_SHARE_READ = 1, FILE_SHARE_WRITE = 2, FILE_SHARE_DELETE = 4, OPEN_EXISTING = 3, OPEN_ALWAYS = 4;
+    public const uint FILE_READ_ATTRIBUTES = 0x80, FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
     public const uint SC_MANAGER_ALL_ACCESS = 0xF003F, SERVICE_ALL_ACCESS = 0xF01FF, DELETE = 0x10000;
     public const int SERVICE_WIN32_OWN_PROCESS = 0x10, SERVICE_AUTO_START = 2, SERVICE_ERROR_NORMAL = 1;
     public const uint SERVICE_NO_CHANGE = 0xFFFFFFFF;
@@ -179,6 +180,13 @@ static unsafe partial class Win32 {
     [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
     public static partial IntPtr CreateFileW(string path, uint access, uint share, SECURITY_ATTRIBUTES* attributes,
         uint creation, uint flags, IntPtr template);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    public static partial uint GetFinalPathNameByHandleW(IntPtr file, char* path, uint length, uint flags);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool QueryFullProcessImageNameW(IntPtr process, uint flags, char* path, ref int size);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

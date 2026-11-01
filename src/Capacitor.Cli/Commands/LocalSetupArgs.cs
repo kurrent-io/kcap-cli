@@ -8,10 +8,11 @@ namespace Capacitor.Cli.Commands;
 /// <c>--json --no-prompt</c> is the whole run, reported.</summary>
 sealed record LocalSetupArgs(
         bool Json, bool SingleUser, bool Yes, bool NoPrompt, string? EmbeddingModel = null, bool NoEmbeddings = false, bool WholeRun = false,
-        bool BuiltinEmbeddings = false) {
+        bool BuiltinEmbeddings = false, bool WindowsService = false) {
     public const string EmbeddingModelFlag    = "--embedding-model";
     public const string NoEmbeddingsFlag      = "--no-embeddings";
     public const string BuiltinEmbeddingsFlag = "--builtin-embeddings";
+    public const string WindowsServiceFlag    = "--windows-service";
 
     static readonly string[] Conflicting = [
         "--server-url", "--discover", "--org", "--slug", "--tier", "--invite-code", "--device", "--github", "--muse-assistant",
@@ -22,6 +23,7 @@ sealed record LocalSetupArgs(
 
     static readonly string[] JsonAccepts = [
         "--local", "--json", "--single-user", "--yes", "--no-update-check", EmbeddingModelFlag, NoEmbeddingsFlag, BuiltinEmbeddingsFlag,
+        WindowsServiceFlag,
     ];
 
     /// <summary>The embedding answer the flags give; <see cref="LocalEmbeddingAnswer.Default"/> when they give none.</summary>
@@ -33,7 +35,8 @@ sealed record LocalSetupArgs(
 
     /// <param name="args">The command line with the verb at index 0, as <c>HandleAsync</c> receives it.</param>
     /// <param name="kcapUrlEnv">The <c>KCAP_URL</c> environment value.</param>
-    public static (LocalSetupArgs? Args, string? Error) Parse(string[] args, string? kcapUrlEnv) {
+    /// <param name="isWindows">Test seam; production checks the running OS.</param>
+    public static (LocalSetupArgs? Args, string? Error) Parse(string[] args, string? kcapUrlEnv, bool? isWindows = null) {
         var rest = args.Skip(1).SelectMany(Split).ToArray();
 
         foreach (var arg in rest) {
@@ -73,6 +76,11 @@ sealed record LocalSetupArgs(
         if (given.Count > 1)
             return Refuse($"{given[0]} and {given[1]} contradict each other. Drop one of them.");
 
+        var windowsService = rest.Contains(WindowsServiceFlag);
+
+        if (windowsService && !(isWindows ?? OperatingSystem.IsWindows()))
+            return Refuse($"{WindowsServiceFlag} runs the local server under the Windows service; it does nothing on this OS.");
+
         if (!string.IsNullOrEmpty(kcapUrlEnv))
             return Refuse($"KCAP_URL is set ({kcapUrlEnv}), so every later step would talk to that server instead of the local one. Unset it to use --local.");
 
@@ -81,9 +89,10 @@ sealed record LocalSetupArgs(
 
         if (json && !noPrompt && Flags(rest).FirstOrDefault(a => !JsonAccepts.Contains(a)) is { } extra)
             return Refuse($"{extra} cannot be used with --local --json, which runs only the install and accepts only --single-user, --yes, "
-                        + $"--no-update-check, {EmbeddingModelFlag}, {NoEmbeddingsFlag} and {BuiltinEmbeddingsFlag}. Add --no-prompt to run every step.");
+                        + $"--no-update-check, {EmbeddingModelFlag}, {NoEmbeddingsFlag}, {BuiltinEmbeddingsFlag} and {WindowsServiceFlag}. Add --no-prompt to run every step.");
 
-        return (new(json, rest.Contains("--single-user"), rest.Contains("--yes"), json || noPrompt, model, noEmbeddings, json && noPrompt, builtin), null);
+        return (new(json, rest.Contains("--single-user"), rest.Contains("--yes"), json || noPrompt, model, noEmbeddings, json && noPrompt, builtin,
+            windowsService), null);
     }
 
     /// <summary>The <c>--embedding-model=&lt;model&gt;</c> form as two tokens.</summary>

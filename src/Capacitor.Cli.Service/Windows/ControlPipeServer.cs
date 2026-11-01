@@ -9,7 +9,7 @@ namespace Capacitor.Cli.Service.Windows;
 
 /// <summary>
 /// <c>\\.\pipe\kcap-service</c>: any signed-in user may connect, and each connection acts only on its
-/// caller's own daemon, identified by impersonating the pipe client
+/// caller's own daemon and local server, identified by impersonating the pipe client
 /// </summary>
 [SupportedOSPlatform("windows")]
 sealed class ControlPipeServer(ControlDispatcher dispatcher, TimeProvider time, IServiceLog log) : IDisposable {

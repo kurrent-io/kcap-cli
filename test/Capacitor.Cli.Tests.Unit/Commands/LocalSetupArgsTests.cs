@@ -170,4 +170,22 @@ internal sealed class LocalSetupArgsTests {
         await Assert.That(parsed).IsNull();
         await Assert.That(error).Contains("contradict");
     }
+
+    /// <summary>The desktop app's install-only run passes it, so --json must accept it.</summary>
+    [Test]
+    public async Task Json_accepts_the_windows_service_flag_on_windows() {
+        var (parsed, error) = LocalSetupArgs.Parse(["setup", "--local", "--json", "--single-user", "--yes", "--windows-service"], kcapUrlEnv: null,
+            isWindows: true);
+
+        await Assert.That(error).IsNull();
+        await Assert.That(parsed).IsEqualTo(new LocalSetupArgs(Json: true, SingleUser: true, Yes: true, NoPrompt: true, WindowsService: true));
+    }
+
+    [Test]
+    public async Task The_windows_service_flag_is_refused_elsewhere() {
+        var (parsed, error) = LocalSetupArgs.Parse(["setup", "--local", "--windows-service"], kcapUrlEnv: null, isWindows: false);
+
+        await Assert.That(parsed).IsNull();
+        await Assert.That(error).Contains("--windows-service");
+    }
 }
