@@ -9,6 +9,7 @@ using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Remote.Models;
 using DynamicData;
 using Microsoft.Extensions.Time.Testing;
+using static Capacitor.App.Tests.Unit.WorkspaceFixtures;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -113,7 +114,7 @@ public class HandoffComposerViewModelTests {
                 _ => Task.FromResult<IReadOnlyList<string>>(Candidates),
                 Drafts, Lane, Uploader, Directory,
                 () => Generation, Open,
-                Close, Reopen, Notifier, AppServerUrl, onUnauthorized: Park);
+                Close, Reopen, Notifier, AppServerUrl, onUnauthorized: Park, time: Time);
             _built.Add(vm);
             return vm;
         }
@@ -1108,5 +1109,30 @@ public class HandoffComposerViewModelTests {
         await Assert.That(rig.Uploader.Calls.Single().Count).IsEqualTo(InputWire.MaxAttachmentsPerPrompt);
         await Assert.That(vm.Tray.Items.Select(f => f.FileName).ToArray())
             .IsEquivalentTo(later.Skip(3).Select(f => f.FileName), TUnit.Assertions.Enums.CollectionOrdering.Matching);
+    });
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_failed_context_read_is_retried() => Run(async rig => {
+        rig.Sessions.HandoffContextOutcome = ServerReadOutcome.Failed;
+        var vm = await rig.ReadyAsync();
+        await Assert.That(vm.DisabledReason).IsEqualTo(HandoffComposerViewModel.ContextUnavailable);
+
+        rig.Sessions.HandoffContextOutcome = ServerReadOutcome.Ok;
+        rig.Time.Advance(HandoffComposerViewModel.TransientRetry);
+        await WaitUntilAsync(() => vm.DisabledReason is null && vm.ProbedStart is not null, what: "the retried check");
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Files_waiting_past_the_tray_limit_keep_a_launch_error() => Run(async rig => {
+        var vm = await rig.ReadyAsync();
+        vm.Tray.AddAll([.. Enumerable.Range(0, InputWire.MaxAttachmentsPerPrompt).Select(i => Chip($"a{i}.png"))]);
+        rig.Drafts.KeepFailed(SessionId, new HandoffDraft("", [Chip("b.png")], "codex", "", null, null, null, null));
+        rig.Uploader.Next = new UploadOutcome(UploadKind.Unreachable, [], "the upload failed");
+        vm.Text = "carry on";
+
+        await vm.StartCommand.Execute();
+
+        await Assert.That(vm.Error).IsEqualTo($"the upload failed. 1 more files come back once this message is sent ({AttachmentTray.CapReason})");
     });
 }

@@ -1241,7 +1241,7 @@ public partial class App : Application {
             reopenSource: (sessionId, presentation) =>
                 OpenWindow() is { } window ? window.ReopenServerSessionAsync(sessionId, presentation) : Task.FromResult(false),
             notifier: notifier, appServerUrl: profiles?.Resolution.ServerUrl,
-            modelCatalog: modelCatalog.Catalog, onUnauthorized: serverLane.ParkSignedOut, shutdown: _shutdown.Token);
+            modelCatalog: modelCatalog.Catalog, onUnauthorized: serverLane.ParkSignedOut, time: _time, shutdown: _shutdown.Token);
         // A session the server lists with no daemon behind it: read-only, so no terminal surface.
         RemoteSessionViewModel? BuildServer(string sessionId) =>
             directory.Rows.Lookup($"server:{sessionId}") is { HasValue: true, Value: var row }

@@ -15,11 +15,24 @@ public sealed class HandoffOutcomeReader(IDaemonClientService daemon, ILocalCont
     /// so reference equality would re-emit each poll. An answer of null (nothing stored yet, or a
     /// failed read) is retried for <see cref="NullWindow"/>; a running outcome is followed without limit,
     /// and so is an interrupted one, which the daemon reruns when it resumes the successor.
-    /// Completes on a terminal state or when the window lapses, and waits for a daemon with handoff/1.
+    /// Completes on a terminal state. Each connect of a daemon with handoff/1 starts the reads again,
+    /// window included, so a takeover the daemon resumes after a long absence is still found.
     public IObservable<HandoffOutcomeDto> Watch(string sessionId) =>
-        daemon.Status
-            .FirstAsync(status => status.State == AttachState.Connected && status.Capabilities?.Contains(HandoffWire.Capability) == true)
-            .SelectMany(_ => Poll(sessionId));
+        Observable.Defer(() => {
+            HandoffOutcomeDto? last = null;
+            var polls = daemon.Status
+                .Select(status => status.State == AttachState.Connected && status.Capabilities?.Contains(HandoffWire.Capability) == true)
+                .DistinctUntilChanged()
+                .Where(capable => capable)
+                .Select(_ => Poll(sessionId));
+            return Observable.Switch(polls)
+                .Where(outcome => {
+                    var fresh = !Same(outcome, last);
+                    last = outcome;
+                    return fresh;
+                })
+                .TakeUntil(outcome => outcome.State is not ("running" or "interrupted"));
+        });
 
     /// The chat card's stream for one session id, inside a Switch over ids: it opens with null so a
     /// card from the previous id is cleared rather than carried over.

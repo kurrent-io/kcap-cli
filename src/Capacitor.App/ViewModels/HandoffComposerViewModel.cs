@@ -61,6 +61,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
     readonly IAppNotifier _notifier;
     readonly string? _appServerUrl;
     readonly Action<int>? _onUnauthorized;
+    readonly TimeProvider _time;
     readonly CancellationToken _shutdown;
     readonly HandoffChoicesViewModel _choices;
     readonly CompositeDisposable _disposables = new();
@@ -98,7 +99,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
             Action<string> closeFailedLaunch, Func<string, PinPresentation, Task<bool>> reopenSource, IAppNotifier notifier,
             string? appServerUrl,
             IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null,
-            Action<int>? onUnauthorized = null, CancellationToken shutdown = default) {
+            Action<int>? onUnauthorized = null, TimeProvider? time = null, CancellationToken shutdown = default) {
         _session = session;
         _daemon = daemon;
         _launch = launch;
@@ -116,6 +117,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
         _notifier = notifier;
         _appServerUrl = appServerUrl;
         _onUnauthorized = onUnauthorized;
+        _time = time ?? TimeProvider.System;
         _shutdown = shutdown;
         _choices = new HandoffChoicesViewModel(daemon, session.Vendor, modelCatalog).DisposeWith(_disposables);
 
@@ -324,6 +326,16 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
         StripLabel = result.Label ?? "";
         CompletenessNote = result.CompletenessNote;
         ProbedStart = result.Reason is null ? result.Start : null;
+        // Nothing else re-checks a failed read while the lane and the daemon stay connected.
+        if (result.Reason is ContextUnavailable or ProbeFailed or ServerUnreachable) _ = RetryAsync(cts.Token);
+    }
+
+    internal static readonly TimeSpan TransientRetry = TimeSpan.FromSeconds(30);
+
+    async Task RetryAsync(CancellationToken ct) {
+        try { await Task.Delay(TransientRetry, _time, ct); }
+        catch (OperationCanceledException) { return; }
+        Recheck();
     }
 
     async Task<Evaluation> EvaluateAsync(CancellationToken ct) {
@@ -563,7 +575,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
         if (Tray.Count == 0 && returned.Count <= fits) Tray.Restore(returned);
         else Tray.AddAll(returned[..Math.Min(fits, returned.Count)]);
         _choices.Restore(draft);
-        Error = draft.Error;
+        Error = draft.Error ?? Error;
         if (returned.Count <= fits) return;
         var waiting = returned[fits..];
         _drafts.KeepFailed(_session.SessionId, draft with { Text = "", Attachments = waiting, Error = null });

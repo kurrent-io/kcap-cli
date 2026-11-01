@@ -41,6 +41,19 @@ public class HandoffOutcomeReaderTests {
             }
         }
 
+        /// Advances poll gaps until reads stop: the window has lapsed and the poll has ended.
+        public async Task LapseWindowAsync() {
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+            var still = 0;
+            while (still < 10) {
+                if (DateTime.UtcNow > deadline) throw new TimeoutException("the window to lapse");
+                var before = Volatile.Read(ref Reads);
+                Time.Advance(HandoffOutcomeReader.PollInterval);
+                await Task.Delay(5);
+                still = Volatile.Read(ref Reads) == before ? still + 1 : 0;
+            }
+        }
+
         public void Dispose() => _sub?.Dispose();
     }
 
@@ -91,12 +104,7 @@ public class HandoffOutcomeReaderTests {
         rig.Watch();
 
         await WaitUntilAsync(() => rig.Reads == 1, what: "first read");
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
-        while (!rig.Completed) {
-            if (DateTime.UtcNow > deadline) throw new TimeoutException("the window to lapse");
-            rig.Time.Advance(HandoffOutcomeReader.PollInterval);
-            await Task.Delay(2);
-        }
+        await rig.LapseWindowAsync();
 
         var reads = rig.Reads;
         rig.Time.Advance(TimeSpan.FromMinutes(5));
@@ -141,5 +149,36 @@ public class HandoffOutcomeReaderTests {
         await WaitUntilAsync(() => rig.Completed, what: "completion on done");
 
         await Assert.That(rig.Seen.Select(o => o.State)).IsEquivalentTo(["interrupted", "running", "done"]);
+    }
+
+    [Test]
+    public async Task A_daemon_reconnecting_after_the_window_reads_again() {
+        using var rig = new Rig();
+        rig.Watch();
+        await WaitUntilAsync(() => rig.Reads == 1, what: "first read");
+        await rig.LapseWindowAsync();
+
+        rig.Answers.Enqueue(Outcome("done"));
+        rig.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, null, null));
+        rig.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["input/1", HandoffWire.Capability]));
+        await WaitUntilAsync(() => rig.Completed, what: "completion on done");
+
+        await Assert.That(rig.Seen.Select(o => o.State)).IsEquivalentTo(["done"]);
+    }
+
+    [Test]
+    public async Task A_reconnect_does_not_repeat_an_outcome_already_seen() {
+        using var rig = new Rig();
+        rig.Answers.Enqueue(Outcome("running"));
+        rig.Watch();
+        await WaitUntilAsync(() => rig.Seen.Count == 1, what: "running");
+
+        rig.Answers.Enqueue(Outcome("running"));
+        rig.Answers.Enqueue(Outcome("done"));
+        rig.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, null, null));
+        rig.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["input/1", HandoffWire.Capability]));
+        while (!rig.Completed) await rig.NextReadAsync();
+
+        await Assert.That(rig.Seen.Select(o => o.State)).IsEquivalentTo(["running", "done"]);
     }
 }
