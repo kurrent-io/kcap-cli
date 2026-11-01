@@ -294,4 +294,14 @@ public class ServerConnectionAdvertisementTests {
 
         await Assert.That(json).IsEqualTo("""{"source_session_id":"src","successor_session_id":"succ"}""");
     }
+
+    [Test]
+    public async Task The_begin_resume_argument_goes_out_snake_case_through_the_hub_options() {
+        var options = new System.Text.Json.JsonSerializerOptions();
+        ServerConnection.ConfigureHubPayload(options);
+
+        var json = System.Text.Json.JsonSerializer.Serialize(new Capacitor.Cli.Core.Resume.SourceResumeBeginRequest("src"), options);
+
+        await Assert.That(json).IsEqualTo("""{"source_session_id":"src"}""");
+    }
 }

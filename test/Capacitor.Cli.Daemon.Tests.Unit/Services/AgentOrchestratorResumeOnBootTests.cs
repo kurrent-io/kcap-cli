@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Handoff;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Daemon.Services;
@@ -149,6 +150,46 @@ public class AgentOrchestratorResumeOnBootTests {
         // The running entry holds no waiting state of its own: a crash before the next keep-agents shutdown must
         // not read a turn started since as waiting.
         await Assert.That(f.Orch.ResumeLedger!.TryRead("resume-idle")!.AwaitingInput).IsNull();
+    }
+
+    /// <summary>A restart resume holds the session's lease from before it re-registers until the readiness window
+    /// passes, so a hand-off cannot take the session over from under it; a server without the lease resumes as before.</summary>
+    [Test]
+    public async Task A_restart_resume_holds_the_sessions_lease_until_readiness() {
+        var server = new CaptureServerConnection { BeginResume = _ => new HandoffTakeoverAdmission("lease-1", null, 60) };
+        var f = Build(new ResumableFactory { PtyStyle = true }, server: server);
+        await using var _ = f.Orch;
+        Entry(f, "leased-1");
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        await Assert.That(server.ResumeBegins.ToArray()).IsEquivalentTo(["session-leased-1"]);
+        await Assert.That(server.HandoffEnds.ToArray()).IsEquivalentTo(["lease-1"]);
+        await Assert.That(f.Orch.ResumeLedger!.TryRead("leased-1")!.State).IsEqualTo(ResumeState.Running);
+    }
+
+    /// <summary>A session a hand-off holds is being taken over: neither resumed nor continued, which would take it over
+    /// a second time.</summary>
+    [Test]
+    public async Task A_reserved_session_is_interrupted_without_a_resume_or_a_continuation() {
+        var server = new CaptureServerConnection { BeginResume = _ => new HandoffTakeoverAdmission(null, "source_reserved", 0) };
+        var f = Build(new ResumableFactory { PtyStyle = true }, server: server);
+        await using var _ = f.Orch;
+        Entry(f, "reserved-1");
+        var continued = 0;
+        f.Orch.ContinueEntry = (_, _, _) => {
+            Interlocked.Increment(ref continued);
+            return Task.FromResult(ResumeOutcome.Interrupted);
+        };
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        await Assert.That(f.Factory.Contexts).IsEmpty();
+        await Assert.That(continued).IsEqualTo(0);
+        var after = f.Orch.ResumeLedger!.TryRead("reserved-1")!;
+        await Assert.That((after.State, after.LastError)).IsEqualTo((ResumeState.Interrupted, "source_reserved"));
     }
 
     /// <summary>A silently resumed agent is waiting from the moment anything can reach it, so a turn that starts

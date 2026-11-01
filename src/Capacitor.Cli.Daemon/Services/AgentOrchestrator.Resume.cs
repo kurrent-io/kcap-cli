@@ -3,6 +3,7 @@ using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Continuation;
+using Capacitor.Cli.Core.Handoff;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Core.WorkItems;
@@ -1255,8 +1256,9 @@ internal partial class AgentOrchestrator {
             return ResumeOutcome.Interrupted;
         }
 
-        // A continuation resolves the same recorded account, so it would be refused too.
-        if (!reason.StartsWith(AccountResolution.Unavailable, StringComparison.Ordinal)) {
+        // A continuation resolves the same recorded account, so it would be refused too; a reserved session is being
+        // handed off, and a continuation would take it over a second time.
+        if (!reason.StartsWith(AccountResolution.Unavailable, StringComparison.Ordinal) && reason != SourceReservedReason) {
             var outcome = await ContinueEntry(entry, reason, ct);
             if (outcome != ResumeOutcome.Interrupted) return outcome;
             if (IsWithdrawn(entry.AgentId)) return ResumeOutcome.Stopped;
@@ -1290,6 +1292,15 @@ internal partial class AgentOrchestrator {
         // always gets its nudge, which is how it learns it was relaunched mid-flow.
         var silent  = entry.Participant is null && entry.AwaitingInput == true
                    && _runtimeFactories.TryGetValue(entry.Vendor, out var factory) && factory.ResumesIdleWithoutPrompt(entry.Transport);
+        // The lease a hand-off takeover would need, held until the readiness window passes, so the session is not taken
+        // over from under the agent re-registering on it.
+        HandoffTakeoverAdmission? leased = null;
+        if (entry.Participant is null && entry.SessionId is { } leasedSession) {
+            leased = await _server.BeginSourceResumeAsync(leasedSession, ct);
+            if (leased?.Refusal == SourceReservedReason) return (SourceReservedReason, null);
+        }
+        await using var lease = leased?.Token is { } token ? KeepSourceLease(token, entry.SessionId!) : null;
+
         var resume  = new ResumeLaunch(entry, ResumedWorktree(entry)) { Token = ct, StartsWaiting = silent };
         var command = BuildResumeCommand(entry, LastAlive(entry, null), _server.CurrentConnectionId) is var built && silent
             ? built with { Prompt = "" }
@@ -1352,6 +1363,8 @@ internal partial class AgentOrchestrator {
     }
 
     const string SupersededReason = "superseded";
+
+    internal const string SourceReservedReason = "source_reserved";
 
     internal TimeSpan ContinueSummaryBudget { get; set; } = TimeSpan.FromSeconds(10);
 

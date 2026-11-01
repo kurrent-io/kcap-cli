@@ -1139,6 +1139,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(LaunchAgentCommand))]
 [JsonSerializable(typeof(Handoff.HandoffTakeoverAdmission))]
 [JsonSerializable(typeof(Handoff.HandoffTakeoverBeginRequest))]
+[JsonSerializable(typeof(Resume.SourceResumeBeginRequest))]
 [JsonSerializable(typeof(ExplicitReviewerModelLaunch))]
 [JsonSerializable(typeof(ReviewerModelResolveRequestV1))]
 [JsonSerializable(typeof(ReviewerModelResolveResponseV1))]
