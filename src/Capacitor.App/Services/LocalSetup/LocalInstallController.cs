@@ -11,7 +11,7 @@ namespace Capacitor.App.Services.LocalSetup;
 /// outcome is always decided after every line the child printed has been applied.
 /// </summary>
 /// <param name="prefetch">The app's bundle prefetch; a run waits for one still downloading rather than download beside it.</param>
-/// <param name="rememberWindowsServiceDeclined">Records a declined administrator prompt, so the app does not offer the service again.</param>
+/// <param name="rememberWindowsServiceDeclined">Records a declined or failed service install, so the app does not offer the service again.</param>
 public sealed class LocalInstallController(
         Func<IKcapCli> cli, LocalRoot root, Func<bool> committedLocal, Action<Action> post, SetupFunnel funnel,
         LocalBundlePrefetch? prefetch = null, Func<Task>? rememberWindowsServiceDeclined = null)
@@ -157,8 +157,10 @@ public sealed class LocalInstallController(
         progress.Apply(line);
         if (line.Event is not ("windows_service_declined" or "windows_service_unavailable")) return;
 
+        // A service that failed to install would fail the app's own offer the same way, so it is not offered again
+        // either; Settings keeps the explicit action.
         WindowsService = false;
-        if (line.Event == "windows_service_declined") _ = RememberDeclinedAsync();
+        _ = RememberDeclinedAsync();
     }
 
     async Task RememberDeclinedAsync() {

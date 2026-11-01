@@ -34,9 +34,9 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     public const string WindowsServiceDetail =
         "Keeps kcap running and restarts it if it stops. Windows asks for administrator approval once.";
     public const string WindowsServiceDeclinedNote =
-        "kcap isn't running as a Windows service, so it runs while you're signed in to Windows.";
+        "kcap runs as a Scheduled Task instead of a Windows service. It still starts when you sign in.";
     public const string WindowsServiceUnavailableNote =
-        "kcap couldn't set up its Windows service, so it runs while you're signed in to Windows.";
+        "kcap couldn't set up its Windows service, so it runs as a Scheduled Task instead. It still starts when you sign in.";
 
     readonly LocalInstallController _controller;
     readonly Func<string?>          _appProfile;

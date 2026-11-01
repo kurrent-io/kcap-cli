@@ -101,7 +101,7 @@ public class InstallStepWindowsServiceTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task An_unavailable_service_is_noted_but_not_remembered_as_declined() {
+    public async Task An_unavailable_service_is_noted_and_not_offered_again() {
         var remembered = 0;
         var cli = new FakeKcapCli { SetupLocalBehavior = LocalSetupScript.Prints(0, Unavailable, LocalSetupScript.Committed) };
 
@@ -116,7 +116,7 @@ public class InstallStepWindowsServiceTests {
             return install.WindowsServiceNote;
         });
 
-        await Assert.That(remembered).IsEqualTo(0);
+        await Assert.That(remembered).IsEqualTo(1);
         await Assert.That(note).IsEqualTo(InstallStepViewModel.WindowsServiceUnavailableNote);
     }
 
