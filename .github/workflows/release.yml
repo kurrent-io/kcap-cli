@@ -375,7 +375,10 @@ jobs:
   # The local-edition bundle is built unsigned by kcap-server's local-bundle workflow on the same tag
   # and attached to that tag's kcap-server release. A tarball cannot be stapled: the signed tree is
   # notarized as a zip, so each Mach-O's ticket is found online, and the manifest signature plus its
-  # SHA-256 are what the CLI checks before it extracts anything.
+  # SHA-256 are what the CLI checks before it extracts anything. The win-x64 archive is published with
+  # the bytes kcap-server smoke-started; its binaries carry no Authenticode signature until #1391.
+  # Every rid the app offers the local edition on needs a leg in both matrices: kcap installs only a
+  # bundle whose manifest is published here.
   # No job that holds a signing credential runs code from that release: signing only reads the
   # binaries, the smoke test runs where no secret is, and the manifest is signed on a fresh runner.
   local-manifest-key:
@@ -392,12 +395,22 @@ jobs:
         run: bash scripts/local-manifest-key.sh check src/Capacitor.Cli.Core/Resources/local-bundle-manifest-key.pem
 
   local-bundle:
-    name: Sign and notarize the local bundle (osx-arm64)
+    name: Prepare the local bundle (${{ matrix.rid }})
     needs: local-manifest-key
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: osx-arm64
+            runner: macos-latest
+            notarize: true
+          - rid: win-x64
+            runner: ubuntu-latest
+            notarize: false
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     env:
-      RID: osx-arm64
+      RID: ${{ matrix.rid }}
     steps:
       - uses: actions/checkout@v7
 
@@ -415,7 +428,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: auto
           R2: --endpoint-url ${{ secrets.R2_ENDPOINT }}
-          DEST: s3://${{ secrets.R2_BUCKET }}/local/osx-arm64
+          DEST: s3://${{ secrets.R2_BUCKET }}/local/${{ matrix.rid }}
         run: |
           set -euo pipefail
           KEY="kcap-local-${{ steps.version.outputs.VERSION }}-$RID.json"
@@ -452,6 +465,7 @@ jobs:
           echo "ARCHIVE=$archive" >> "$GITHUB_OUTPUT"
 
       - name: Import signing keychain and notary profile
+        if: matrix.notarize
         shell: bash
         env:
           APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
@@ -462,6 +476,7 @@ jobs:
         run: bash scripts/import-signing-keychain.sh
 
       - name: Sign every Mach-O and re-archive
+        if: matrix.notarize
         shell: bash
         run: |
           set -euo pipefail
@@ -473,6 +488,7 @@ jobs:
           COPYFILE_DISABLE=1 tar --no-xattrs -czf "out/${{ steps.download.outputs.NAME }}.tar.gz" -C tree .
 
       - name: Notarize the signed tree
+        if: matrix.notarize
         shell: bash
         run: |
           set -euo pipefail
@@ -488,6 +504,7 @@ jobs:
 
       # Checks the archive about to be published, not the tree it came from.
       - name: Verify the archive is signed and notarized
+        if: matrix.notarize
         shell: bash
         run: |
           set -euo pipefail
@@ -501,10 +518,18 @@ jobs:
           done
           exit 1
 
-      - name: Upload the signed archive
+      - name: Take the archive as built
+        if: ${{ !matrix.notarize }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cp "${{ steps.download.outputs.ARCHIVE }}" "out/${{ steps.download.outputs.NAME }}.tar.gz"
+
+      - name: Upload the archive
         uses: actions/upload-artifact@v7
         with:
-          name: local-bundle-osx-arm64
+          name: local-bundle-${{ matrix.rid }}
           path: out/
           if-no-files-found: error
 
@@ -551,19 +576,23 @@ jobs:
         run: bash "$RUNNER_TEMP/server/scripts/smoke-local-bundle.sh" local/kcap-local-*-osx-arm64.tar.gz
 
   local-publish:
-    name: Publish the local bundle (osx-arm64)
+    name: Publish the local bundle (${{ matrix.rid }})
     needs: [local-bundle, local-smoke]
+    strategy:
+      fail-fast: false
+      matrix:
+        rid: [osx-arm64, win-x64]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
-      group: local-publish
+      group: local-publish-${{ matrix.rid }}
       cancel-in-progress: false
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: auto
       R2: --endpoint-url ${{ secrets.R2_ENDPOINT }}
-      DEST: s3://${{ secrets.R2_BUCKET }}/local/osx-arm64
+      DEST: s3://${{ secrets.R2_BUCKET }}/local/${{ matrix.rid }}
       MANIFEST_KEY: src/Capacitor.Cli.Core/Resources/local-bundle-manifest-key.pem
     steps:
       - uses: actions/checkout@v7
@@ -573,10 +602,10 @@ jobs:
         shell: bash
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Download the signed archive
+      - name: Download the archive
         uses: actions/download-artifact@v8
         with:
-          name: local-bundle-osx-arm64
+          name: local-bundle-${{ matrix.rid }}
           path: local/
 
       - name: Build and sign the manifest
@@ -585,17 +614,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          NAME="kcap-local-${{ steps.version.outputs.VERSION }}-osx-arm64"
-          bash scripts/build-local-manifest.sh "${{ steps.version.outputs.VERSION }}" osx-arm64 "local/$NAME.tar.gz" "$MANIFEST_KEY" > "local/$NAME.json"
+          NAME="kcap-local-${{ steps.version.outputs.VERSION }}-${{ matrix.rid }}"
+          bash scripts/build-local-manifest.sh "${{ steps.version.outputs.VERSION }}" "${{ matrix.rid }}" "local/$NAME.tar.gz" "$MANIFEST_KEY" > "local/$NAME.json"
           bash scripts/local-manifest-key.sh sign "$MANIFEST_KEY" "local/$NAME.json" "local/$NAME.json.sig"
           cat "local/$NAME.json"
 
       # Every model object is stored and verified before the manifest that names it is published.
-      # Under local/ rather than local/<rid>/: the model set is shared by every rid.
+      # Under local/ rather than local/<rid>/: the model set is shared by every rid, so two legs can
+      # race to upload one object, whose bytes are pinned by digest either way.
       - name: Upload the built-in model set
         env:
           DEST: s3://${{ secrets.R2_BUCKET }}/local
-        run: bash scripts/publish-local-model.sh "local/kcap-local-${{ steps.version.outputs.VERSION }}-osx-arm64.tar.gz"
+        run: bash scripts/publish-local-model.sh "local/kcap-local-${{ steps.version.outputs.VERSION }}-${{ matrix.rid }}.tar.gz"
 
       - name: Upload the archive, signature and manifest
-        run: bash scripts/publish-local-bundle.sh local "${{ steps.version.outputs.VERSION }}" osx-arm64 "$MANIFEST_KEY"
+        run: bash scripts/publish-local-bundle.sh local "${{ steps.version.outputs.VERSION }}" "${{ matrix.rid }}" "$MANIFEST_KEY"
