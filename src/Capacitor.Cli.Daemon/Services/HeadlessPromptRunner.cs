@@ -86,13 +86,19 @@ sealed partial class HeadlessPromptRunner : IDisposable {
         if (cancel.IsCancellationRequested) return HeadlessPromptResponses.NotStarted(null, "cancelled");
         if (!harness.IsAvailable()) return HeadlessPromptResponses.NotStarted(HeadlessPromptResponses.BinaryMissing);
 
+        // The harness's own timeout starts once its process is up; this one holds the absolute deadline across startup.
+        using var deadline = new CancellationTokenSource(left, _time);
+        using var run      = CancellationTokenSource.CreateLinkedTokenSource(cancel.Token, deadline.Token);
+
         try {
-            var outcome = await harness.RunAsync(args, left, cancel.Token);
+            var outcome = await harness.RunAsync(args, left, run.Token);
             if (outcome.Failure is { } failure) LogRunFailed(_logger, args.RequestId, harness.Harness, failure.ToString(), outcome.Subtype);
 
             return HeadlessPromptResponses.From(outcome, structured: !string.IsNullOrWhiteSpace(args.JsonSchema));
         } catch (OperationCanceledException) when (cancel.IsCancellationRequested) {
             return HeadlessPromptResponses.Failed(HeadlessPromptResponses.ProcessFailure, "cancelled");
+        } catch (OperationCanceledException) when (deadline.IsCancellationRequested) {
+            return HeadlessPromptResponses.Failed(HeadlessPromptResponses.Deadline, HeadlessPromptResponses.Deadline);
         } catch (Exception e) {
             LogRunThrew(_logger, e, args.RequestId, harness.Harness);
 

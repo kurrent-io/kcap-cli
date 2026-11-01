@@ -84,6 +84,20 @@ public sealed class HeadlessPromptRunnerTests : IDisposable {
         await Assert.That((await _claude.NextCall()).Timeout).IsEqualTo(TimeSpan.FromMinutes(7));
     }
 
+    /// <summary>The harness's own timer starts only once its process is up, so the runner holds the absolute deadline.</summary>
+    [Test]
+    public async Task A_run_past_its_deadline_is_stopped_as_deadline() {
+        var runner = Runner();
+        var answer = runner.RunAsync(Args("r1", left: TimeSpan.FromMinutes(1)));
+        var call   = await _claude.NextCall();
+
+        _time.Advance(TimeSpan.FromMinutes(2));
+
+        var response = await answer.WaitAsync(Wait);
+        await Assert.That(call.Ct.IsCancellationRequested).IsTrue();
+        await Assert.That((response.Started, response.FailureKind)).IsEqualTo((true, "deadline"));
+    }
+
     [Test]
     public async Task Third_request_waits_for_a_slot() {
         var runner = Runner();
