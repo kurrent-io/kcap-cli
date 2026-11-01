@@ -48,8 +48,8 @@ public class LocalPermissionBridgeJudgeTests {
                 TimeProvider.System, Broker, new PermissionDecisionLog(Tmp.Path, NullLogger.Instance), gateway,
                 new ConfigRoot(Tmp.CreateDir("config").Path)) {
                 AttributeHandler = a => a.AgentId switch {
-                    "agent-1"          => new AttributedAgent("agent-1", Governed, bridgedSinceStart),
-                    "agent-ungoverned" => new AttributedAgent("agent-ungoverned", Ungoverned, bridgedSinceStart),
+                    "agent-1"          => new AttributedAgent("agent-1", Governed, BridgedSinceStart: bridgedSinceStart),
+                    "agent-ungoverned" => new AttributedAgent("agent-ungoverned", Ungoverned, BridgedSinceStart: bridgedSinceStart),
                     _                  => null,
                 },
                 // Far above production's: a cold first consultation under a loaded suite can outlive

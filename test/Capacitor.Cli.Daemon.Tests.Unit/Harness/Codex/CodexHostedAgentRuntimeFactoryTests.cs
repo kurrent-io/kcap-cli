@@ -450,6 +450,29 @@ public class CodexHostedAgentRuntimeFactoryTests {
     }
 
     [Test]
+    public async Task BuildEnv_marks_auto_review_only_when_the_posture_selects_it() {
+        using var wt = new TempDir();
+        var interactive = Ctx(isReviewFlow: false, wt.Path);
+
+        var auto  = CodexHostedAgentRuntimeFactory.BuildEnv(
+            interactive with { CodexPosture = new("workspace-write", "on-request", "auto_review") }, emitEnvelopeTranscript: true);
+        var plain = CodexHostedAgentRuntimeFactory.BuildEnv(
+            interactive with { CodexPosture = new("workspace-write", "untrusted") }, emitEnvelopeTranscript: true);
+
+        await Assert.That(auto["KCAP_CODEX_AUTO_REVIEW"]).IsEqualTo("1");
+        await Assert.That(plain.ContainsKey("KCAP_CODEX_AUTO_REVIEW")).IsFalse();
+    }
+
+    [Test]
+    public async Task ApplyChildEnv_drops_an_inherited_auto_review_marker() {
+        var childEnv = new Dictionary<string, string?> { ["KCAP_CODEX_AUTO_REVIEW"] = "1" };
+
+        CodexHostedAgentRuntimeFactory.ApplyChildEnv(childEnv, new Dictionary<string, string> { ["KCAP_AGENT_ID"] = "agent-1" }, []);
+
+        await Assert.That(childEnv.ContainsKey("KCAP_CODEX_AUTO_REVIEW")).IsFalse();
+    }
+
+    [Test]
     public async Task ApplyChildEnv_drops_an_inherited_flow_role() {
         var childEnv = new Dictionary<string, string?> { ["KCAP_FLOW_ROLE"] = "reviewer" };
 

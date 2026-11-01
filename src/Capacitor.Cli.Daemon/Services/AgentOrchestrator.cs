@@ -1164,6 +1164,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     /// <summary>Only the session a fresh agent reported as its own started under this daemon: a request naming another
     /// one, such as an older session resumed inside the agent, may carry refusals this daemon never saw.</summary>
+    static AttributedAgent Attributed(AgentInstance agent, string canonicalSession) =>
+        new(agent.Id, agent.PolicySnapshot, agent.ApprovalsReviewer, FreshIn(agent, canonicalSession));
+
     static bool FreshIn(AgentInstance agent, string canonicalSession) =>
         agent.BridgedSinceStart && agent.SessionId is { } own && PermissionWire.Canonical(own) == canonicalSession;
 
@@ -1178,21 +1181,21 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         if (query.AgentId is { Length: > 0 } rawId) {
             var raw = live.Where(a => string.Equals(a.Id, rawId, StringComparison.Ordinal)).ToList();
-            if (raw.Count == 1) return new AttributedAgent(raw[0].Id, raw[0].PolicySnapshot, FreshIn(raw[0], canonicalSession));
+            if (raw.Count == 1) return Attributed(raw[0], canonicalSession);
             if (PermissionWire.Canonical(rawId) is { } canonicalId) {
                 var canon = live.Where(a => PermissionWire.Canonical(a.Id) == canonicalId).ToList();
-                if (canon.Count == 1) return new AttributedAgent(canon[0].Id, canon[0].PolicySnapshot, FreshIn(canon[0], canonicalSession));
+                if (canon.Count == 1) return Attributed(canon[0], canonicalSession);
             }
         }
 
         var bySession = live.Where(a => a.SessionId is { } s && PermissionWire.Canonical(s) == canonicalSession).ToList();
-        if (bySession.Count == 1) return new AttributedAgent(bySession[0].Id, bySession[0].PolicySnapshot, FreshIn(bySession[0], canonicalSession));
+        if (bySession.Count == 1) return Attributed(bySession[0], canonicalSession);
 
         if (query.Cwd is { Length: > 0 } cwd) {
             var wanted = Path.TrimEndingDirectorySeparator(cwd);
             var byCwd = live.Where(a => string.Equals(
                 Path.TrimEndingDirectorySeparator(a.Worktree.Path), wanted, RepoPathStore.PathComparison)).ToList();
-            if (byCwd.Count == 1) return new AttributedAgent(byCwd[0].Id, byCwd[0].PolicySnapshot, FreshIn(byCwd[0], canonicalSession));
+            if (byCwd.Count == 1) return Attributed(byCwd[0], canonicalSession);
         }
 
         return null;

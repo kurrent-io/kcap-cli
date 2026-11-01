@@ -2,6 +2,7 @@ using System.Collections.Frozen;
 using System.Diagnostics;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
@@ -274,6 +275,8 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
         // Only an envelope-sourced session carries this marker, so its rollout is not ingested a second
         // time beside the envelopes.
         if (emitEnvelopeTranscript) env[HostedAgent.HostedAppServerVar] = "1";
+        if (CodexPosturePolicy.Reviewer(ctx.CodexPosture) is CodexApprovalsReviewers.AutoReview)
+            env[HostedAgent.CodexAutoReviewVar] = "1";
         return env;
     }
 
@@ -283,6 +286,7 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     internal static void ApplyChildEnv(
             IDictionary<string, string?> childEnv, IReadOnlyDictionary<string, string> overlay, IReadOnlyCollection<string> remove) {
         childEnv.Remove(HostedAgent.HostedAppServerVar);
+        childEnv.Remove(HostedAgent.CodexAutoReviewVar);
         childEnv.Remove(HostedAgent.FlowRoleVar);
         childEnv.Remove(HostedAgent.DaemonAgentIdVar);
         InheritedHarnessSessions.Remove(childEnv);

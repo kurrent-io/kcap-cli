@@ -81,10 +81,12 @@ internal static class CodexPosturePolicy {
         return null;
     }
 
-    /// <summary>The reviewer to request, or null to leave Codex's own configuration in charge. Only a
-    /// validated interactive posture can carry one.</summary>
+    /// <summary>The reviewer the caller selected, or null to leave Codex's own configuration in charge.
+    /// Only a validated interactive posture can carry one.</summary>
     public static string? Reviewer(CodexLaunchPosture? posture) =>
-        posture?.ApprovalsReviewer is CodexApprovalsReviewers.AutoReview ? CodexApprovalsReviewers.AutoReview : null;
+        posture?.ApprovalsReviewer is CodexApprovalsReviewers.AutoReview or CodexApprovalsReviewers.User
+            ? posture.ApprovalsReviewer
+            : null;
 
     /// <summary>The effective sandbox/approval pair: the selected posture when one is present, else
     /// the derived containment defaults. Callers establish eligibility via

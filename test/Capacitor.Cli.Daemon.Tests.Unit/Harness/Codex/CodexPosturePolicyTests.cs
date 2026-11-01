@@ -132,12 +132,15 @@ public class CodexPosturePolicyTests {
         await Assert.That(reason).StartsWith("codex_posture_invalid:");
     }
 
+    /// An explicit user reviewer overrides a Codex config that selects auto-review; only an absent one
+    /// leaves that config in charge.
     [Test]
-    public async Task A_user_reviewer_leaves_codex_configuration_in_charge() {
+    public async Task An_explicit_user_reviewer_is_requested_and_an_absent_one_is_not() {
         var posture = new CodexLaunchPosture("workspace-write", "on-request", "user");
 
         await Assert.That(CodexPosturePolicy.RejectionReason(Cmd(posture: posture))).IsNull();
-        await Assert.That(CodexPosturePolicy.Reviewer(posture)).IsNull();
+        await Assert.That(CodexPosturePolicy.Reviewer(posture)).IsEqualTo("user");
+        await Assert.That(CodexPosturePolicy.Reviewer(new("workspace-write", "on-request"))).IsNull();
         await Assert.That(CodexPosturePolicy.Reviewer(null)).IsNull();
     }
 

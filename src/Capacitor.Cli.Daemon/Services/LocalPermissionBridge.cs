@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Daemon.Harness.Claude;
@@ -15,7 +16,12 @@ using Microsoft.Extensions.Logging;
 namespace Capacitor.Cli.Daemon.Services;
 
 internal readonly record struct PermissionAttribution(string? AgentId, string SessionId, string? Cwd);
-internal readonly record struct AttributedAgent(string AgentId, PolicySnapshot? PolicySnapshot = null, bool BridgedSinceStart = false);
+internal readonly record struct AttributedAgent(
+    string AgentId,
+    PolicySnapshot? PolicySnapshot = null,
+    string? ApprovalsReviewer = null,
+    bool BridgedSinceStart = false
+);
 
 /// <summary>
 /// Localhost-only HTTP bridge that fronts the server's permission flow for spawned
@@ -674,6 +680,7 @@ internal sealed partial class LocalPermissionBridge(
 
                 // The launched agent's own policy, and the judge for a call no rule decided, answer
                 // before a human is asked. Anything the evaluation throws leaves the request on the human lane.
+                var policyAsks = false;
                 if (vendor is "claude" or "codex" && attributed is { PolicySnapshot: { IsEmpty: false } snapshot } governed) {
                     ClaudeHostedPolicyResult? policy = null;
                     try {
@@ -705,7 +712,17 @@ internal sealed partial class LocalPermissionBridge(
                         }
 
                         _ = server.AppendAgentRunEventAsync(governed.AgentId, decided.Event);
+                        policyAsks = decided.Outcome == PolicyOutcome.Ask;
                     }
+                }
+
+                // Codex's own reviewer takes whatever kcap policy left undecided; an ask rule still
+                // reaches a person. An empty answer is "no decision" to the Codex hook.
+                if (vendor == "codex" && !policyAsks
+                 && attributed is { ApprovalsReviewer: CodexApprovalsReviewers.AutoReview } autoReviewed) {
+                    LogYieldedToCodexAutoReview(logger, autoReviewed.AgentId, toolName);
+                    await WriteResponseAsync(context, "{}", time);
+                    return;
                 }
 
                 if (pending is null) {
@@ -1214,6 +1231,9 @@ internal sealed partial class LocalPermissionBridge(
 
         return payload.ToJsonString();
     }
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Left {ToolName} for agent {AgentId} to Codex auto-review: no kcap policy decided it")]
+    static partial void LogYieldedToCodexAutoReview(ILogger logger, string agentId, string? toolName);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Local permission bridge listening on {BaseUrl}")]
     static partial void LogBridgeStarted(ILogger logger, string baseUrl);

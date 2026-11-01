@@ -514,7 +514,7 @@ sealed class CodexHookCommand(
         // Codex's requestApproval reaches the daemon's CodexApprovalBridge, which surfaces it to the
         // user and fails closed on its own deadline. Bouncing this hook to the daemon bridge would
         // answer first, through a channel with no deadline, and that decline would never come.
-        if (env.HostedAppServer)
+        if (env is { HostedAppServer: true, AutoReview: false })
             return YieldToCodex(env);
 
         return hosted.Bridge switch {
