@@ -717,9 +717,11 @@ internal sealed partial class LocalPermissionBridge(
                 }
 
                 // Codex's own reviewer takes whatever kcap policy left undecided; an ask rule still
-                // reaches a person. An empty answer is "no decision" to the Codex hook.
+                // reaches a person. An empty answer is "no decision" to the Codex hook. Its refusals
+                // never pass through here, so the judge can no longer be told the list is complete.
                 if (vendor == "codex" && !policyAsks
                  && attributed is { ApprovalsReviewer: CodexApprovalsReviewers.AutoReview } autoReviewed) {
+                    _refusals.MarkIncomplete(canonicalSessionId!);
                     LogYieldedToCodexAutoReview(logger, autoReviewed.AgentId, toolName);
                     await WriteResponseAsync(context, "{}", time);
                     return;
