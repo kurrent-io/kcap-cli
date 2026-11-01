@@ -55,6 +55,27 @@ public class AgentLinkLabelsTests {
     }
 
     [Test]
+    [Arguments("0f8fad5b-d9cb-469f-a165-70867728950e", "0f8fad5bd9cb469fa16570867728950e")]
+    [Arguments("0f8fad5bd9cb469fa16570867728950e", "0F8FAD5B-D9CB-469F-A165-70867728950E")]
+    [Arguments("990c76dd", "990c76dd")]
+    public async Task A_link_opens_the_agent_under_the_id_its_row_stores(string rowId, string linkId) {
+        var (rows, labels) = Build();
+        using var _ = labels;
+        rows.AddOrUpdate(Row(AgentOrigin.Local, rowId, null));
+
+        await Assert.That(AgentLinkLabels.HeldIdOf(rows.AsObservableCache(), linkId)).IsEqualTo(rowId);
+    }
+
+    [Test]
+    public async Task An_agent_the_app_does_not_hold_has_no_stored_id() {
+        var (rows, labels) = Build();
+        using var _ = labels;
+        rows.AddOrUpdate(Row(AgentOrigin.Server, "990c76dd", "Some session"));
+
+        await Assert.That(AgentLinkLabels.HeldIdOf(rows.AsObservableCache(), "990c76dd")).IsNull();
+    }
+
+    [Test]
     public async Task A_row_without_a_title_still_reads_as_the_short_id() {
         var (rows, labels) = Build();
         using var _ = labels;

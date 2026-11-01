@@ -30,20 +30,27 @@ public sealed class AgentLinkLabels : IDisposable {
     /// Null for any link that is not to an agent page on the app's server.
     public AgentLinkLabel? For(string url) {
         if (AgentLinkOpener.AgentIdOf(url, _serverUrl) is not { } raw || AgentIds.Normalize(raw) is not { } id) return null;
-        var title = TitleOf(raw) ?? TitleOf(id) ?? TitleOfAnySpelling(id);
+        var title = HeldRows(_rows, raw).FirstOrDefault(HasTitle)?.Title;
         return new AgentLinkLabel(id, title ?? $"agent {(id.Length > 8 ? id[..8] : id)}", title is not null);
     }
 
-    string? TitleOf(string agentId) {
-        foreach (var lane in Lanes)
-            if (_rows.Lookup($"{lane}:{agentId}") is { HasValue: true, Value: var row } && HasTitle(row))
-                return row.Title;
-        return null;
-    }
+    /// The id a held agent row stores for this agent, whichever GUID spelling the caller used; null
+    /// when the app holds no such agent.
+    public static string? HeldIdOf(IObservableCache<AgentRow, string> rows, string agentId) =>
+        HeldRows(rows, agentId).FirstOrDefault()?.Id;
 
     // A row keeps the spelling its source used, so a dashed GUID key never matches an undashed link.
-    string? TitleOfAnySpelling(string normalizedId) =>
-        _rows.Items.FirstOrDefault(row => IsAgentLane(row) && HasTitle(row) && AgentIds.Normalize(row.Id) == normalizedId)?.Title;
+    static IEnumerable<AgentRow> HeldRows(IObservableCache<AgentRow, string> rows, string agentId) {
+        var normalized = AgentIds.Normalize(agentId);
+        string[] spellings = normalized is null || normalized == agentId ? [agentId] : [agentId, normalized];
+        foreach (var spelling in spellings)
+            foreach (var lane in Lanes)
+                if (rows.Lookup($"{lane}:{spelling}") is { HasValue: true, Value: var row })
+                    yield return row;
+        foreach (var row in rows.Items)
+            if (IsAgentLane(row) && AgentIds.Normalize(row.Id) == normalized)
+                yield return row;
+    }
 
     static bool IsAgentLane(AgentRow row) => row.Origin is AgentOrigin.Local or AgentOrigin.Pending or AgentOrigin.Remote;
 

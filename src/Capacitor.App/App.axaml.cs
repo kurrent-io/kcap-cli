@@ -1184,7 +1184,8 @@ public partial class App : Application {
         };
         // Workspace links only: the explicit "Open in web" actions keep the browser.
         var workspaceOpener = new AgentLinkOpener(opener, profiles?.Resolution.ServerUrl,
-            agentId => _coordinator?.Window?.DataContext is MainWindowViewModel vm && vm.OpenSession(agentId));
+            agentId => _coordinator?.Window?.DataContext is MainWindowViewModel vm
+                && vm.OpenSession(AgentLinkLabels.HeldIdOf(directory.Rows, agentId) ?? agentId));
         var drafts = new ComposerDrafts();
         var workContextLayout = new WorkContextLayout();
         var transcripts = new LocalTranscripts();
