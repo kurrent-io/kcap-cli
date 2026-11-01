@@ -246,6 +246,24 @@ public class LocalPermissionBridgePolicyTests {
         await Assert.That(await Harness.BehaviorOf(await response)).IsEqualTo("allow");
     }
 
+    /// A dropped policy document may have denied the call, so nothing short of a surviving rule's
+    /// decision hands it to Codex's reviewer.
+    [Test, NotInParallel(nameof(LocalPermissionBridgePolicyTests))]
+    public async Task An_auto_review_codex_call_under_a_degraded_policy_still_reaches_a_person() {
+        var degraded = Governed with { Degraded = true, Degradations = ["/wt/.kcap/broken.yaml: unreadable"] };
+        await using var h = new Harness(degraded, "auto_review");
+        await h.StartAsync();
+
+        var denied = await h.PostAsync("git push --force", vendor: "codex");
+        await Assert.That(await Harness.BehaviorOf(denied)).IsEqualTo("deny");
+
+        var response = h.PostAsync("cargo build", vendor: "codex");
+        var pending  = await h.WaitPendingAsync();
+        h.Broker.TrySettle(pending.RequestId, Allow, "allow", "app");
+
+        await Assert.That(await Harness.BehaviorOf(await response)).IsEqualTo("allow");
+    }
+
     /// Auto-review is Codex's; a Claude call attributed to such an agent takes the normal lane.
     [Test, NotInParallel(nameof(LocalPermissionBridgePolicyTests))]
     public async Task Auto_review_never_yields_a_claude_call() {

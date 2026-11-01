@@ -680,9 +680,11 @@ internal sealed partial class LocalPermissionBridge(
 
                 // The launched agent's own policy, and the judge for a call no rule decided, answer
                 // before a human is asked. Anything the evaluation throws leaves the request on the human lane.
-                // An ask rule, or an evaluation that failed, keeps the request for a person.
+                // An ask rule, or a policy that could not be applied in full (a dropped document, a failed
+                // evaluation, a judge that errored rather than judged), keeps the request for a person.
                 var keepForPerson = false;
                 if (vendor is "claude" or "codex" && attributed is { PolicySnapshot: { IsEmpty: false } snapshot } governed) {
+                    keepForPerson = snapshot.Degraded;
                     ClaudeHostedPolicyResult? policy = null;
                     try {
                         var call = new ClaudeHostedPermissionCall(canonicalSessionId!, governed.AgentId, toolName, toolInput,
@@ -714,7 +716,8 @@ internal sealed partial class LocalPermissionBridge(
                         }
 
                         _ = server.AppendAgentRunEventAsync(governed.AgentId, decided.Event);
-                        keepForPerson = decided.Outcome == PolicyOutcome.Ask;
+                        keepForPerson |= decided.Outcome == PolicyOutcome.Ask
+                                      || decided.Event.FailureClass is { } failure && failure != PolicyJudgeResult.Uncertain;
                     }
                 }
 

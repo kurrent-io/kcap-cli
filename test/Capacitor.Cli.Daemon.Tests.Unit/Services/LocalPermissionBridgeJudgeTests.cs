@@ -210,6 +210,21 @@ public class LocalPermissionBridgeJudgeTests {
         await Assert.That(complete).IsEquivalentTo([true, false], CollectionOrdering.Matching);
     }
 
+    /// A judge that failed has not judged: the call reaches a person rather than Codex's reviewer. An
+    /// uncertain judge did judge, so that call is left to Codex.
+    [Test, NotInParallel(nameof(LocalPermissionBridgeJudgeTests))]
+    public async Task A_failed_judge_keeps_an_auto_review_codex_call_for_a_person() {
+        await using var h = new Harness(approvalsReviewer: "auto_review");
+        h.Judge.Given(Request.Create().WithPath(PolicyJudgeClient.Route).UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(500));
+        await h.StartAsync();
+
+        var call = h.PostAsync("make release", "toolu_1", vendor: "codex");
+        h.Broker.TrySettle((await h.WaitPendingAsync()).RequestId, new PermissionDecision("allow", null, null), "allow", "app");
+
+        await Assert.That(await Harness.BehaviorOf(await call)).IsEqualTo("allow");
+    }
+
     /// A resumed or adopted agent may have been refused before this daemon saw it, so its refusals are never complete.
     [Test]
     public async Task An_agent_this_daemon_did_not_launch_fresh_declares_incomplete_refusals() {
