@@ -115,6 +115,29 @@ public class AgentLinkTitlesTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task A_rename_while_detached_does_not_change_a_drawn_title() {
+        await RunOnUiAsync(async () => {
+            var (window, view, rows, labels) = ShowWithLabels($"Started {Agent}");
+            using var _ = labels;
+            try {
+                rows.AddOrUpdate(Row(AgentOrigin.Remote, "990c76dd", "Build the deep-link endpoint"));
+                Settle(window);
+
+                window.Content = null;
+                Settle(window);
+                rows.AddOrUpdate(Row(AgentOrigin.Remote, "990c76dd", "Renamed"));
+                window.Content = view;
+                Settle(window);
+
+                await Assert.That(LinksIn(view)).IsEquivalentTo(new[] { ("Build the deep-link endpoint", Agent) });
+            } finally {
+                window.Close();
+            }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     [Arguments("Started " + Agent)]
     [Arguments("No agent here, just https://elsewhere.example/page")]
     public async Task Reattaching_a_view_whose_links_still_read_the_same_does_not_redraw_it(string markdown) {

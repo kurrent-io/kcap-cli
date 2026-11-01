@@ -61,7 +61,7 @@ public sealed class MarkdownView : ContentControl {
     readonly AgentLinkTitles _agentLinkTitles;
     // Agents linked under their short-id stand-in, whose title arriving redraws the view.
     readonly HashSet<string> _untitledAgents = new(StringComparer.Ordinal);
-    readonly Dictionary<string, string?> _agentLinkTexts = new(StringComparer.Ordinal);
+    readonly Dictionary<string, string?> _unsettledAgentLinks = new(StringComparer.Ordinal);
     AgentLinkLabels? _watchedLinks;
     bool _attached;
     IDisposable? _titledWatch;
@@ -219,7 +219,7 @@ public sealed class MarkdownView : ContentControl {
     void Render() {
         _linkKeys.Clear();
         _untitledAgents.Clear();
-        _agentLinkTexts.Clear();
+        _unsettledAgentLinks.Clear();
         if (ToolTip.GetTip(_viewer) is not null) ToolTip.SetTip(_viewer, null);
         if (_viewer.Markdown == Text) _viewer.Markdown = null;
         try {
@@ -235,16 +235,17 @@ public sealed class MarkdownView : ContentControl {
 
     internal string? AgentLinkLabel(string url) {
         var label = GetValue(AgentLinksProperty)?.For(url);
-        _agentLinkTexts[url] = label?.Text;
+        if (label is not { IsTitle: true }) _unsettledAgentLinks[url] = label?.Text;
         if (label is { IsTitle: false }) _untitledAgents.Add(label.AgentId);
         return label?.Text;
     }
 
     /// The inherited labels come and go as the view is detached and reattached, and a title can land
-    /// while it is away, so redraw only when a link it drew would now read differently. A view
-    /// without labels keeps what it drew: it is detached, not shown elsewhere.
+    /// while it is away, so redraw only when a link it drew without a title would now read
+    /// differently. A drawn title stays, and a view without labels keeps what it drew: it is
+    /// detached, not shown elsewhere.
     void RelabelAgentLinks() {
-        if (GetValue(AgentLinksProperty) is { } links && _agentLinkTexts.Any(link => links.For(link.Key)?.Text != link.Value)) Render();
+        if (GetValue(AgentLinksProperty) is { } links && _unsettledAgentLinks.Any(link => links.For(link.Key)?.Text != link.Value)) Render();
         else WatchTitles();
     }
 
