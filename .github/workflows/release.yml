@@ -535,9 +535,12 @@ jobs:
 
   # The hardened runtime is enforced when the binary runs, not when it is signed, so the smoke test
   # runs the signed archive. Its runner holds only a read token for kcap-server.
+  # Each rid publishes on its own: a matrix job's needs wait on every leg, so these gates read the result of the
+  # one archive they use, which the download fails on when its leg did not produce it.
   local-smoke:
     name: Smoke-start the signed local bundle (osx-arm64)
     needs: local-bundle
+    if: ${{ !cancelled() && needs.local-bundle.result != 'skipped' }}
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
@@ -578,6 +581,7 @@ jobs:
   local-publish:
     name: Publish the local bundle (${{ matrix.rid }})
     needs: [local-bundle, local-smoke]
+    if: ${{ !cancelled() && needs.local-bundle.result != 'skipped' }}
     strategy:
       fail-fast: false
       matrix:
@@ -595,6 +599,13 @@ jobs:
       DEST: s3://${{ secrets.R2_BUCKET }}/local/${{ matrix.rid }}
       MANIFEST_KEY: src/Capacitor.Cli.Core/Resources/local-bundle-manifest-key.pem
     steps:
+      - name: Refuse a macOS bundle the smoke test did not start
+        if: matrix.rid == 'osx-arm64' && needs.local-smoke.result != 'success'
+        shell: bash
+        run: |
+          echo "::error::The osx-arm64 smoke test did not pass (${{ needs.local-smoke.result }}); its bundle is not published."
+          exit 1
+
       - uses: actions/checkout@v7
 
       - name: Extract version from tag
