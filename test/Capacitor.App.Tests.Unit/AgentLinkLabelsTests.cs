@@ -76,6 +76,16 @@ public class AgentLinkLabelsTests {
     }
 
     [Test]
+    public async Task The_label_reads_the_row_a_click_opens_not_a_titled_twin() {
+        var (rows, labels) = Build();
+        using var _ = labels;
+        rows.AddOrUpdate(Row(AgentOrigin.Local, "990c76dd", null));
+        rows.AddOrUpdate(Row(AgentOrigin.Remote, "990c76dd", "Remote twin"));
+
+        await Assert.That(labels.For($"{Server}/agents/990c76dd")).IsEqualTo(new AgentLinkLabel("990c76dd", "agent 990c76dd", false));
+    }
+
+    [Test]
     public async Task A_row_without_a_title_still_reads_as_the_short_id() {
         var (rows, labels) = Build();
         using var _ = labels;

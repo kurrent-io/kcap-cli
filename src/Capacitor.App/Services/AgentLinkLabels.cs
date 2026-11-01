@@ -30,7 +30,8 @@ public sealed class AgentLinkLabels : IDisposable {
     /// Null for any link that is not to an agent page on the app's server.
     public AgentLinkLabel? For(string url) {
         if (AgentLinkOpener.AgentIdOf(url, _serverUrl) is not { } raw || AgentIds.Normalize(raw) is not { } id) return null;
-        var title = HeldRows(_rows, raw).FirstOrDefault(HasTitle)?.Title;
+        // The row a click opens, so the title never names a different agent than the one it opens.
+        var title = HeldRows(_rows, raw).FirstOrDefault() is { } row && HasTitle(row) ? row.Title : null;
         return new AgentLinkLabel(id, title ?? $"agent {(id.Length > 8 ? id[..8] : id)}", title is not null);
     }
 
