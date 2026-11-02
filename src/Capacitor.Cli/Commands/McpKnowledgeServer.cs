@@ -410,7 +410,7 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
             new("object", new() {
                 ["scope"]       = ScopeProperty,
                 ["scope_id"]    = ScopeIdProperty,
-                ["category"]    = new("string", "Only facts of this category."),
+                ["category"]    = new("string", "Only facts of this category, including a lesson rooted in another category that holds a wording filed under this one (listed in its filed_under)."),
                 ["cluster_uid"] = new("string", "Only facts of this live cluster (a uuid)."),
                 ["limit"]       = new("integer", "Page size (default 50, max 200)."),
                 ["cursor"]      = new("string", "next_cursor from the previous page."),
@@ -421,7 +421,7 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
                 ["query"]    = new("string", "What to search for."),
                 ["scope"]    = ScopeProperty,
                 ["scope_id"] = ScopeIdProperty,
-                ["category"] = new("string", "Only facts of this category."),
+                ["category"] = new("string", "Only facts of this category, including a lesson rooted in another category that holds a wording filed under this one (listed in its filed_under)."),
                 ["limit"]    = new("integer", "Max results (default 10, max 50)."),
             }, ["query"]), McpToolAnnotations.Read),
         new("edit_skill_body",
